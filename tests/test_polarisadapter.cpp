@@ -101,6 +101,26 @@ public:
         return id;
     }
 
+    RequestId post(const QString& endpoint, const QByteArray&, bool,
+                   Completion completion, PolarisRequestOptions) override
+    {
+        return get(endpoint, true, std::move(completion), {});
+    }
+
+    RequestId fetchClipboard(std::optional<qint64>, Completion completion,
+                             PolarisRequestOptions) override
+    {
+        return get(QStringLiteral("/actions/clipboard?type=text"), false,
+                   std::move(completion), {});
+    }
+
+    RequestId sendClipboard(const QByteArray&, Completion completion,
+                            PolarisRequestOptions) override
+    {
+        return get(QStringLiteral("/actions/clipboard?type=text"), false,
+                   std::move(completion), {});
+    }
+
     bool cancel(RequestId id) override
     {
         if (m_State->cancellations.contains(id)) {

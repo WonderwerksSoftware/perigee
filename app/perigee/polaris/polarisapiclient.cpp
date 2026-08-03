@@ -18,16 +18,121 @@
 
 #include <algorithm>
 #include <atomic>
+#include <deque>
 #include <unordered_map>
+#include <vector>
 
 namespace
 {
 constexpr qint64 kAbsoluteBodyLimit = 1024 * 1024;
 
+using WipeObserver = std::function<void(const QByteArray&)>;
+
+QByteArray wipeOwnedBytesDeferred(QByteArray& bytes)
+{
+    const qsizetype capacity = bytes.capacity();
+    if (capacity > bytes.size()) {
+        bytes.resize(capacity);
+    }
+    volatile unsigned char* data =
+        reinterpret_cast<volatile unsigned char*>(bytes.data());
+    for (qsizetype index = 0; index < bytes.size(); ++index) {
+        data[index] = 0;
+    }
+    QByteArray wiped(bytes.size(), '\0');
+    bytes.clear();
+    bytes.squeeze();
+    return wiped;
+}
+
+void wipeOwnedBytes(QByteArray& bytes, const WipeObserver& observer)
+{
+    const QByteArray wiped = wipeOwnedBytesDeferred(bytes);
+    if (observer) {
+        try {
+            observer(wiped);
+        }
+        catch (...) {
+            // Diagnostic observers must not interrupt erasure paths.
+        }
+    }
+}
+
+class ScopedOwnedBytesWipe final
+{
+public:
+    ScopedOwnedBytesWipe(
+        QByteArray& bytes, bool sensitive, WipeObserver observer)
+        : m_Bytes(bytes)
+        , m_Sensitive(sensitive)
+        , m_Observer(std::move(observer))
+    {
+    }
+
+    ~ScopedOwnedBytesWipe()
+    {
+        if (m_Sensitive) {
+            wipeOwnedBytes(m_Bytes, m_Observer);
+        }
+    }
+
+    ScopedOwnedBytesWipe(const ScopedOwnedBytesWipe&) = delete;
+    ScopedOwnedBytesWipe& operator=(const ScopedOwnedBytesWipe&) = delete;
+
+private:
+    QByteArray& m_Bytes;
+    bool m_Sensitive = false;
+    WipeObserver m_Observer;
+};
+
 struct CompletionEntry
 {
+    CompletionEntry() = default;
+    CompletionEntry(PolarisApiClient::RequestId id,
+                    PolarisResponse terminalResponse,
+                    bool wipeBody, WipeObserver wipeObserver)
+        : requestId(id)
+        , response(std::move(terminalResponse))
+        , sensitiveBody(wipeBody)
+        , observer(std::move(wipeObserver))
+    {
+    }
+    CompletionEntry(const CompletionEntry&) = delete;
+    CompletionEntry& operator=(const CompletionEntry&) = delete;
+    CompletionEntry(CompletionEntry&& other) noexcept
+        : requestId(other.requestId)
+        , response(std::move(other.response))
+        , sensitiveBody(other.sensitiveBody)
+        , observer(std::move(other.observer))
+    {
+        other.sensitiveBody = false;
+    }
+    CompletionEntry& operator=(CompletionEntry&& other) noexcept
+    {
+        if (this != &other) {
+            wipeBody();
+            requestId = other.requestId;
+            response = std::move(other.response);
+            sensitiveBody = other.sensitiveBody;
+            observer = std::move(other.observer);
+            other.sensitiveBody = false;
+        }
+        return *this;
+    }
+    ~CompletionEntry() { wipeBody(); }
+
+    void wipeBody()
+    {
+        if (sensitiveBody) {
+            wipeOwnedBytes(response.body, observer);
+            sensitiveBody = false;
+        }
+    }
+
     PolarisApiClient::RequestId requestId = 0;
     PolarisResponse response;
+    bool sensitiveBody = false;
+    WipeObserver observer;
 };
 
 enum class RequestPhase
@@ -46,7 +151,7 @@ struct RequestRecord
 struct SharedRequestState
 {
     mutable QMutex mutex;
-    QQueue<CompletionEntry> queue;
+    std::deque<CompletionEntry> queue;
     QHash<PolarisApiClient::RequestId, RequestRecord> requests;
     bool accepting = true;
     bool draining = false;
@@ -64,38 +169,131 @@ QString userMessageForError(const QString& errorCode);
 TerminalClaim queueTerminal(
     const std::shared_ptr<SharedRequestState>& state,
     PolarisApiClient::RequestId requestId,
-    PolarisResponse& response)
+    PolarisResponse& response, bool sensitiveBody = false,
+    WipeObserver observer = {})
 {
     QMutexLocker locker(&state->mutex);
     auto iterator = state->requests.find(requestId);
     if (!state->accepting || iterator == state->requests.end() ||
             iterator->phase == RequestPhase::TerminalQueued) {
+        QByteArray wiped;
+        if (sensitiveBody) {
+            wiped = wipeOwnedBytesDeferred(response.body);
+        }
+        locker.unlock();
+        if (observer && sensitiveBody) {
+            observer(wiped);
+        }
         return TerminalClaim::Rejected;
     }
 
     TerminalClaim claim = TerminalClaim::Original;
     if (iterator->phase == RequestPhase::CancelRequested) {
+        const bool hadSensitiveBody = sensitiveBody;
+        QByteArray wiped;
+        if (sensitiveBody) {
+            wiped = wipeOwnedBytesDeferred(response.body);
+            sensitiveBody = false;
+        }
         PolarisResponse cancelled;
         cancelled.authenticated = response.authenticated;
         cancelled.errorCode = QStringLiteral("cancelled");
         cancelled.userMessage = userMessageForError(cancelled.errorCode);
         response = std::move(cancelled);
         claim = TerminalClaim::Cancelled;
+        iterator->phase = RequestPhase::TerminalQueued;
+        state->queue.emplace_back(requestId, std::move(response),
+                                  false, WipeObserver());
+        locker.unlock();
+        if (observer && hadSensitiveBody) {
+            observer(wiped);
+        }
+        return claim;
     }
     iterator->phase = RequestPhase::TerminalQueued;
-    state->queue.enqueue(CompletionEntry{requestId, response});
+    state->queue.emplace_back(requestId, std::move(response),
+                              sensitiveBody, std::move(observer));
     return claim;
 }
 
 struct WorkerRequest
 {
+    WorkerRequest() = default;
+    WorkerRequest(PolarisApiClient::RequestId id, QByteArray verb,
+                  QUrl requestUrl, QString path, QByteArray requestBody,
+                  QString requestContentType, bool json,
+                  PolarisRequestOptions requestOptions,
+                  WipeObserver wipeObserver,
+                  bool wipeRequestBody, bool wipeResponseBody)
+        : requestId(id)
+        , method(std::move(verb))
+        , url(std::move(requestUrl))
+        , logPath(std::move(path))
+        , body(std::move(requestBody))
+        , contentType(std::move(requestContentType))
+        , expectJson(json)
+        , options(requestOptions)
+        , observer(wipeObserver)
+        , sensitiveRequestBody(wipeRequestBody)
+        , sensitiveResponseBody(wipeResponseBody)
+    {
+    }
+
+    WorkerRequest(const WorkerRequest&) = delete;
+    WorkerRequest& operator=(const WorkerRequest&) = delete;
+
+    WorkerRequest(WorkerRequest&& other) noexcept
+    {
+        *this = std::move(other);
+    }
+
+    WorkerRequest& operator=(WorkerRequest&& other) noexcept
+    {
+        if (this == &other) {
+            return *this;
+        }
+        wipeRequestBytes();
+        requestId = other.requestId;
+        method = std::move(other.method);
+        url = std::move(other.url);
+        logPath = std::move(other.logPath);
+        body = std::move(other.body);
+        contentType = std::move(other.contentType);
+        expectJson = other.expectJson;
+        options = other.options;
+        observer = other.observer;
+        sensitiveRequestBody = other.sensitiveRequestBody;
+        sensitiveResponseBody = other.sensitiveResponseBody;
+        other.observer = nullptr;
+        other.sensitiveRequestBody = false;
+        other.sensitiveResponseBody = false;
+        return *this;
+    }
+
+    ~WorkerRequest()
+    {
+        wipeRequestBytes();
+    }
+
+    void wipeRequestBytes()
+    {
+        if (sensitiveRequestBody) {
+            wipeOwnedBytes(body, observer);
+            sensitiveRequestBody = false;
+        }
+    }
+
     PolarisApiClient::RequestId requestId = 0;
     QByteArray method;
     QUrl url;
     QString logPath;
     QByteArray body;
+    QString contentType = QStringLiteral("application/json");
     bool expectJson = false;
     PolarisRequestOptions options;
+    WipeObserver observer;
+    bool sensitiveRequestBody = false;
+    bool sensitiveResponseBody = false;
 };
 
 class QtPolarisNetworkBackend final : public PolarisNetworkBackend
@@ -213,6 +411,7 @@ public:
     void startRequest(WorkerRequest request)
     {
         Q_ASSERT(QThread::currentThread() == thread());
+        request.observer = m_Backend->sensitiveBufferObserver();
         RequestPhase phase = RequestPhase::TerminalQueued;
         {
             QMutexLocker locker(&m_State->mutex);
@@ -249,21 +448,22 @@ public:
         }
 
         auto active = std::make_unique<ActiveRequest>();
-        active->request = request;
+        active->request = std::move(request);
         active->elapsed.start();
+        WorkerRequest& activeRequest = active->request;
         QNetworkRequest networkRequest =
-            PolarisApiClient::makeRequest(request.url, m_Identity);
-        if (request.method == QByteArrayLiteral("GET")) {
+            PolarisApiClient::makeRequest(activeRequest.url, m_Identity);
+        if (activeRequest.method == QByteArrayLiteral("GET")) {
             active->reply = m_Manager->get(networkRequest);
         }
         else {
             networkRequest.setHeader(QNetworkRequest::ContentTypeHeader,
-                                     QStringLiteral("application/json"));
+                                     activeRequest.contentType);
             active->reply = m_Manager->sendCustomRequest(
-                networkRequest, request.method, request.body);
+                networkRequest, activeRequest.method, activeRequest.body);
         }
         QNetworkReply* reply = active->reply;
-        const auto requestId = request.requestId;
+        const auto requestId = activeRequest.requestId;
 
         active->totalTimer = new QTimer(this);
         active->totalTimer->setSingleShot(true);
@@ -284,8 +484,10 @@ public:
         connect(reply, &QNetworkReply::finished, this,
                 [this, requestId] { handleFinished(requestId); });
 
-        active->totalTimer->start(std::max(1, request.options.totalTimeoutMs));
-        active->idleTimer->start(std::max(1, request.options.idleTimeoutMs));
+        active->totalTimer->start(
+            std::max(1, activeRequest.options.totalTimeoutMs));
+        active->idleTimer->start(
+            std::max(1, activeRequest.options.idleTimeoutMs));
         m_Active.emplace(requestId, std::move(active));
     }
 
@@ -326,6 +528,13 @@ public:
 private:
     struct ActiveRequest
     {
+        ~ActiveRequest()
+        {
+            if (request.sensitiveResponseBody) {
+                wipeOwnedBytes(body, request.observer);
+            }
+        }
+
         WorkerRequest request;
         QNetworkReply* reply = nullptr;
         QTimer* totalTimer = nullptr;
@@ -391,7 +600,10 @@ private:
         const qint64 limit = std::max<qint64>(
             0, active->request.options.maxBodyBytes);
         const qint64 remaining = limit - active->body.size();
-        const QByteArray bytes = active->reply->read(remaining + 1);
+        QByteArray bytes = active->reply->read(remaining + 1);
+        ScopedOwnedBytesWipe chunkWipe(
+            bytes, active->request.sensitiveResponseBody,
+            active->request.observer);
         if (bytes.size() > remaining) {
             if (remaining > 0) {
                 active->body.append(bytes.constData(), remaining);
@@ -479,8 +691,13 @@ private:
         if (iterator == m_Active.end()) {
             return;
         }
+        ActiveRequest* pending = iterator->second.get();
+        const int terminalStatus = response.httpStatus;
+        const QString terminalError = response.errorCode;
         const TerminalClaim claim = queueTerminal(
-            m_State, requestId, response);
+            m_State, requestId, response,
+            pending->request.sensitiveResponseBody,
+            pending->request.observer);
         if (claim == TerminalClaim::Cancelled) {
             abortReply = true;
         }
@@ -493,13 +710,12 @@ private:
             active->reply->abort();
         }
         const int elapsedMs = static_cast<int>(active->elapsed.elapsed());
-        const WorkerRequest request = active->request;
         active->reply->deleteLater();
         delete active->totalTimer;
         delete active->idleTimer;
         if (claim != TerminalClaim::Rejected) {
-            logCompletion(request, response.httpStatus,
-                          response.errorCode, elapsedMs);
+            logCompletion(active->request, terminalStatus,
+                          terminalError, elapsedMs);
         }
     }
 
@@ -570,12 +786,14 @@ PolarisApiClient::PolarisApiClient(
 PolarisApiClient::~PolarisApiClient()
 {
     const std::shared_ptr<SharedRequestState> state = d->state;
+    std::deque<CompletionEntry> discardedCompletions;
     {
         QMutexLocker locker(&state->mutex);
         state->accepting = false;
-        state->queue.clear();
+        discardedCompletions = std::move(state->queue);
         state->requests.clear();
     }
+    discardedCompletions.clear();
     if (d->worker != nullptr && d->thread.isRunning()) {
         PolarisNetworkWorker* worker = d->worker;
         QMetaObject::invokeMethod(worker,
@@ -629,8 +847,8 @@ PolarisApiClient::RequestId PolarisApiClient::request(
             state->requests.insert(requestId,
                 RequestRecord{std::move(completion),
                               RequestPhase::TerminalQueued});
-            state->queue.enqueue(
-                CompletionEntry{requestId, std::move(response)});
+            state->queue.emplace_back(requestId, std::move(response),
+                                      false, WipeObserver());
         }
         return requestId;
     }
@@ -645,11 +863,13 @@ PolarisApiClient::RequestId PolarisApiClient::request(
     }
     options.maxBodyBytes = std::clamp<qint64>(
         options.maxBodyBytes, 0, kAbsoluteBodyLimit);
-    WorkerRequest workerRequest{requestId, normalizedMethod, url,
-                                endpoint, body, expectJson, options};
+    auto workerRequest = std::make_shared<WorkerRequest>(
+        requestId, normalizedMethod, url, endpoint, body,
+        QStringLiteral("application/json"), expectJson, options,
+        WipeObserver(), !body.isEmpty(), false);
     QMetaObject::invokeMethod(d->worker,
-        [worker = d->worker, workerRequest = std::move(workerRequest)]() mutable {
-            worker->startRequest(std::move(workerRequest));
+        [worker = d->worker, workerRequest]() mutable {
+            worker->startRequest(std::move(*workerRequest));
         }, Qt::QueuedConnection);
     return requestId;
 }
@@ -674,8 +894,8 @@ PolarisApiClient::RequestId PolarisApiClient::fetchClipboard(
             state->requests.insert(requestId,
                 RequestRecord{std::move(completion),
                               RequestPhase::TerminalQueued});
-            state->queue.enqueue(
-                CompletionEntry{requestId, std::move(response)});
+            state->queue.emplace_back(requestId, std::move(response),
+                                      false, WipeObserver());
         }
         return requestId;
     }
@@ -690,13 +910,75 @@ PolarisApiClient::RequestId PolarisApiClient::fetchClipboard(
     }
     QUrl url = d->origin;
     url.setPath(QStringLiteral("/actions/clipboard"));
-    WorkerRequest workerRequest{
+    url.setQuery(QStringLiteral("type=text"));
+    auto workerRequest = std::make_shared<WorkerRequest>(
         requestId, QByteArrayLiteral("GET"), url,
-        QStringLiteral("/actions/clipboard"), {}, false, options};
+        QStringLiteral("/actions/clipboard?type=text"), QByteArray(),
+        QStringLiteral("text/plain; charset=utf-8"), false, options,
+        WipeObserver(), false, true);
     QMetaObject::invokeMethod(d->worker,
-        [worker = d->worker, workerRequest = std::move(workerRequest)]() mutable {
-            worker->startRequest(std::move(workerRequest));
+        [worker = d->worker, workerRequest]() mutable {
+            worker->startRequest(std::move(*workerRequest));
         }, Qt::QueuedConnection);
+    return requestId;
+}
+
+PolarisApiClient::RequestId PolarisApiClient::sendClipboard(
+    const QByteArray& body, Completion completion,
+    PolarisRequestOptions options)
+{
+    const RequestId requestId =
+        d->nextRequestId.fetch_add(1, std::memory_order_relaxed);
+    const std::shared_ptr<SharedRequestState> state = d->state;
+    QString errorCode;
+    if (d->origin.isEmpty()) {
+        errorCode = QStringLiteral("endpoint_policy_rejected");
+    }
+    else if (body.size() > kAbsoluteBodyLimit) {
+        errorCode = QStringLiteral("request_too_large");
+    }
+    if (!errorCode.isEmpty()) {
+        PolarisResponse response;
+        response.errorCode = errorCode;
+        response.userMessage = userMessageForError(errorCode);
+        QMutexLocker locker(&state->mutex);
+        if (state->accepting) {
+            state->requests.insert(
+                requestId,
+                RequestRecord{std::move(completion),
+                              RequestPhase::TerminalQueued});
+            state->queue.emplace_back(requestId, std::move(response),
+                                      false, WipeObserver());
+        }
+        return requestId;
+    }
+
+    {
+        QMutexLocker locker(&state->mutex);
+        if (!state->accepting) {
+            return requestId;
+        }
+        state->requests.insert(
+            requestId,
+            RequestRecord{std::move(completion), RequestPhase::Submitted});
+    }
+    options.maxBodyBytes = std::clamp<qint64>(
+        options.maxBodyBytes, 0, kAbsoluteBodyLimit);
+    QUrl url = d->origin;
+    url.setPath(QStringLiteral("/actions/clipboard"));
+    url.setQuery(QStringLiteral("type=text"));
+    auto workerRequest = std::make_shared<WorkerRequest>(
+        requestId, QByteArrayLiteral("POST"), url,
+        QStringLiteral("/actions/clipboard?type=text"), body,
+        QStringLiteral("text/plain; charset=utf-8"), false, options,
+        WipeObserver(), true, false);
+    QMetaObject::invokeMethod(
+        d->worker,
+        [worker = d->worker,
+         workerRequest]() mutable {
+            worker->startRequest(std::move(*workerRequest));
+        },
+        Qt::QueuedConnection);
     return requestId;
 }
 
@@ -729,7 +1011,7 @@ int PolarisApiClient::drainCompletions(int maximum)
         Completion callback;
     };
     const std::shared_ptr<SharedRequestState> state = d->state;
-    QList<DispatchEntry> ready;
+    std::vector<DispatchEntry> ready;
     {
         QMutexLocker locker(&state->mutex);
         if (!state->accepting || state->draining) {
@@ -740,15 +1022,18 @@ int PolarisApiClient::drainCompletions(int maximum)
             maximum, static_cast<int>(state->queue.size()));
         ready.reserve(count);
         for (int i = 0; i < count; ++i) {
-            CompletionEntry completion = state->queue.dequeue();
+            CompletionEntry completion = std::move(state->queue.front());
+            state->queue.pop_front();
             auto iterator = state->requests.find(completion.requestId);
             if (iterator == state->requests.end() ||
                     iterator->phase != RequestPhase::TerminalQueued) {
+                ready.push_back(DispatchEntry{
+                    std::move(completion), Completion()});
                 continue;
             }
             Completion callback = std::move(iterator->callback);
             state->requests.erase(iterator);
-            ready.append(DispatchEntry{
+            ready.push_back(DispatchEntry{
                 std::move(completion), std::move(callback)});
         }
     }

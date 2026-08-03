@@ -132,6 +132,7 @@ private slots:
     void successfulBeginReplacesPendingConfirmation();
     void executingAnotherActionInvalidatesPendingConfirmation();
     void rechecksPreconditionsAtExecutionTime();
+    void forwardsOrdinaryParametersWithoutPrivateMetadata();
     void disabledActionReportsPreconditionBeforeConfirmation_data();
     void disabledActionReportsPreconditionBeforeConfirmation();
     void terminalPublicationRetriesAcrossSnapshotRace();
@@ -162,6 +163,22 @@ void ActionRegistryTest::filtersActionsByCategoryInRegistrationOrder()
     QCOMPARE(displayActions.size(), 2);
     QCOMPARE(displayActions.at(0).id, QStringLiteral("display.previous"));
     QCOMPARE(displayActions.at(1).id, QStringLiteral("display.next"));
+}
+
+void ActionRegistryTest::forwardsOrdinaryParametersWithoutPrivateMetadata()
+{
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("stats.toggle"), availableState());
+    ActionRegistry registry({descriptor(
+        QStringLiteral("stats.toggle"), QStringLiteral("Statistics"),
+        ActionCategory::Stats)}, adapter);
+    const QVariantMap parameters{{QStringLiteral("enabled"), true}};
+
+    registry.execute(QStringLiteral("stats.toggle"), parameters, {});
+
+    QCOMPARE(adapter.executedParameters,
+             QVector<QVariantMap>({parameters}));
 }
 
 void ActionRegistryTest::ranksSearchMatchesAndPreservesRegistrationOrderForTies()

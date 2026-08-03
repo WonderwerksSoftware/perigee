@@ -13,6 +13,9 @@
 
 namespace {
 
+constexpr auto CommandTemplateId = "host.command";
+constexpr auto CommandPrefix = "host.command.";
+
 QString categoryName(ActionCategory category)
 {
     switch (category) {
@@ -54,6 +57,102 @@ int searchRank(const ActionDescriptor& descriptor, const QString& query)
         return 4;
     }
     return -1;
+}
+
+bool commandIndex(const QString& actionId, int* index)
+{
+    const QString prefix = QString::fromLatin1(CommandPrefix);
+    if (!actionId.startsWith(prefix)) {
+        return false;
+    }
+    const QString suffix = actionId.mid(prefix.size());
+    if (suffix.isEmpty() ||
+            (suffix.size() > 1 && suffix.startsWith(QLatin1Char('0')))) {
+        return false;
+    }
+    for (const QChar character : suffix) {
+        if (character < QLatin1Char('0') || character > QLatin1Char('9')) {
+            return false;
+        }
+    }
+    bool ok = false;
+    const int parsed = suffix.toInt(&ok);
+    if (!ok || parsed < 0) {
+        return false;
+    }
+    if (index != nullptr) {
+        *index = parsed;
+    }
+    return true;
+}
+
+QVector<ActionDescriptor> resolvedDescriptors(
+    const QVector<ActionDescriptor>& templates, const HostSnapshot& snapshot)
+{
+    QVector<ActionDescriptor> result;
+    std::optional<ActionDescriptor> commandTemplate;
+    for (const ActionDescriptor& descriptor : templates) {
+        if (descriptor.id == QString::fromLatin1(CommandTemplateId)) {
+            commandTemplate = descriptor;
+        }
+        else {
+            result.push_back(descriptor);
+        }
+    }
+    if (!commandTemplate.has_value()) {
+        return result;
+    }
+
+    struct DynamicCommand {
+        int index = -1;
+        ActionDescriptor descriptor;
+    };
+    QVector<DynamicCommand> commands;
+    for (auto it = snapshot.actionStates.cbegin();
+         it != snapshot.actionStates.cend(); ++it) {
+        int index = -1;
+        if (!commandIndex(it.key(), &index)) {
+            continue;
+        }
+        const QVariantMap metadata = it.value().value.toMap();
+        bool metadataIndexOk = false;
+        const int metadataIndex = metadata.value(
+            QStringLiteral("index")).toInt(&metadataIndexOk);
+        if (!metadataIndexOk || metadataIndex != index ||
+                !metadata.contains(QStringLiteral("name")) ||
+                !metadata.contains(QStringLiteral("risk"))) {
+            continue;
+        }
+        ActionDescriptor descriptor = *commandTemplate;
+        descriptor.id = it.key();
+        descriptor.label = metadata.value(QStringLiteral("name")).toString();
+        descriptor.aliases = {QStringLiteral("command")};
+        commands.push_back({index, std::move(descriptor)});
+    }
+    std::sort(commands.begin(), commands.end(),
+              [](const DynamicCommand& left, const DynamicCommand& right) {
+        return left.index < right.index;
+    });
+    for (DynamicCommand& command : commands) {
+        result.push_back(std::move(command.descriptor));
+    }
+    return result;
+}
+
+std::optional<ActionDescriptor> resolveDescriptor(
+    const QVector<ActionDescriptor>& templates, const HostSnapshot& snapshot,
+    const QString& actionId)
+{
+    const QVector<ActionDescriptor> descriptors =
+        resolvedDescriptors(templates, snapshot);
+    const auto iterator = std::find_if(
+        descriptors.cbegin(), descriptors.cend(),
+        [&actionId](const ActionDescriptor& descriptor) {
+            return descriptor.id == actionId;
+        });
+    return iterator == descriptors.cend()
+        ? std::nullopt
+        : std::optional<ActionDescriptor>(*iterator);
 }
 
 ActionState evaluateSnapshotState(const ActionDescriptor& descriptor,
@@ -155,8 +254,11 @@ ActionRegistry::ActionRegistry(QVector<ActionDescriptor> descriptors, HostAdapte
 
 QVector<ActionDescriptor> ActionRegistry::actions(ActionCategory category) const
 {
+    const HostSnapshot snapshot = m_Adapter.snapshot();
+    const QVector<ActionDescriptor> descriptors =
+        resolvedDescriptors(m_Descriptors, snapshot);
     QVector<ActionDescriptor> matches;
-    for (const ActionDescriptor& descriptor : m_Descriptors) {
+    for (const ActionDescriptor& descriptor : descriptors) {
         if (descriptor.category == category) {
             matches.push_back(descriptor);
         }
@@ -166,9 +268,12 @@ QVector<ActionDescriptor> ActionRegistry::actions(ActionCategory category) const
 
 QVector<ActionDescriptor> ActionRegistry::search(const QString& query) const
 {
+    const HostSnapshot snapshot = m_Adapter.snapshot();
+    const QVector<ActionDescriptor> descriptors =
+        resolvedDescriptors(m_Descriptors, snapshot);
     const QString normalizedQuery = query.trimmed();
     if (normalizedQuery.isEmpty()) {
-        return m_Descriptors;
+        return descriptors;
     }
 
     struct RankedDescriptor {
@@ -176,7 +281,7 @@ QVector<ActionDescriptor> ActionRegistry::search(const QString& query) const
         int rank;
     };
     QVector<RankedDescriptor> ranked;
-    for (const ActionDescriptor& descriptor : m_Descriptors) {
+    for (const ActionDescriptor& descriptor : descriptors) {
         const int rank = searchRank(descriptor, normalizedQuery);
         if (rank >= 0) {
             ranked.push_back({ descriptor, rank });
@@ -196,16 +301,6 @@ QVector<ActionDescriptor> ActionRegistry::search(const QString& query) const
 
 ActionState ActionRegistry::state(const QString& actionId)
 {
-    const auto descriptorIt = std::find_if(m_Descriptors.cbegin(), m_Descriptors.cend(),
-                                           [&actionId](const ActionDescriptor& descriptor) {
-        return descriptor.id == actionId;
-    });
-    if (descriptorIt == m_Descriptors.cend()) {
-        ActionState unavailable;
-        unavailable.disabledReason = QStringLiteral("Action is unavailable.");
-        return unavailable;
-    }
-
     for (;;) {
         quint64 snapshotRevision;
         {
@@ -213,7 +308,15 @@ ActionState ActionRegistry::state(const QString& actionId)
             snapshotRevision = m_RuntimeState->renderRevision;
         }
 
-        ActionState current = evaluateSnapshotState(*descriptorIt, m_Adapter.snapshot());
+        const HostSnapshot snapshot = m_Adapter.snapshot();
+        const std::optional<ActionDescriptor> descriptor =
+            resolveDescriptor(m_Descriptors, snapshot, actionId);
+        if (!descriptor.has_value()) {
+            ActionState unavailable;
+            unavailable.disabledReason = QStringLiteral("Action is unavailable.");
+            return unavailable;
+        }
+        ActionState current = evaluateSnapshotState(*descriptor, snapshot);
         QMutexLocker locker(&m_RuntimeState->mutex);
         if (snapshotRevision != m_RuntimeState->renderRevision) {
             continue;
@@ -233,10 +336,10 @@ ActionState ActionRegistry::state(const QString& actionId)
                 current.message = progressIt->message;
             }
         }
-        if (!descriptorIt->resourceKey.isEmpty()
-                && m_RuntimeState->actionByResource.contains(descriptorIt->resourceKey)) {
+        if (!descriptor->resourceKey.isEmpty()
+                && m_RuntimeState->actionByResource.contains(descriptor->resourceKey)) {
             current.enabled = false;
-            if (m_RuntimeState->actionByResource.value(descriptorIt->resourceKey) == actionId) {
+            if (m_RuntimeState->actionByResource.value(descriptor->resourceKey) == actionId) {
                 current.disabledReason = QStringLiteral("This action is already in progress.");
             } else {
                 current.disabledReason = QStringLiteral(
@@ -249,33 +352,29 @@ ActionState ActionRegistry::state(const QString& actionId)
 
 bool ActionRegistry::requiresConfirmation(const QString& actionId) const
 {
-    const auto descriptorIt = std::find_if(m_Descriptors.cbegin(), m_Descriptors.cend(),
-                                           [&actionId](const ActionDescriptor& descriptor) {
-        return descriptor.id == actionId;
-    });
-    if (descriptorIt == m_Descriptors.cend()) {
+    const HostSnapshot snapshot = m_Adapter.snapshot();
+    const std::optional<ActionDescriptor> descriptor =
+        resolveDescriptor(m_Descriptors, snapshot, actionId);
+    if (!descriptor.has_value()) {
         return false;
     }
 
-    const ActionState current = evaluateSnapshotState(
-        *descriptorIt, m_Adapter.snapshot());
-    return confirmationRequired(*descriptorIt, current);
+    const ActionState current = evaluateSnapshotState(*descriptor, snapshot);
+    return confirmationRequired(*descriptor, current);
 }
 
 bool ActionRegistry::beginConfirmation(const QString& actionId)
 {
     cancelConfirmation();
 
-    const auto descriptorIt = std::find_if(m_Descriptors.cbegin(), m_Descriptors.cend(),
-                                           [&actionId](const ActionDescriptor& descriptor) {
-        return descriptor.id == actionId;
-    });
-    if (descriptorIt == m_Descriptors.cend()) {
+    const HostSnapshot snapshot = m_Adapter.snapshot();
+    const std::optional<ActionDescriptor> descriptor =
+        resolveDescriptor(m_Descriptors, snapshot, actionId);
+    if (!descriptor.has_value()) {
         return false;
     }
-    const ActionState current = evaluateSnapshotState(
-        *descriptorIt, m_Adapter.snapshot());
-    if (!current.enabled || !confirmationRequired(*descriptorIt, current)) {
+    const ActionState current = evaluateSnapshotState(*descriptor, snapshot);
+    if (!current.enabled || !confirmationRequired(*descriptor, current)) {
         return false;
     }
 
@@ -329,11 +428,10 @@ void ActionRegistry::executeInvocation(const QString& actionId,
                                        ActionInvocation invocation,
                                        HostAdapter::Completion completion)
 {
-    const auto descriptorIt = std::find_if(m_Descriptors.cbegin(), m_Descriptors.cend(),
-                                           [&actionId](const ActionDescriptor& descriptor) {
-        return descriptor.id == actionId;
-    });
-    if (descriptorIt == m_Descriptors.cend()) {
+    const HostSnapshot snapshot = m_Adapter.snapshot();
+    const std::optional<ActionDescriptor> descriptor =
+        resolveDescriptor(m_Descriptors, snapshot, actionId);
+    if (!descriptor.has_value()) {
         const ActionResult result {
             false,
             {},
@@ -346,7 +444,7 @@ void ActionRegistry::executeInvocation(const QString& actionId,
         return;
     }
 
-    const ActionState current = evaluateSnapshotState(*descriptorIt, m_Adapter.snapshot());
+    const ActionState current = evaluateSnapshotState(*descriptor, snapshot);
     if (invocation.confirmationGrantedFor(actionId) &&
             (!invocation.m_ConfirmedState.has_value() ||
              !sameAuthoritativeState(current, *invocation.m_ConfirmedState))) {
@@ -372,7 +470,7 @@ void ActionRegistry::executeInvocation(const QString& actionId,
         return;
     }
 
-    if (confirmationRequired(*descriptorIt, current) &&
+    if (confirmationRequired(*descriptor, current) &&
             !invocation.confirmationGrantedFor(actionId)) {
         if (completion) {
             completion({false, {}, QStringLiteral("confirmation_required"),
@@ -383,10 +481,10 @@ void ActionRegistry::executeInvocation(const QString& actionId,
 
     {
         QMutexLocker locker(&m_RuntimeState->mutex);
-        if (!descriptorIt->resourceKey.isEmpty()
-                && m_RuntimeState->actionByResource.contains(descriptorIt->resourceKey)) {
+        if (!descriptor->resourceKey.isEmpty()
+                && m_RuntimeState->actionByResource.contains(descriptor->resourceKey)) {
             const bool sameAction = m_RuntimeState->actionByResource.value(
-                    descriptorIt->resourceKey) == actionId;
+                    descriptor->resourceKey) == actionId;
             const ActionResult result {
                 false,
                 {},
@@ -402,15 +500,19 @@ void ActionRegistry::executeInvocation(const QString& actionId,
             }
             return;
         }
-        if (!descriptorIt->resourceKey.isEmpty()) {
-            m_RuntimeState->actionByResource.insert(descriptorIt->resourceKey, actionId);
+        if (!descriptor->resourceKey.isEmpty()) {
+            m_RuntimeState->actionByResource.insert(descriptor->resourceKey, actionId);
         }
         m_RuntimeState->progressByAction.insert(
                 actionId, { ActionPhase::Working, {}, std::nullopt });
         ++m_RuntimeState->renderRevision;
     }
 
-    const QString resourceKey = descriptorIt->resourceKey;
+    const QString resourceKey = descriptor->resourceKey;
+    if (commandIndex(actionId, nullptr)) {
+        invocation.m_Parameters.insert(
+            QStringLiteral("_perigee.authoritative-state"), current.value);
+    }
     const std::weak_ptr<RuntimeState> weakRuntimeState = m_RuntimeState;
     const auto callbackUsed = std::make_shared<std::atomic_bool>(false);
     m_Adapter.execute(

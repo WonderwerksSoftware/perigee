@@ -57,6 +57,7 @@ SOURCES += \
     test_overlaylayout.cpp \
     test_polarismodels.cpp \
     test_polarisadapter.cpp \
+    test_polarisactions.cpp \
     test_polarisapiclient.cpp \
     test_redaction.cpp \
     test_smoke.cpp

@@ -12,6 +12,15 @@
 class GameStreamAdapter;
 class NvComputer;
 
+class PolarisClipboard
+{
+public:
+    virtual ~PolarisClipboard() = default;
+    virtual bool readText(QByteArray* text) = 0;
+    virtual bool writeText(const QByteArray& text) = 0;
+    virtual void sensitiveBufferWiped(const QByteArray&) {}
+};
+
 class PolarisTransport
 {
 public:
@@ -22,6 +31,15 @@ public:
     virtual RequestId get(const QString& endpoint, bool expectJson,
                           Completion completion,
                           PolarisRequestOptions options = {}) = 0;
+    virtual RequestId post(const QString& endpoint, const QByteArray& body,
+                           bool expectJson, Completion completion,
+                           PolarisRequestOptions options = {}) = 0;
+    virtual RequestId fetchClipboard(
+        std::optional<qint64> advertisedLimit, Completion completion,
+        PolarisRequestOptions options = {}) = 0;
+    virtual RequestId sendClipboard(
+        const QByteArray& body, Completion completion,
+        PolarisRequestOptions options = {}) = 0;
     virtual bool cancel(RequestId requestId) = 0;
     virtual int drainCompletions(int maximum) = 0;
     virtual qsizetype pendingCompletionCount() const = 0;
@@ -34,7 +52,8 @@ public:
     static constexpr int CompletionPumpLimit = 8;
 
     PolarisAdapter(GameStreamAdapter& localAdapter,
-                   std::unique_ptr<PolarisTransport> transport);
+                   std::unique_ptr<PolarisTransport> transport,
+                   std::unique_ptr<PolarisClipboard> clipboard = {});
     PolarisAdapter(GameStreamAdapter& localAdapter,
                    const NvComputer& computer);
     ~PolarisAdapter() override;
@@ -67,19 +86,41 @@ private:
                  Completion completion) override;
 
     struct SharedState;
+    struct ActionRequest;
 
-    bool beginGeneration(bool initialOnly);
-    void submitRequest(quint64 generation, const QString& endpoint,
-                       DiscoveryPart part);
+    static bool beginGeneration(
+        const std::shared_ptr<SharedState>& state,
+        const std::shared_ptr<PolarisTransport>& transport,
+        bool initialOnly);
+    static void submitRequest(
+        const std::shared_ptr<SharedState>& state,
+        const std::shared_ptr<PolarisTransport>& transport,
+        quint64 generation, const QString& endpoint, DiscoveryPart part);
     static void handleDiscoveryCompletion(
         const std::weak_ptr<SharedState>& weakState,
         quint64 generation, DiscoveryPart part,
         PolarisTransport::RequestId requestId,
         const PolarisResponse& response);
-    QVector<PolarisTransport::RequestId> outstandingRequestIds() const;
+    enum class ActionKind {
+        Command,
+        StopSession,
+        ClipboardSend,
+        ClipboardFetch,
+    };
+    void submitAction(const QString& actionId, const QString& resourceKey,
+                      const QString& endpoint, QByteArray body,
+                      std::optional<qint64> clipboardLimit,
+                      ActionKind kind, ActionState authoritativeState,
+                      Completion completion);
+    static void handleActionCompletion(
+        const std::weak_ptr<SharedState>& weakState,
+        const std::shared_ptr<ActionRequest>& request,
+        PolarisTransport::RequestId requestId,
+        const PolarisResponse& response);
     static ActionState actionState(const PolarisAvailability& availability);
 
     GameStreamAdapter& m_LocalAdapter;
-    std::unique_ptr<PolarisTransport> m_Transport;
+    std::shared_ptr<PolarisTransport> m_Transport;
+    std::shared_ptr<PolarisClipboard> m_Clipboard;
     std::shared_ptr<SharedState> m_State;
 };

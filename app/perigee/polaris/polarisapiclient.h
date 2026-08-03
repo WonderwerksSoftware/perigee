@@ -37,6 +37,8 @@ public:
         QObject* parent) = 0;
     virtual QSslCertificate peerLeafCertificate(
         const QNetworkReply* reply) const = 0;
+    virtual std::function<void(const QByteArray&)>
+        sensitiveBufferObserver() { return {}; }
 };
 
 class PolarisApiClient final
@@ -64,6 +66,9 @@ public:
     RequestId fetchClipboard(std::optional<qint64> advertisedLimit,
                              Completion completion,
                              PolarisRequestOptions options = {});
+    RequestId sendClipboard(const QByteArray& body,
+                            Completion completion,
+                            PolarisRequestOptions options = {});
 
     bool cancel(RequestId requestId);
     int drainCompletions(int maximum = 16);

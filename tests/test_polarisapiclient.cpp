@@ -59,6 +59,8 @@ struct FakeNetworkState
     QSemaphore replyCreated;
     QList<QNetworkReply*> controlledReplies;
     QNetworkAccessManager* manager = nullptr;
+    int wipedBufferCount = 0;
+    bool allWipedBuffersWereZero = true;
 };
 
 QMutex capturedMessagesMutex;
@@ -264,6 +266,19 @@ public:
         return fake == nullptr ? QSslCertificate() : fake->peerCertificate();
     }
 
+    std::function<void(const QByteArray&)>
+    sensitiveBufferObserver() override
+    {
+        const std::shared_ptr<FakeNetworkState> state = m_State;
+        return [state](const QByteArray& bytes) {
+            QMutexLocker locker(&state->mutex);
+            ++state->wipedBufferCount;
+            for (const char byte : bytes) {
+                state->allWipedBuffersWereZero &= byte == '\0';
+            }
+        };
+    }
+
 private:
     std::shared_ptr<FakeNetworkState> m_State;
 };
@@ -329,6 +344,9 @@ private slots:
     void distinguishesTimeoutCancellationAndPolicyFailure();
     void abortsAtFirstByteOverClipboardLimit();
     void acceptsClipboardAtExactAdvertisedAndAbsoluteLimits();
+    void postsClipboardToExactPairedTextRouteAndWipesOwnedRequest();
+    void wipesOwnedClipboardBytesOnCompletionAndTeardown();
+    void wipesClipboardBytesAfterCallbackThrowCancellationAndQueuedTeardown();
     void rejectsClipboardWhenPairedOriginIsUnavailable();
     void enforcesAbsoluteClipboardLimitAndRetainsStatus();
     void boundsGenericResponseWithoutReadingPastFirstExcessByte();
@@ -747,9 +765,13 @@ void PolarisApiClientTest::abortsAtFirstByteOverClipboardLimit()
     QCOMPARE(response.body, QByteArrayLiteral("1234"));
     QCOMPARE(state->abortCount.load(), 1);
     QCOMPARE(state->bytesExposedBeforeAbort.load(), 5);
+    QTRY_VERIFY_WITH_TIMEOUT(state->wipedBufferCount >= 4, 1000);
     QMutexLocker locker(&state->mutex);
+    QVERIFY(state->allWipedBuffersWereZero);
     QCOMPARE(state->requests.first().url().path(),
              QStringLiteral("/actions/clipboard"));
+    QCOMPARE(state->requests.first().url().query(),
+             QStringLiteral("type=text"));
 }
 
 void PolarisApiClientTest::acceptsClipboardAtExactAdvertisedAndAbsoluteLimits()
@@ -776,6 +798,136 @@ void PolarisApiClientTest::acceptsClipboardAtExactAdvertisedAndAbsoluteLimits()
     QVERIFY(responses.at(1).errorCode.isEmpty());
     QCOMPARE(responses.at(1).body.size(), 1024 * 1024);
     QCOMPARE(state->abortCount.load(), 0);
+}
+
+void PolarisApiClientTest::postsClipboardToExactPairedTextRouteAndWipesOwnedRequest()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto state = std::make_shared<FakeNetworkState>();
+    enqueue(state, ReplyScript{204, {}, expected});
+    PolarisApiClient client(pairedComputer(expected),
+        std::make_unique<FakeNetworkBackend>(state));
+    const QByteArray body = QByteArrayLiteral("CLIPBOARD_REQUEST_CANARY");
+    PolarisResponse response;
+    {
+        QMutexLocker locker(&capturedMessagesMutex);
+        capturedMessages.clear();
+    }
+    const QtMessageHandler previous = qInstallMessageHandler(captureMessage);
+
+    client.sendClipboard(body,
+        [&](auto, const PolarisResponse& value) { response = value; });
+    QVERIFY(waitForCompletion(client));
+    client.drainCompletions();
+    qInstallMessageHandler(previous);
+
+    QVERIFY(response.errorCode.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(state->wipedBufferCount >= 1, 1000);
+    QMutexLocker locker(&state->mutex);
+    QCOMPARE(state->methods, QList<QByteArray>{QByteArrayLiteral("POST")});
+    QCOMPARE(state->requestBodies, QList<QByteArray>{body});
+    QCOMPARE(state->requests.first().url().path(),
+             QStringLiteral("/actions/clipboard"));
+    QCOMPARE(state->requests.first().url().query(),
+             QStringLiteral("type=text"));
+    QCOMPARE(state->requests.first().header(
+                 QNetworkRequest::ContentTypeHeader),
+             QVariant(QStringLiteral("text/plain; charset=utf-8")));
+    QVERIFY(state->allWipedBuffersWereZero);
+    locker.unlock();
+    QMutexLocker messageLocker(&capturedMessagesMutex);
+    QVERIFY(!capturedMessages.join(QLatin1Char('\n')).contains(
+        QString::fromLatin1(body)));
+}
+
+void PolarisApiClientTest::wipesOwnedClipboardBytesOnCompletionAndTeardown()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto completedState = std::make_shared<FakeNetworkState>();
+    enqueue(completedState, ReplyScript{
+        200, {QByteArrayLiteral("CLIPBOARD_RESPONSE_"),
+              QByteArrayLiteral("CANARY")}, expected});
+    {
+        PolarisApiClient client(pairedComputer(expected),
+            std::make_unique<FakeNetworkBackend>(completedState));
+        client.fetchClipboard(std::nullopt,
+            [](auto, const PolarisResponse&) {});
+        QVERIFY(waitForCompletion(client));
+        client.drainCompletions();
+        QTRY_VERIFY_WITH_TIMEOUT(completedState->wipedBufferCount >= 4, 1000);
+    }
+    QVERIFY(completedState->allWipedBuffersWereZero);
+
+    auto teardownState = std::make_shared<FakeNetworkState>();
+    ReplyScript stalled;
+    stalled.peerCertificate = expected;
+    stalled.neverFinish = true;
+    enqueue(teardownState, stalled);
+    {
+        PolarisApiClient client(pairedComputer(expected),
+            std::make_unique<FakeNetworkBackend>(teardownState));
+        client.sendClipboard(QByteArrayLiteral("TEARDOWN_CANARY"),
+            [](auto, const PolarisResponse&) {});
+        QTRY_COMPARE_WITH_TIMEOUT(teardownState->liveReplies.load(), 1, 1000);
+    }
+    QVERIFY(teardownState->wipedBufferCount >= 1);
+    QVERIFY(teardownState->allWipedBuffersWereZero);
+}
+
+void PolarisApiClientTest::wipesClipboardBytesAfterCallbackThrowCancellationAndQueuedTeardown()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+
+    auto throwingState = std::make_shared<FakeNetworkState>();
+    enqueue(throwingState, ReplyScript{
+        200, {QByteArrayLiteral("THROWING_CALLBACK_CANARY")}, expected});
+    {
+        PolarisApiClient client(pairedComputer(expected),
+            std::make_unique<FakeNetworkBackend>(throwingState));
+        client.fetchClipboard(std::nullopt,
+            [](auto, const PolarisResponse&) {
+                throw std::runtime_error("expected callback failure");
+            });
+        QVERIFY(waitForCompletion(client));
+        QCOMPARE(client.drainCompletions(), 1);
+    }
+    QVERIFY(throwingState->wipedBufferCount >= 2);
+    QVERIFY(throwingState->allWipedBuffersWereZero);
+
+    auto cancellationState = std::make_shared<FakeNetworkState>();
+    ReplyScript stalled;
+    stalled.peerCertificate = expected;
+    stalled.neverFinish = true;
+    enqueue(cancellationState, stalled);
+    {
+        PolarisApiClient client(pairedComputer(expected),
+            std::make_unique<FakeNetworkBackend>(cancellationState));
+        const auto id = client.sendClipboard(
+            QByteArrayLiteral("CANCELLED_REQUEST_CANARY"),
+            [](auto, const PolarisResponse&) {});
+        QTRY_COMPARE_WITH_TIMEOUT(cancellationState->liveReplies.load(), 1, 1000);
+        QVERIFY(client.cancel(id));
+        QVERIFY(waitForCompletion(client));
+        QCOMPARE(client.drainCompletions(), 1);
+    }
+    QVERIFY(cancellationState->wipedBufferCount >= 1);
+    QVERIFY(cancellationState->allWipedBuffersWereZero);
+
+    auto queuedState = std::make_shared<FakeNetworkState>();
+    enqueue(queuedState, ReplyScript{
+        200, {QByteArrayLiteral("QUEUED_TEARDOWN_CANARY")}, expected});
+    {
+        PolarisApiClient client(pairedComputer(expected),
+            std::make_unique<FakeNetworkBackend>(queuedState));
+        client.fetchClipboard(std::nullopt,
+            [](auto, const PolarisResponse&) {});
+        QVERIFY(waitForCompletion(client));
+    }
+    QVERIFY(queuedState->wipedBufferCount >= 2);
+    QVERIFY(queuedState->allWipedBuffersWereZero);
 }
 
 void PolarisApiClientTest::rejectsClipboardWhenPairedOriginIsUnavailable()
