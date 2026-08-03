@@ -42,6 +42,7 @@ public:
     QString focusedActionLabel() const;
     bool focusedActionEnabled() const;
     bool focusedActionRequiresConfirmation() const;
+    bool hasEnabledAction() const;
     void clearFocus();
     bool focusFirstEnabled();
     bool moveFocus(int delta);

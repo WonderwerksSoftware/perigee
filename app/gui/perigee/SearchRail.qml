@@ -10,10 +10,12 @@ FocusScope {
     height: 112
 
     function focusSearch() {
+        deckController.focusSearch()
         searchField.forceActiveFocus()
     }
 
     function focusCategories() {
+        deckController.focusCategories()
         categoryRail.forceActiveFocus()
     }
 
@@ -72,6 +74,11 @@ FocusScope {
                     deckController.setSearchText(text)
             }
 
+            onActiveFocusChanged: {
+                if (activeFocus)
+                    deckController.focusSearch()
+            }
+
             Keys.onPressed: event => {
                 if (event.key === Qt.Key_Tab) {
                     rail.focusCategories()
@@ -95,6 +102,11 @@ FocusScope {
         width: parent.width - 32
         height: 32
         activeFocusOnTab: false
+
+        onActiveFocusChanged: {
+            if (activeFocus)
+                deckController.focusCategories()
+        }
 
         Row {
             anchors.centerIn: parent

@@ -92,6 +92,11 @@ private slots:
     void backUnwindsConfirmationActionsSearchAndDeck();
     void confirmationCanBeCancelledOrAccepted();
     void disabledFocusedActionFallsBackToAnEnabledPeer();
+    void controllerOpenSkipsEmptyDisplayCategory();
+    void controllerOpenSkipsAllDisabledDisplayCategory();
+    void controllerOpenWithoutEnabledActionsKeepsSearchFocus();
+    void inFlightEmptyResourceActionExecutesOnlyOnce();
+    void pointerFocusCancelsConfirmationOnlyAfterSuccessfulChange();
 };
 
 void DeckControllerTest::keyboardOpenFocusesSearchAndShowsDisplayActions()
@@ -200,6 +205,10 @@ void DeckControllerTest::backUnwindsConfirmationActionsSearchAndDeck()
     QCOMPARE(focusedActionId(controller), QStringLiteral("session.end"));
 
     controller.back();
+    QCOMPARE(controller.focusRegion(), DeckController::CategoriesRegion);
+    QVERIFY(controller.isOpen());
+
+    controller.back();
     QVERIFY(controller.searchFocused());
     QVERIFY(controller.isOpen());
 
@@ -270,6 +279,128 @@ void DeckControllerTest::disabledFocusedActionFallsBackToAnEnabledPeer()
     controller.refresh();
 
     QCOMPARE(focusedActionId(controller), QStringLiteral("display.first"));
+}
+
+void DeckControllerTest::controllerOpenSkipsEmptyDisplayCategory()
+{
+    MutableHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("input.mouse-capture"), availableState());
+    ActionRegistry registry({
+        descriptor(QStringLiteral("input.mouse-capture"), QStringLiteral("Mouse capture"),
+                   ActionCategory::Input),
+    }, adapter);
+    DeckController controller(&registry);
+
+    controller.openFromController();
+
+    QCOMPARE(controller.activeCategory(), 1);
+    QVERIFY(!controller.searchFocused());
+    QCOMPARE(focusedActionId(controller), QStringLiteral("input.mouse-capture"));
+}
+
+void DeckControllerTest::controllerOpenSkipsAllDisabledDisplayCategory()
+{
+    MutableHostAdapter adapter;
+    ActionState unavailable;
+    unavailable.disabledReason = QStringLiteral("Display is unavailable.");
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.unavailable"), unavailable);
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("stats.overlay"), availableState());
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.unavailable"),
+                   QStringLiteral("Unavailable display"), ActionCategory::Display),
+        descriptor(QStringLiteral("stats.overlay"), QStringLiteral("Statistics overlay"),
+                   ActionCategory::Stats),
+    }, adapter);
+    DeckController controller(&registry);
+
+    controller.openFromController();
+
+    QCOMPARE(controller.activeCategory(), 3);
+    QVERIFY(!controller.searchFocused());
+    QCOMPARE(focusedActionId(controller), QStringLiteral("stats.overlay"));
+}
+
+void DeckControllerTest::controllerOpenWithoutEnabledActionsKeepsSearchFocus()
+{
+    MutableHostAdapter adapter;
+    ActionState unavailable;
+    unavailable.disabledReason = QStringLiteral("Display is unavailable.");
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.unavailable"), unavailable);
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.unavailable"),
+                   QStringLiteral("Unavailable display"), ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+
+    controller.openFromController();
+
+    QCOMPARE(controller.activeCategory(), 0);
+    QVERIFY(controller.searchFocused());
+    QVERIFY(focusedActionId(controller).isEmpty());
+}
+
+void DeckControllerTest::inFlightEmptyResourceActionExecutesOnlyOnce()
+{
+    MutableHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.refresh"), availableState());
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.refresh"), QStringLiteral("Refresh display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+
+    controller.activateFocusedAction();
+    controller.activateFocusedAction();
+
+    QCOMPARE(adapter.executedActionIds,
+             QStringList({ QStringLiteral("display.refresh") }));
+    const QModelIndex actionIndex = controller.actionModel()->index(0, 0);
+    QCOMPARE(controller.actionModel()->data(
+                 actionIndex, ActionListModel::PhaseRole).toString(),
+             QStringLiteral("working"));
+    QVERIFY(!controller.actionModel()->data(
+        actionIndex, ActionListModel::EnabledRole).toBool());
+}
+
+void DeckControllerTest::pointerFocusCancelsConfirmationOnlyAfterSuccessfulChange()
+{
+    MutableHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.confirm"), availableState());
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.other"), availableState());
+    ActionState unavailable;
+    unavailable.disabledReason = QStringLiteral("Display is unavailable.");
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.disabled"), unavailable);
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.confirm"), QStringLiteral("Confirm display"),
+                   ActionCategory::Display, ConfirmationPolicy::Always),
+        descriptor(QStringLiteral("display.other"), QStringLiteral("Other display"),
+                   ActionCategory::Display),
+        descriptor(QStringLiteral("display.disabled"), QStringLiteral("Disabled display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+    controller.activateFocusedAction();
+    QVERIFY(controller.confirmationVisible());
+
+    controller.focusAction(QStringLiteral("display.confirm"));
+    QVERIFY(controller.confirmationVisible());
+    controller.focusAction(QStringLiteral("display.disabled"));
+    QVERIFY(controller.confirmationVisible());
+    QCOMPARE(focusedActionId(controller), QStringLiteral("display.confirm"));
+
+    controller.focusAction(QStringLiteral("display.other"));
+    QVERIFY(!controller.confirmationVisible());
+    QCOMPARE(focusedActionId(controller), QStringLiteral("display.other"));
 }
 
 REGISTER_PERIGEE_TEST(DeckControllerTest);

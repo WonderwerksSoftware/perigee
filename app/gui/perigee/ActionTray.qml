@@ -8,6 +8,11 @@ FocusScope {
     signal searchRequested()
     signal categoriesRequested()
 
+    function revealAction(actionIndex) {
+        actionList.currentIndex = actionIndex
+        actionList.positionViewAtIndex(actionIndex, ListView.Contain)
+    }
+
     width: 820
     height: Math.max(90, Math.min(4, actionList.count) * 68 + 28) +
             (confirmation.visible ? confirmation.height + 10 : 0) + 36
@@ -50,9 +55,18 @@ FocusScope {
                 actionFocused: model.focused
                 requiresConfirmation: model.requiresConfirmation
 
+                onActionFocusedChanged: {
+                    if (actionFocused)
+                        tray.revealAction(index)
+                }
+
+                Component.onCompleted: {
+                    if (actionFocused)
+                        tray.revealAction(index)
+                }
+
                 onChosen: {
-                    deckController.focusAction(actionId)
-                    deckController.activateFocusedAction()
+                    deckController.activateAction(actionId)
                     tray.forceActiveFocus()
                 }
                 onPointed: {
@@ -136,7 +150,6 @@ FocusScope {
             event.accepted = true
         } else if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace) {
             deckController.back()
-            tray.searchRequested()
             event.accepted = true
         }
     }

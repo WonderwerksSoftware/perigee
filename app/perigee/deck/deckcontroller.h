@@ -12,6 +12,7 @@ class DeckController final : public QObject
     Q_OBJECT
     Q_PROPERTY(bool isOpen READ isOpen NOTIFY openChanged)
     Q_PROPERTY(bool searchFocused READ searchFocused NOTIFY focusModeChanged)
+    Q_PROPERTY(FocusRegion focusRegion READ focusRegion NOTIFY focusModeChanged)
     Q_PROPERTY(QString searchText READ searchText WRITE setSearchText NOTIFY searchTextChanged)
     Q_PROPERTY(int activeCategory READ activeCategory NOTIFY activeCategoryChanged)
     Q_PROPERTY(QStringList categories READ categories CONSTANT)
@@ -20,11 +21,19 @@ class DeckController final : public QObject
     Q_PROPERTY(QString confirmationActionLabel READ confirmationActionLabel NOTIFY confirmationChanged)
 
 public:
+    enum FocusRegion {
+        SearchRegion,
+        CategoriesRegion,
+        ActionsRegion,
+    };
+    Q_ENUM(FocusRegion)
+
     explicit DeckController(ActionRegistry* registry = nullptr,
                             QObject* parent = nullptr);
 
     bool isOpen() const;
     bool searchFocused() const;
+    FocusRegion focusRegion() const;
     QString searchText() const;
     int activeCategory() const;
     QStringList categories() const;
@@ -41,9 +50,11 @@ public:
     Q_INVOKABLE void nextCategory();
     Q_INVOKABLE void previousCategory();
     Q_INVOKABLE void focusSearch();
+    Q_INVOKABLE void focusCategories();
     Q_INVOKABLE void focusActions();
     Q_INVOKABLE void focusAction(const QString& actionId);
     Q_INVOKABLE void moveActionFocus(int delta);
+    Q_INVOKABLE void activateAction(const QString& actionId);
     Q_INVOKABLE void activateFocusedAction();
     Q_INVOKABLE void cancelConfirmation();
     Q_INVOKABLE void acceptConfirmation();
@@ -59,14 +70,14 @@ signals:
 
 private:
     static ActionCategory categoryForIndex(int categoryIndex);
-    void setSearchFocus(bool focused);
+    void setFocusRegion(FocusRegion region);
     void clearConfirmation();
     void executeAction(const QString& actionId);
 
     ActionRegistry* m_Registry;
     ActionListModel m_ActionModel;
     bool m_IsOpen = false;
-    bool m_SearchFocused = true;
+    FocusRegion m_FocusRegion = SearchRegion;
     QString m_SearchText;
     int m_ActiveCategory = 0;
     QString m_ConfirmationActionId;

@@ -86,6 +86,7 @@ Rectangle {
 
     MouseArea {
         anchors.fill: parent
+        enabled: actionEnabled
         hoverEnabled: true
         onEntered: row.pointed()
         onClicked: row.chosen()

@@ -27,14 +27,16 @@ class DeckQmlHostAdapter final : public HostAdapter
 {
 public:
     HostSnapshot currentSnapshot;
+    QStringList executedActionIds;
 
     HostSnapshot snapshot() override
     {
         return currentSnapshot;
     }
 
-    void execute(const QString&, const QVariantMap&, Completion) override
+    void execute(const QString& actionId, const QVariantMap&, Completion) override
     {
+        executedActionIds.push_back(actionId);
     }
 
     void cancel(const QString&) override
@@ -74,6 +76,15 @@ void sendKey(DeckSurfaceRenderer& renderer, int key)
     QCoreApplication::processEvents();
 }
 
+void sendTextKey(DeckSurfaceRenderer& renderer, int key, const QString& text)
+{
+    QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier, text);
+    QVERIFY(renderer.sendKeyEvent(&press));
+    QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier, text);
+    QVERIFY(renderer.sendKeyEvent(&release));
+    QCoreApplication::processEvents();
+}
+
 QString focusedActionId(const QAbstractItemModel* model)
 {
     for (int row = 0; row < model->rowCount(); ++row) {
@@ -83,6 +94,37 @@ QString focusedActionId(const QAbstractItemModel* model)
         }
     }
     return {};
+}
+
+QQuickItem* findVisualItemWithProperty(QQuickItem* root,
+                                       const char* propertyName,
+                                       const QVariant& value)
+{
+    if (root->property(propertyName) == value) {
+        return root;
+    }
+    for (QQuickItem* child : root->childItems()) {
+        if (QQuickItem* match = findVisualItemWithProperty(
+                child, propertyName, value)) {
+            return match;
+        }
+    }
+    return nullptr;
+}
+
+QQuickItem* findListViewWithCount(QQuickItem* root, int count)
+{
+    if (root->property("count").isValid() &&
+            root->property("contentY").isValid() &&
+            root->property("count").toInt() == count) {
+        return root;
+    }
+    for (QQuickItem* child : root->childItems()) {
+        if (QQuickItem* match = findListViewWithCount(child, count)) {
+            return match;
+        }
+    }
+    return nullptr;
 }
 
 }
@@ -95,6 +137,9 @@ private slots:
     void initTestCase();
     void exposesOnlyTheApprovedActionRoles();
     void loadsShellAndReachesCategoriesAndActionsFromKeyboard();
+    void disabledRowCannotActivatePreviouslyFocusedAction();
+    void realKeysKeepControllerAndQmlFocusInSync();
+    void keyboardFocusKeepsFifthActionVisible();
     void rendersAndPublishesOwnedArgbSurface();
 };
 
@@ -203,6 +248,158 @@ void DeckQmlTest::loadsShellAndReachesCategoriesAndActionsFromKeyboard()
     QTRY_VERIFY(actionTray->hasActiveFocus());
     QCOMPARE(focusedActionId(controller.actionModel()),
              QStringLiteral("display.select"));
+}
+
+void DeckQmlTest::disabledRowCannotActivatePreviouslyFocusedAction()
+{
+    DeckQmlHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.enabled"), state(true));
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.disabled"),
+        state(false, {}, QStringLiteral("Display is unavailable.")));
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.enabled"), QStringLiteral("Enabled display"),
+                   ActionCategory::Display),
+        descriptor(QStringLiteral("display.disabled"), QStringLiteral("Disabled display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+    QCOMPARE(focusedActionId(controller.actionModel()),
+             QStringLiteral("display.enabled"));
+    QQmlEngine engine;
+    DeckSurfaceRenderer renderer;
+    QString error;
+
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    renderer.resize(QSize(960, 540), 1.0);
+    QImage frame;
+    QVERIFY2(renderer.render(&frame, &error), qPrintable(error));
+
+    QQuickItem* disabledRow = findVisualItemWithProperty(
+        qobject_cast<QQuickItem*>(renderer.rootObject()),
+        "actionId",
+        QStringLiteral("display.disabled"));
+    QVERIFY(disabledRow != nullptr);
+    QVERIFY(QMetaObject::invokeMethod(disabledRow, "chosen"));
+    QCoreApplication::processEvents();
+
+    QVERIFY(adapter.executedActionIds.isEmpty());
+    QCOMPARE(focusedActionId(controller.actionModel()),
+             QStringLiteral("display.enabled"));
+}
+
+void DeckQmlTest::realKeysKeepControllerAndQmlFocusInSync()
+{
+    DeckQmlHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.select"), state(true));
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.select"), QStringLiteral("Choose display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromKeyboard();
+    QQmlEngine engine;
+    DeckSurfaceRenderer renderer;
+    QString error;
+
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    renderer.resize(QSize(960, 540), 1.0);
+    QImage frame;
+    QVERIFY2(renderer.render(&frame, &error), qPrintable(error));
+
+    QQuickItem* searchField = renderer.rootObject()->findChild<QQuickItem*>(
+        QStringLiteral("searchField"));
+    QQuickItem* categoryRail = renderer.rootObject()->findChild<QQuickItem*>(
+        QStringLiteral("categoryRail"));
+    QQuickItem* actionTray = renderer.rootObject()->findChild<QQuickItem*>(
+        QStringLiteral("actionTray"));
+    QVERIFY(searchField != nullptr);
+    QVERIFY(categoryRail != nullptr);
+    QVERIFY(actionTray != nullptr);
+    QTRY_VERIFY(searchField->hasActiveFocus());
+    QCOMPARE(controller.property("focusRegion").toInt(), 0);
+
+    sendKey(renderer, Qt::Key_Tab);
+    QTRY_VERIFY(categoryRail->hasActiveFocus());
+    QCOMPARE(controller.property("focusRegion").toInt(), 1);
+
+    sendKey(renderer, Qt::Key_Down);
+    QTRY_VERIFY(actionTray->hasActiveFocus());
+    QCOMPARE(controller.property("focusRegion").toInt(), 2);
+
+    sendKey(renderer, Qt::Key_Escape);
+    QVERIFY(controller.isOpen());
+    QTRY_VERIFY(categoryRail->hasActiveFocus());
+    QCOMPARE(controller.property("focusRegion").toInt(), 1);
+
+    sendKey(renderer, Qt::Key_Up);
+    QTRY_VERIFY(searchField->hasActiveFocus());
+    QCOMPARE(controller.property("focusRegion").toInt(), 0);
+
+    sendTextKey(renderer, Qt::Key_X, QStringLiteral("x"));
+    QTRY_COMPARE(controller.searchText(), QStringLiteral("x"));
+    sendKey(renderer, Qt::Key_Escape);
+    QVERIFY(controller.isOpen());
+    QCOMPARE(controller.searchText(), QString());
+    QTRY_VERIFY(searchField->hasActiveFocus());
+
+    sendKey(renderer, Qt::Key_Escape);
+    QVERIFY(!controller.isOpen());
+}
+
+void DeckQmlTest::keyboardFocusKeepsFifthActionVisible()
+{
+    DeckQmlHostAdapter adapter;
+    QVector<ActionDescriptor> descriptors;
+    for (int actionIndex = 0; actionIndex < 6; ++actionIndex) {
+        const QString actionId = QStringLiteral("display.%1").arg(actionIndex);
+        adapter.currentSnapshot.actionStates.insert(actionId, state(true));
+        descriptors.push_back(descriptor(
+            actionId,
+            QStringLiteral("Display action %1").arg(actionIndex),
+            ActionCategory::Display));
+    }
+    ActionRegistry registry(descriptors, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+    QQmlEngine engine;
+    DeckSurfaceRenderer renderer;
+    QString error;
+
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    renderer.resize(QSize(960, 540), 1.0);
+    QImage frame;
+    QVERIFY2(renderer.render(&frame, &error), qPrintable(error));
+
+    QQuickItem* actionList = findListViewWithCount(
+        qobject_cast<QQuickItem*>(renderer.rootObject()), 6);
+    QVERIFY(actionList != nullptr);
+    for (int move = 0; move < 4; ++move) {
+        sendKey(renderer, Qt::Key_Down);
+    }
+
+    QCOMPARE(focusedActionId(controller.actionModel()),
+             QStringLiteral("display.4"));
+    QTRY_COMPARE(actionList->property("currentIndex").toInt(), 4);
+    QTRY_VERIFY(actionList->property("contentY").toReal() > 0.0);
 }
 
 void DeckQmlTest::rendersAndPublishesOwnedArgbSurface()

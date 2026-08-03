@@ -20,7 +20,12 @@ bool DeckController::isOpen() const
 
 bool DeckController::searchFocused() const
 {
-    return m_SearchFocused;
+    return m_FocusRegion == SearchRegion;
+}
+
+DeckController::FocusRegion DeckController::focusRegion() const
+{
+    return m_FocusRegion;
 }
 
 QString DeckController::searchText() const
@@ -80,7 +85,7 @@ void DeckController::openFromKeyboard()
     m_ActionModel.setCategory(ActionCategory::Display);
     m_ActionModel.refresh();
     m_ActionModel.clearFocus();
-    setSearchFocus(true);
+    setFocusRegion(SearchRegion);
     if (!m_IsOpen) {
         m_IsOpen = true;
         emit openChanged();
@@ -90,7 +95,15 @@ void DeckController::openFromKeyboard()
 void DeckController::openFromController()
 {
     openFromKeyboard();
-    focusActions();
+    for (int categoryIndex = 0; categoryIndex < categories().size(); ++categoryIndex) {
+        selectCategory(categoryIndex);
+        if (m_ActionModel.hasEnabledAction()) {
+            focusActions();
+            return;
+        }
+    }
+    selectCategory(0);
+    focusSearch();
 }
 
 void DeckController::close()
@@ -133,7 +146,9 @@ void DeckController::selectCategory(int categoryIndex)
         emit activeCategoryChanged();
     }
     m_ActionModel.setCategory(categoryForIndex(normalized));
-    setSearchFocus(false);
+    if (m_FocusRegion == SearchRegion) {
+        setFocusRegion(CategoriesRegion);
+    }
     m_ActionModel.focusFirstEnabled();
 }
 
@@ -151,7 +166,13 @@ void DeckController::focusSearch()
 {
     clearConfirmation();
     m_ActionModel.clearFocus();
-    setSearchFocus(true);
+    setFocusRegion(SearchRegion);
+}
+
+void DeckController::focusCategories()
+{
+    clearConfirmation();
+    setFocusRegion(CategoriesRegion);
 }
 
 void DeckController::focusActions()
@@ -159,13 +180,17 @@ void DeckController::focusActions()
     if (m_ActionModel.focusedActionId().isEmpty()) {
         m_ActionModel.focusFirstEnabled();
     }
-    setSearchFocus(false);
+    setFocusRegion(ActionsRegion);
 }
 
 void DeckController::focusAction(const QString& actionId)
 {
+    const QString previousActionId = m_ActionModel.focusedActionId();
     if (m_ActionModel.focusAction(actionId)) {
-        setSearchFocus(false);
+        if (previousActionId != actionId) {
+            clearConfirmation();
+        }
+        setFocusRegion(ActionsRegion);
     }
 }
 
@@ -173,8 +198,18 @@ void DeckController::moveActionFocus(int delta)
 {
     clearConfirmation();
     if (m_ActionModel.moveFocus(delta)) {
-        setSearchFocus(false);
+        setFocusRegion(ActionsRegion);
     }
+}
+
+void DeckController::activateAction(const QString& actionId)
+{
+    focusAction(actionId);
+    if (m_ActionModel.focusedActionId() != actionId ||
+            !m_ActionModel.focusedActionEnabled()) {
+        return;
+    }
+    activateFocusedAction();
 }
 
 void DeckController::activateFocusedAction()
@@ -213,7 +248,11 @@ void DeckController::back()
         cancelConfirmation();
         return;
     }
-    if (!m_SearchFocused) {
+    if (m_FocusRegion == ActionsRegion) {
+        focusCategories();
+        return;
+    }
+    if (m_FocusRegion == CategoriesRegion) {
         focusSearch();
         return;
     }
@@ -227,7 +266,8 @@ void DeckController::back()
 void DeckController::refresh()
 {
     m_ActionModel.refresh();
-    if (!m_SearchFocused && m_ActionModel.focusedActionId().isEmpty()) {
+    if (m_FocusRegion == ActionsRegion &&
+            m_ActionModel.focusedActionId().isEmpty()) {
         m_ActionModel.focusFirstEnabled();
     }
     if (confirmationVisible() &&
@@ -256,12 +296,12 @@ ActionCategory DeckController::categoryForIndex(int categoryIndex)
     }
 }
 
-void DeckController::setSearchFocus(bool focused)
+void DeckController::setFocusRegion(FocusRegion region)
 {
-    if (m_SearchFocused == focused) {
+    if (m_FocusRegion == region) {
         return;
     }
-    m_SearchFocused = focused;
+    m_FocusRegion = region;
     emit focusModeChanged();
 }
 

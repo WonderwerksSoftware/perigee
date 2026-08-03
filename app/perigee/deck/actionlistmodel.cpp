@@ -111,9 +111,16 @@ void ActionListModel::refresh()
             : m_Registry->search(m_SearchText);
         rows.reserve(descriptors.size());
         for (const ActionDescriptor& descriptor : descriptors) {
-            const ActionState state = m_Registry->state(descriptor.id);
+            ActionState state = m_Registry->state(descriptor.id);
             if (!state.visible) {
                 continue;
+            }
+            if (state.phase == ActionPhase::Working) {
+                state.enabled = false;
+                if (state.disabledReason.isEmpty()) {
+                    state.disabledReason = QStringLiteral(
+                        "This action is already in progress.");
+                }
             }
             rows.push_back({
                 descriptor,
@@ -165,6 +172,11 @@ bool ActionListModel::focusedActionRequiresConfirmation() const
 {
     const int row = rowForId(m_FocusedActionId);
     return row >= 0 && m_Rows.at(row).requiresConfirmation;
+}
+
+bool ActionListModel::hasEnabledAction() const
+{
+    return nextEnabledRow(0, 1) >= 0;
 }
 
 void ActionListModel::clearFocus()

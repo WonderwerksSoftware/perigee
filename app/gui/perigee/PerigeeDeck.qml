@@ -26,8 +26,10 @@ FocusScope {
     function syncControllerFocus() {
         if (!visible)
             return
-        if (deckController.searchFocused)
+        if (deckController.focusRegion === 0)
             focusSearch()
+        else if (deckController.focusRegion === 1)
+            focusCategories()
         else
             focusActions()
     }
