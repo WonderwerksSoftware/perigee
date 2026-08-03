@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QtTest>
 
+#include <functional>
 #include <memory>
 #include <type_traits>
 
@@ -29,7 +30,15 @@ public:
     bool statsOverlayEnabled() const override { return stats; }
     bool mouseCaptureEnabled() const override { return mouse; }
     bool keyboardCaptureEnabled() const override { return keyboard; }
-    bool fullscreenEnabled() const override { return fullscreen; }
+    bool fullscreenEnabled() const override
+    {
+        const bool observed = fullscreen;
+        auto destroy = std::move(destroyAfterFullscreenRead);
+        if (destroy) {
+            destroy();
+        }
+        return observed;
+    }
 
     bool setStatsOverlayEnabled(bool enabled) override
     {
@@ -80,6 +89,7 @@ public:
     bool ignoreFullscreenRequest = false;
     bool acceptDisconnectRequest = true;
     bool acceptQuitRequest = true;
+    mutable std::function<void()> destroyAfterFullscreenRead;
     int statsSetCount = 0;
     int mouseSetCount = 0;
     int keyboardSetCount = 0;
@@ -169,6 +179,7 @@ private slots:
     void facadeIdentityIsQObjectEnforced();
     void destructiveRequestsReturnAcceptance();
     void destroyedSessionFailsClosed();
+    void facadeLossAfterEnabledSnapshotPreservesFailureEvidence();
     void unknownActionFailsClosed();
 };
 
@@ -579,6 +590,43 @@ void GameStreamAdapterTest::destroyedSessionFailsClosed()
     const ActionResult result = execute(adapter, QStringLiteral("input.mouse-capture"), enabled(true));
     QVERIFY(!result.ok);
     QCOMPARE(result.errorCode, QStringLiteral("session_unavailable"));
+}
+
+void GameStreamAdapterTest::facadeLossAfterEnabledSnapshotPreservesFailureEvidence()
+{
+    auto session = std::make_unique<FakeSession>();
+    GameStreamAdapter adapter(session.get());
+    ActionRegistry registry(GameStreamAdapter::descriptors(), adapter);
+    session->destroyAfterFullscreenRead = [&session] { session.reset(); };
+
+    ActionResult result;
+    int completionCount = 0;
+    registry.execute(
+        QStringLiteral("stats.overlay"), enabled(true),
+        [&](const ActionResult& completed) {
+            result = completed;
+            ++completionCount;
+        });
+
+    QCOMPARE(completionCount, 1);
+    QVERIFY(!result.ok);
+    QCOMPARE(result.errorCode, QStringLiteral("session_unavailable"));
+    QVERIFY(result.observedState.has_value());
+
+    const ActionState failed = registry.state(QStringLiteral("stats.overlay"));
+    QCOMPARE(failed.phase, ActionPhase::Failed);
+    QCOMPARE(failed.message,
+             QStringLiteral("The streaming session is unavailable."));
+    QVERIFY(!failed.enabled);
+    QCOMPARE(failed.disabledCode, QStringLiteral("session_unavailable"));
+    QCOMPARE(failed.disabledReason,
+             QStringLiteral("The streaming session is unavailable."));
+
+    const ActionState unchanged = registry.state(QStringLiteral("stats.overlay"));
+    QCOMPARE(unchanged.phase, ActionPhase::Failed);
+    QCOMPARE(unchanged.message, failed.message);
+    QCOMPARE(unchanged.disabledCode, failed.disabledCode);
+    QCOMPARE(unchanged.disabledReason, failed.disabledReason);
 }
 
 void GameStreamAdapterTest::unknownActionFailsClosed()

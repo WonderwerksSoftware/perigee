@@ -337,6 +337,65 @@ Final build and stability results:
 - No Xvfb, ww-DevBox, live network, Polaris, Sunshine, or 10G path was used in
   this fix round.
 
+## Fix round 4: preserve facade-loss failure evidence
+
+Base commit: `7d8bf6205b81f01f0727a60bee67f51535c2c9de`
+
+The facade-loss race was reproduced through the public `ActionRegistry`
+boundary before the production fix. The test facade's final snapshot accessor
+copies its return value to a local, then invokes a one-shot owner hook that
+destroys the facade. This lets `GameStreamAdapter::snapshot()` return the last
+enabled snapshot while its `QPointer` is already null before the registry's
+private adapter dispatch. It uses no sleep, event-loop timing, or private
+adapter helper.
+
+The RED command was:
+
+`QT_QPA_PLATFORM=offscreen SDL_VIDEODRIVER=dummy ./perigee-tests GameStreamAdapterTest facadeLossAfterEnabledSnapshotPreservesFailureEvidence -v1`
+
+Result: 2 passed, 1 failed, exit 1. The exact failure was
+`result.observedState.has_value()` returning false. With no observation, the
+registry's fail-closed terminal policy removed the failure progress instead of
+retaining a user-visible session-unavailable result.
+
+The production fix adds the existing authoritative `unavailableState()` to
+`unavailableResult()`. The focused GREEN result was 3 passed, 0 failed. The
+regression also proves one callback, a `Failed` row with the session-unavailable
+message, disabled state/code/reason, and persistence across an unchanged later
+refresh.
+
+Final focused results:
+
+- `GameStreamAdapterTest`: 31 passed, 0 failed.
+- `ActionRegistryTest`: 46 passed, 0 failed.
+- `DeckControllerTest`: 18 passed, 0 failed.
+- `DeckQmlTest::actionRowRendersSucceededEvidence`: 3 passed, 0 failed.
+- `SessionExitIntentTest`: 10 passed, 0 failed.
+- `InputIntegrationTest`: 34 passed, 0 failed.
+- `DeckInputRouterTest`: 35 passed, 0 failed.
+
+Final build and stability results:
+
+- Debug application and test compile/link: exit 0.
+- QML lint: exit 0 with the established 83 unqualified-access warnings and no
+  errors.
+- Fresh-process stress: 10 of 10 full adapter runs and 10 of 10 full registry
+  runs exited 0.
+- `git diff --check`: clean before this report update.
+- The previous 262-pass monolithic result and its exact 11 established OpenGL
+  environment failures were not rerun for this one-field production fix.
+
+The lifetime and completion seams remain unchanged. The same-thread facade
+authority is still held only through `QPointer`, so facade destruction clears
+authority before dispatch. The synchronous unavailable completion flows
+through the registry's existing atomic exactly-once guard, removes the resource
+lock, and publishes the observed terminal baseline. The focused registry run
+includes its synchronous-completion, duplicate-completion, and single-flight
+resource regressions. No confirmation or render-revision behavior changed.
+
+No Xvfb, ww-DevBox, live network, Polaris, Sunshine, or 10G path was used in
+this fix round.
+
 ## Live-smoke status and residual concerns
 
 No ww-DevBox, homelab key, Polaris endpoint, Sunshine host, or 10G interface

@@ -58,6 +58,7 @@ ActionResult unavailableResult()
         {},
         QStringLiteral("session_unavailable"),
         QStringLiteral("The streaming session is unavailable."),
+        unavailableState(),
     };
 }
 
