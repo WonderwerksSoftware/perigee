@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 
 namespace
@@ -321,6 +322,8 @@ private slots:
     void failsClosedForMissingMismatchedAndMixedIdentity();
     void classifiesPreTlsNetworkErrors_data();
     void classifiesPreTlsNetworkErrors();
+    void classifiesAuthenticatedHttpReplyErrorsByStatus_data();
+    void classifiesAuthenticatedHttpReplyErrorsByStatus();
     void retainsStatusBodyAndClassifiesJsonAndNetworkFailures();
     void classifiesEmptyExpectedJsonAsMalformed();
     void distinguishesTimeoutCancellationAndPolicyFailure();
@@ -339,6 +342,7 @@ private slots:
     void cancellationWinsBeforeControlledReplyCompletion();
     void selectedCallbacksCannotBeCancelledOrOvertaken();
     void recursiveDrainDoesNotOvertakeSelectedCallbacks();
+    void callbackExceptionDoesNotLoseSelectedFifoCompletions();
     void callbackDeletionDiscardsRemainingSelectedCallbacks();
     void snapshotsComputerTupleUnderItsReadLock();
     void logsOnlyRedactedRequestMetadata();
@@ -575,6 +579,49 @@ void PolarisApiClientTest::classifiesPreTlsNetworkErrors()
 
     QCOMPARE(response.errorCode, QStringLiteral("network_error"));
     QVERIFY(!response.authenticated);
+}
+
+void PolarisApiClientTest::classifiesAuthenticatedHttpReplyErrorsByStatus_data()
+{
+    QTest::addColumn<int>("httpStatus");
+    QTest::addColumn<int>("networkError");
+    QTest::addColumn<QByteArray>("body");
+
+    QTest::newRow("not-found")
+        << 404
+        << static_cast<int>(QNetworkReply::ContentNotFoundError)
+        << QByteArrayLiteral("{\"error\":\"missing\"}");
+    QTest::newRow("service-unavailable")
+        << 503
+        << static_cast<int>(QNetworkReply::InternalServerError)
+        << QByteArrayLiteral("{\"error\":\"busy\"}");
+}
+
+void PolarisApiClientTest::classifiesAuthenticatedHttpReplyErrorsByStatus()
+{
+    QFETCH(int, httpStatus);
+    QFETCH(int, networkError);
+    QFETCH(QByteArray, body);
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto state = std::make_shared<FakeNetworkState>();
+    ReplyScript script{httpStatus, {body}, expected};
+    script.networkError =
+        static_cast<QNetworkReply::NetworkError>(networkError);
+    enqueue(state, script);
+    PolarisApiClient client(pairedComputer(expected),
+        std::make_unique<FakeNetworkBackend>(state));
+    PolarisResponse response;
+
+    client.get(QStringLiteral("/polaris/v1/capabilities"), false,
+        [&](auto, const PolarisResponse& value) { response = value; });
+    QVERIFY(waitForCompletion(client));
+    client.drainCompletions();
+
+    QVERIFY(response.authenticated);
+    QCOMPARE(response.httpStatus, httpStatus);
+    QCOMPARE(response.body, body);
+    QCOMPARE(response.errorCode, QStringLiteral("http_error"));
 }
 
 void PolarisApiClientTest::retainsStatusBodyAndClassifiesJsonAndNetworkFailures()
@@ -1116,6 +1163,55 @@ void PolarisApiClientTest::recursiveDrainDoesNotOvertakeSelectedCallbacks()
     QCOMPARE(order, QList<QString>({QStringLiteral("A"),
                                    QStringLiteral("B"),
                                    QStringLiteral("C")}));
+}
+
+void PolarisApiClientTest::callbackExceptionDoesNotLoseSelectedFifoCompletions()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto state = std::make_shared<FakeNetworkState>();
+    PolarisApiClient client(pairedComputer(expected),
+        std::make_unique<FakeNetworkBackend>(state));
+    QList<QString> order;
+    client.get(QStringLiteral("https://evil.invalid/polaris/v1/first"), false,
+        [&](auto, const PolarisResponse&) {
+            order.append(QStringLiteral("A"));
+            throw std::runtime_error(
+                "CANARY_EXCEPTION_TEXT CANARY_REQUEST_BODY CANARY_RESPONSE_BODY");
+        });
+    client.get(QStringLiteral("https://evil.invalid/polaris/v1/second"), false,
+        [&](auto, const PolarisResponse&) { order.append(QStringLiteral("B")); });
+    client.get(QStringLiteral("https://evil.invalid/polaris/v1/third"), false,
+        [&](auto, const PolarisResponse&) { order.append(QStringLiteral("C")); });
+    {
+        QMutexLocker locker(&capturedMessagesMutex);
+        capturedMessages.clear();
+    }
+    const QtMessageHandler previous = qInstallMessageHandler(captureMessage);
+
+    bool exceptionEscaped = false;
+    int drained = -1;
+    try {
+        drained = client.drainCompletions(2);
+    }
+    catch (...) {
+        exceptionEscaped = true;
+    }
+    qInstallMessageHandler(previous);
+
+    QVERIFY(!exceptionEscaped);
+    QCOMPARE(drained, 2);
+    QCOMPARE(order, QList<QString>({QStringLiteral("A"),
+                                   QStringLiteral("B")}));
+    QCOMPARE(client.pendingCompletionCount(), 1);
+    QCOMPARE(client.drainCompletions(), 1);
+    QCOMPARE(order, QList<QString>({QStringLiteral("A"),
+                                   QStringLiteral("B"),
+                                   QStringLiteral("C")}));
+    QMutexLocker locker(&capturedMessagesMutex);
+    const QString log = capturedMessages.join(QLatin1Char('\n'));
+    QVERIFY(log.contains(QStringLiteral("callback failed")));
+    QVERIFY(!log.contains(QStringLiteral("CANARY")));
 }
 
 void PolarisApiClientTest::callbackDeletionDiscardsRemainingSelectedCallbacks()

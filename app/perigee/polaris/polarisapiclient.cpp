@@ -428,6 +428,8 @@ private:
         response.authenticated = active->authenticated;
         const QNetworkReply::NetworkError replyError =
             active->reply->error();
+        const bool hasUsableHttpStatus =
+            response.httpStatus >= 100 && response.httpStatus <= 599;
         if (!active->authenticated &&
                 replyError != QNetworkReply::NoError &&
                 replyError != QNetworkReply::SslHandshakeFailedError) {
@@ -436,11 +438,13 @@ private:
         else if (!active->authenticated) {
             response.errorCode = QStringLiteral("tls_identity_mismatch");
         }
-        else if (replyError != QNetworkReply::NoError) {
-            response.errorCode = QStringLiteral("network_error");
-        }
-        else if (response.httpStatus < 200 || response.httpStatus >= 300) {
+        else if (hasUsableHttpStatus &&
+                (response.httpStatus < 200 || response.httpStatus >= 300)) {
             response.errorCode = QStringLiteral("http_error");
+        }
+        else if (replyError != QNetworkReply::NoError ||
+                !hasUsableHttpStatus) {
+            response.errorCode = QStringLiteral("network_error");
         }
         else if (active->request.expectJson) {
             QJsonParseError parseError;
@@ -767,8 +771,15 @@ int PolarisApiClient::drainCompletions(int maximum)
             }
         }
         if (entry.callback) {
-            entry.callback(entry.completion.requestId,
-                           entry.completion.response);
+            try {
+                entry.callback(entry.completion.requestId,
+                               entry.completion.response);
+            }
+            catch (...) {
+                qWarning().noquote()
+                    << QStringLiteral(
+                        "Polaris completion callback failed; continuing");
+            }
         }
     }
     return drained;

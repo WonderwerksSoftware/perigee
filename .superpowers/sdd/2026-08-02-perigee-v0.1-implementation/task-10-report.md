@@ -185,3 +185,50 @@ Final local results for this fix round:
   was installed.
 - No live network, Xvfb, Polaris, Sunshine, ww-DevBox, 10G, push, merge, or
   release operation was used.
+
+## Fix round 2: HTTP reply precedence and callback exception containment
+
+Base commit: `1bf06429b25f70cda6a52b3bfe2b3d723117e991`
+
+Focused regressions were compiled and run before production changes:
+
+- Authenticated 404 plus `ContentNotFoundError` and authenticated 503 plus
+  `InternalServerError` each retained their status and body but returned
+  `network_error`. The isolated RED result was 2 passed and 2 failed; both rows
+  expected `http_error`.
+- Three completions were queued, A and B were selected with `drainCompletions(2)`,
+  and callback A threw a canary-bearing exception. The exception escaped the
+  polling boundary before B ran. The isolated RED result was 2 passed and 1
+  failed at the `exceptionEscaped` assertion.
+
+Authenticated replies now classify every usable non-success HTTP status from
+100 through 599 as `http_error` before considering `QNetworkReply::NetworkError`.
+The status and response body remain attached to the result. A transport failure
+without a usable HTTP status remains `network_error`; the existing fail-closed
+pre-encryption and TLS-identity rules still run first.
+
+Completion callbacks now run inside a catch-all boundary. If a callback throws,
+the drain emits only the generic warning `Polaris completion callback failed;
+continuing` and continues with the next already-selected FIFO completion while
+the shared state remains accepting. It never logs exception text, request data,
+response data, or identifiers. The accepting-state check still occurs before
+each callback, so callback A destroying the client discards selected callback B
+instead of invoking it. Callbacks remain outside the shared mutex and the
+recursive-drain guard remains unchanged.
+
+Final local results for this fix round:
+
+- Debug application and test compile/link: exit 0; the application transport
+  object was recompiled and the application relinked.
+- `PolarisApiClientTest`: 56 passed, 0 failed, 0 skipped.
+- `RedactionTest`: 8 passed, 0 failed, 0 skipped.
+- Fresh-process transport stress: 20 of 20 runs exited 0, for 1,120 test cases.
+  No failure, `QThread` destruction, cross-thread, deadlock, or canary output was
+  observed.
+- Canonical headless run: 327 passed, 11 failed, 0 skipped. The failures remain
+  exactly eight `DeckQmlTest` and three `DeckSurfaceRendererTest` instances of
+  the established `Deck OpenGL context creation failed` environment gate.
+- ThreadSanitizer remains unavailable because the system runtime is absent. No
+  TSan pass is claimed and no package was installed.
+- No live network, display, Xvfb, Polaris, Sunshine, ww-DevBox, 10G, push,
+  merge, or release operation was used.
