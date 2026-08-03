@@ -67,7 +67,6 @@ private:
     int nextEnabledRow(int startRow, int delta) const;
     void changeFocusedAction(const QString& actionId,
                              bool allowDisabled = false);
-    static QString categoryName(ActionCategory category);
     static QString phaseName(ActionPhase phase);
 
     ActionRegistry* m_Registry;

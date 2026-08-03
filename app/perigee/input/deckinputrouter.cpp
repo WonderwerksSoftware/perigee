@@ -65,8 +65,11 @@ DeckInputRouter::Result DeckInputRouter::route(const SDL_Event& event)
     case SDL_CONTROLLERDEVICEREMOVED:
         if (event.cdevice.which == m_ControllerOwner) {
             m_ControllerOwner = -1;
-            m_HorizontalAxisEngaged = false;
-            m_VerticalAxisEngaged = false;
+            m_LeftStickX = 0;
+            m_LeftStickY = 0;
+            m_StickDirection = Action::None;
+            m_StickRepeatEligible = false;
+            m_NextStickRepeatAt = 0;
         }
         m_ButtonsDown.remove(event.cdevice.which);
         m_ButtonReleaseTail.remove(event.cdevice.which);
@@ -110,6 +113,24 @@ DeckInputRouter::Result DeckInputRouter::routeReplay(const SDL_Event& event) con
 DeckInputRouter::Result DeckInputRouter::routeDeferred(const SDL_Event& event)
 {
     return route(event);
+}
+
+DeckInputRouter::Result DeckInputRouter::tick(Uint32 timestamp)
+{
+    if (!m_Open || m_ControllerOwner < 0 ||
+            m_StickDirection == Action::None || !m_StickRepeatEligible) {
+        return {};
+    }
+
+    Result result;
+    result.disposition = Disposition::Consumed;
+    result.controllerId = m_ControllerOwner;
+    if (!SDL_TICKS_PASSED(timestamp, m_NextStickRepeatAt)) {
+        return result;
+    }
+    result.action = m_StickDirection;
+    m_NextStickRepeatAt = timestamp + AxisRepeatIntervalMs;
+    return result;
 }
 
 bool DeckInputRouter::isDeckOpen() const
@@ -346,6 +367,8 @@ DeckInputRouter::Result DeckInputRouter::routeControllerButton(
             Result result = consumedResult();
             result.action = Action::OpenFromController;
             result.controllerId = event.which;
+            result.controllerFamily =
+                ControllerLayout::familyForController(event.which);
             setOpen(true, event.which);
             return result;
         }
@@ -541,26 +564,43 @@ DeckInputRouter::Result DeckInputRouter::routeControllerAxis(
     }
 
     if (event.axis == SDL_CONTROLLER_AXIS_LEFTX) {
-        if (std::abs(int(event.value)) <= AxisReleaseDeadzone) {
-            m_HorizontalAxisEngaged = false;
-        }
-        else if (!m_HorizontalAxisEngaged &&
-                 std::abs(int(event.value)) >= AxisPressDeadzone) {
-            m_HorizontalAxisEngaged = true;
-            result.action = event.value < 0 ? Action::NavigateLeft
-                                            : Action::NavigateRight;
-        }
+        m_LeftStickX = event.value;
     }
     else if (event.axis == SDL_CONTROLLER_AXIS_LEFTY) {
-        if (std::abs(int(event.value)) <= AxisReleaseDeadzone) {
-            m_VerticalAxisEngaged = false;
-        }
-        else if (!m_VerticalAxisEngaged &&
-                 std::abs(int(event.value)) >= AxisPressDeadzone) {
-            m_VerticalAxisEngaged = true;
-            result.action = event.value < 0 ? Action::NavigateUp
-                                            : Action::NavigateDown;
-        }
+        m_LeftStickY = event.value;
+    }
+    else {
+        return result;
+    }
+
+    const int x = int(m_LeftStickX);
+    const int y = int(m_LeftStickY);
+    const qint64 magnitudeSquared = qint64(x) * x + qint64(y) * y;
+    const qint64 releaseSquared =
+        qint64(AxisReleaseDeadzone) * AxisReleaseDeadzone;
+    if (magnitudeSquared <= releaseSquared) {
+        m_StickDirection = Action::None;
+        m_StickRepeatEligible = false;
+        m_NextStickRepeatAt = 0;
+        return result;
+    }
+
+    const qint64 pressSquared =
+        qint64(AxisPressDeadzone) * AxisPressDeadzone;
+    if (magnitudeSquared < pressSquared) {
+        m_StickRepeatEligible = false;
+        m_NextStickRepeatAt = 0;
+        return result;
+    }
+
+    const Action direction = std::abs(x) >= std::abs(y)
+        ? (x < 0 ? Action::NavigateLeft : Action::NavigateRight)
+        : (y < 0 ? Action::NavigateUp : Action::NavigateDown);
+    if (direction != m_StickDirection || !m_StickRepeatEligible) {
+        m_StickDirection = direction;
+        m_StickRepeatEligible = true;
+        m_NextStickRepeatAt = event.timestamp + AxisInitialRepeatDelayMs;
+        result.action = direction;
     }
     return result;
 }
@@ -721,8 +761,11 @@ void DeckInputRouter::setOpen(bool open, SDL_JoystickID owner)
     m_ControllerCandidates.clear();
     m_Open = open;
     m_ControllerOwner = open ? owner : -1;
-    m_HorizontalAxisEngaged = false;
-    m_VerticalAxisEngaged = false;
+    m_LeftStickX = 0;
+    m_LeftStickY = 0;
+    m_StickDirection = Action::None;
+    m_StickRepeatEligible = false;
+    m_NextStickRepeatAt = 0;
     m_LocalMouseButtons = Qt::NoButton;
     m_HasPointerPosition = false;
 }

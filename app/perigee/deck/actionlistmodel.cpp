@@ -1,5 +1,6 @@
 #include "actionlistmodel.h"
 
+#include "perigee/actions/actioncategories.h"
 #include "perigee/actions/actionregistry.h"
 
 #include <QtGlobal>
@@ -32,7 +33,7 @@ QVariant ActionListModel::data(const QModelIndex& index, int role) const
     case LabelRole:
         return row.descriptor.label;
     case CategoryRole:
-        return categoryName(row.descriptor.category);
+        return ActionCategories::displayName(row.descriptor.category);
     case ValueTextRole:
         return row.state.value.toString();
     case EnabledRole:
@@ -318,25 +319,6 @@ void ActionListModel::changeFocusedAction(const QString& actionId,
         emit dataChanged(index(newRow, 0), index(newRow, 0), { FocusedRole });
     }
     emit focusedRowChanged();
-}
-
-QString ActionListModel::categoryName(ActionCategory category)
-{
-    switch (category) {
-    case ActionCategory::Display:
-        return QStringLiteral("Display");
-    case ActionCategory::Input:
-        return QStringLiteral("Input");
-    case ActionCategory::Clipboard:
-        return QStringLiteral("Clipboard");
-    case ActionCategory::Stats:
-        return QStringLiteral("Stats");
-    case ActionCategory::Window:
-        return QStringLiteral("Window");
-    case ActionCategory::Session:
-        return QStringLiteral("Session");
-    }
-    return {};
 }
 
 QString ActionListModel::phaseName(ActionPhase phase)

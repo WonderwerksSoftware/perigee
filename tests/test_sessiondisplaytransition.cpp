@@ -29,6 +29,7 @@ private slots:
     void dormantRecoverySessionCanDriveControlBeforeStartingStream();
     void recoveryControlDoesNotDependOnDeckRendererAvailability();
     void deckNavigationUpdatesAreSessionEpochScopedAndRestoreUsesNonActivatingFocus();
+    void openingControllerSelectsLayoutBeforeFirstDeckFrame();
 };
 
 void SessionDisplayTransitionTest::firstFrameEventIsOneShotEpochScopedAndHandledOnSdlThread()
@@ -128,6 +129,34 @@ void SessionDisplayTransitionTest::deckNavigationUpdatesAreSessionEpochScopedAnd
     QVERIFY(session.contains("setDeckNavigationState(\n"
                              "            m_DisplaySessionEpoch, navigation)"));
     QVERIFY(session.contains("focusActionWithoutActivation(restoredActionId)"));
+}
+
+void SessionDisplayTransitionTest::openingControllerSelectsLayoutBeforeFirstDeckFrame()
+{
+    const QByteArray session = sourceFile(QStringLiteral("app/streaming/session.cpp"));
+    const QByteArray delivery = sourceFile(
+        QStringLiteral("app/perigee/input/deckinputdelivery.cpp"));
+    const QByteArray router = sourceFile(
+        QStringLiteral("app/perigee/input/deckinputrouter.cpp"));
+
+    const int apply = session.indexOf("void Session::applyDeckInputResult");
+    const int open = session.indexOf("DeckInputDelivery::openDeck(", apply);
+    const int firstFrameDirty = session.indexOf(
+        "m_DeckSurfaceRenderer->markDirty();", apply);
+    QVERIFY(apply >= 0);
+    QVERIFY(open > apply);
+    QVERIFY(firstFrameDirty > open);
+
+    const int configure = delivery.indexOf(
+        "controller.setControllerLayout(result.controllerFamily");
+    const int publishOpen = delivery.indexOf(
+        "controller.openFromController();", configure);
+    QVERIFY(configure >= 0);
+    QVERIFY(publishOpen > configure);
+    QVERIFY(router.contains(
+        "result.controllerId = event.which;\n"
+        "            result.controllerFamily =\n"
+        "                ControllerLayout::familyForController(event.which);"));
 }
 
 REGISTER_PERIGEE_TEST(SessionDisplayTransitionTest);

@@ -156,6 +156,8 @@ GroupBox {
                 activeFocusOnTab: true
                 text: root.captureMode === "keyboard" ?
                     qsTr("Press shortcut...") : qsTr("Capture")
+                Accessible.name: qsTr("Capture keyboard shortcut")
+                Accessible.description: qsTr("Record the keyboard shortcut that opens Perigee Deck")
                 onClicked: root.beginKeyboardCapture()
             }
         }
@@ -177,6 +179,8 @@ GroupBox {
                 activeFocusOnTab: true
                 text: root.captureMode === "controller" ?
                     qsTr("Press chord (B cancels)...") : qsTr("Capture")
+                Accessible.name: qsTr("Capture controller chord")
+                Accessible.description: qsTr("Record the controller chord that opens Perigee Deck")
                 onClicked: root.beginControllerCapture()
             }
         }
@@ -199,6 +203,8 @@ GroupBox {
                 activeFocusOnTab: true
                 visible: root.captureMode.length !== 0
                 text: qsTr("Cancel capture")
+                Accessible.name: qsTr("Cancel binding capture")
+                Accessible.description: qsTr("Stop recording a new Perigee Deck binding")
                 onClicked: root.cancelCapture()
             }
 
@@ -206,6 +212,8 @@ GroupBox {
                 objectName: "deckBindingsResetButton"
                 activeFocusOnTab: true
                 text: qsTr("Reset to defaults")
+                Accessible.name: qsTr("Reset Perigee Deck bindings")
+                Accessible.description: qsTr("Restore the default keyboard shortcut and controller chord")
                 onClicked: {
                     root.cancelCapture()
                     if (root.preferences) {
@@ -220,6 +228,8 @@ GroupBox {
             Layout.fillWidth: true
             activeFocusOnTab: true
             text: qsTr("Legacy direct disconnect")
+            Accessible.name: qsTr("Legacy direct disconnect")
+            Accessible.description: qsTr("Use the legacy controller chord to disconnect immediately")
             checked: root.preferences ?
                 root.preferences.legacyGamepadDisconnect : false
             onToggled: {

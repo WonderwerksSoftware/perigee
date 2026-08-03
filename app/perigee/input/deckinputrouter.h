@@ -1,6 +1,7 @@
 #pragma once
 
 #include "deckbindings.h"
+#include "controllerlayout.h"
 #include "SDL_compat.h"
 
 #include <QHash>
@@ -55,6 +56,8 @@ public:
         Disposition disposition = Disposition::Passthrough;
         Action action = Action::None;
         SDL_JoystickID controllerId = -1;
+        ControllerLayout::Family controllerFamily =
+            ControllerLayout::Family::Unknown;
         int key = Qt::Key_unknown;
         Qt::KeyboardModifiers keyModifiers = Qt::NoModifier;
         bool pressed = false;
@@ -72,6 +75,7 @@ public:
     Result route(const SDL_Event& event);
     Result routeReplay(const SDL_Event& event) const;
     Result routeDeferred(const SDL_Event& event);
+    Result tick(Uint32 timestamp);
 
     bool isDeckOpen() const;
     SDL_JoystickID controllerOwner() const;
@@ -106,8 +110,10 @@ private:
     static Qt::KeyboardModifiers qtModifiers(SDL_Keymod modifiers);
     static Qt::MouseButton qtMouseButton(Uint8 button);
 
-    static constexpr Sint16 AxisPressDeadzone = 16000;
+    static constexpr Sint16 AxisPressDeadzone = 18022;
     static constexpr Sint16 AxisReleaseDeadzone = 8000;
+    static constexpr Uint32 AxisInitialRepeatDelayMs = 350;
+    static constexpr Uint32 AxisRepeatIntervalMs = 90;
 
     bool m_Open = false;
     SDL_JoystickID m_ControllerOwner = -1;
@@ -117,8 +123,11 @@ private:
     QHash<SDL_JoystickID, quint32> m_ButtonReleaseTail;
     QSet<SDL_JoystickID> m_ChordTriggered;
     bool m_KeyboardChordTriggered = false;
-    bool m_HorizontalAxisEngaged = false;
-    bool m_VerticalAxisEngaged = false;
+    Sint16 m_LeftStickX = 0;
+    Sint16 m_LeftStickY = 0;
+    Action m_StickDirection = Action::None;
+    bool m_StickRepeatEligible = false;
+    Uint32 m_NextStickRepeatAt = 0;
     QRect m_StreamViewport;
     QSize m_DeckLogicalSize;
     QPointF m_LastPointerPosition;

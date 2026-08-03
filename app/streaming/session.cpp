@@ -1314,12 +1314,8 @@ void Session::applyDeckInputResult(const DeckInputRouter::Result& result)
             // Capture is snapshotted and all remote state is neutralized before
             // Deck begins accepting local navigation.
             m_DeckCaptureSnapshot = m_InputHandler->beginLocalOverlayInput();
-            if (result.action == DeckInputRouter::Action::OpenFromKeyboard) {
-                m_DeckController->openFromKeyboard();
-            }
-            else {
-                m_DeckController->openFromController();
-            }
+            DeckInputDelivery::openDeck(
+                result, *m_DeckController, m_Preferences->swapFaceButtons);
             if (m_PolarisAdapter != nullptr) {
                 m_PolarisAdapter->refresh();
             }
@@ -1401,6 +1397,10 @@ void Session::closeDeckInput(bool keepReleased)
 
 void Session::pumpDeckUi()
 {
+    if (m_DeckInputRouter != nullptr && m_DeckInputRouter->isDeckOpen()) {
+        applyDeckInputResult(m_DeckInputRouter->tick(SDL_GetTicks()));
+    }
+
     if (m_TransitionCoordinator != nullptr) {
         if (m_PolarisAdapter != nullptr) {
             m_TransitionCoordinator->observeDiscovery(

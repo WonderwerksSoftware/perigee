@@ -1,8 +1,10 @@
 #include "test_registry.h"
 
 #include "perigee/actions/actionregistry.h"
+#include "perigee/actions/actioncategories.h"
 #include "perigee/deck/actionlistmodel.h"
 #include "perigee/deck/deckcontroller.h"
+#include "perigee/polaris/polarisadapter.h"
 
 #include <QAbstractItemModel>
 #include <QtTest>
@@ -89,6 +91,13 @@ QString valueForAction(const DeckController& controller, const QString& actionId
     return {};
 }
 
+QString displayActionId(const QString& kind, const QString& id)
+{
+    const QByteArray key = (kind + QLatin1Char(':') + id).toUtf8().toBase64(
+        QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+    return QStringLiteral("display.target.%1").arg(QString::fromLatin1(key));
+}
+
 }
 
 class DeckControllerTest : public QObject
@@ -98,6 +107,9 @@ class DeckControllerTest : public QObject
 private slots:
     void keyboardOpenFocusesSearchAndShowsDisplayActions();
     void categoryCyclingMakesActionsReachableWithoutSearchText();
+    void authoritativeCategoryOrderReachesEveryCoreAction();
+    void productionCatalogIsReachableByCategoryWithoutSearch();
+    void controllerOpenPublishesEffectiveGlyphLayout();
     void refreshPreservesFocusedActionAndUpdatesItsState();
     void backUnwindsConfirmationActionsSearchAndDeck();
     void confirmationCanBeCancelledOrAccepted();
@@ -169,6 +181,169 @@ void DeckControllerTest::categoryCyclingMakesActionsReachableWithoutSearchText()
     controller.previousCategory();
     QCOMPARE(controller.activeCategory(), 0);
     QCOMPARE(focusedActionId(controller), QStringLiteral("display.select"));
+}
+
+void DeckControllerTest::authoritativeCategoryOrderReachesEveryCoreAction()
+{
+    MutableHostAdapter adapter;
+    QVector<ActionDescriptor> descriptors;
+    const QVector<ActionCategory> expectedOrder {
+        ActionCategory::Display,
+        ActionCategory::Input,
+        ActionCategory::Clipboard,
+        ActionCategory::Stats,
+        ActionCategory::Window,
+        ActionCategory::Session,
+    };
+    const QStringList expectedNames {
+        QStringLiteral("Display"),
+        QStringLiteral("Input"),
+        QStringLiteral("Clipboard"),
+        QStringLiteral("Stats"),
+        QStringLiteral("Window"),
+        QStringLiteral("Session"),
+    };
+    const QStringList actionIds {
+        QStringLiteral("display.select"),
+        QStringLiteral("input.capture"),
+        QStringLiteral("clipboard.send"),
+        QStringLiteral("stats.toggle"),
+        QStringLiteral("window.fullscreen"),
+        QStringLiteral("session.disconnect"),
+    };
+    for (int index = 0; index < expectedOrder.size(); ++index) {
+        descriptors.push_back(descriptor(
+            actionIds.at(index),
+            QStringLiteral("Core action %1").arg(index),
+            expectedOrder.at(index)));
+        adapter.currentSnapshot.actionStates.insert(
+            actionIds.at(index), availableState());
+    }
+    ActionRegistry registry(descriptors, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+
+    QCOMPARE(ActionCategories::ordered(), expectedOrder);
+    QCOMPARE(controller.categories(), expectedNames);
+    for (int index = 0; index < expectedOrder.size(); ++index) {
+        controller.selectCategory(index);
+        QCOMPARE(controller.activeCategory(), index);
+        QCOMPARE(controller.actionModel()->rowCount(), 1);
+        QCOMPARE(focusedActionId(controller), actionIds.at(index));
+        QCOMPARE(controller.actionModel()->data(
+                     controller.actionModel()->index(0, 0),
+                     ActionListModel::CategoryRole).toString(),
+                 expectedNames.at(index));
+    }
+}
+
+void DeckControllerTest::productionCatalogIsReachableByCategoryWithoutSearch()
+{
+    MutableHostAdapter adapter;
+    const QString targetId = displayActionId(
+        QStringLiteral("output"), QStringLiteral("DP-1"));
+    ActionState targetState = availableState();
+    targetState.value = QVariantMap {
+        {QStringLiteral("kind"), QStringLiteral("output")},
+        {QStringLiteral("id"), QStringLiteral("DP-1")},
+        {QStringLiteral("label"), QStringLiteral("Desk monitor")},
+        {QStringLiteral("available"), true},
+        {QStringLiteral("current"), true},
+        {QStringLiteral("requires_reconnect"), false},
+        {QStringLiteral("unavailable_reason"), QString()},
+    };
+    adapter.currentSnapshot.actionStates.insert(targetId, targetState);
+
+    ActionState commandState = availableState();
+    commandState.value = QVariantMap {
+        {QStringLiteral("index"), 0},
+        {QStringLiteral("name"), QStringLiteral("Open terminal")},
+        {QStringLiteral("risk"), QStringLiteral("safe")},
+    };
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("host.command.0"), commandState);
+
+    const QHash<QString, ActionCategory> expected {
+        {QStringLiteral("input.mouse-capture"), ActionCategory::Input},
+        {QStringLiteral("input.keyboard-capture"), ActionCategory::Input},
+        {QStringLiteral("input.release-captured"), ActionCategory::Input},
+        {QStringLiteral("stats.overlay"), ActionCategory::Stats},
+        {QStringLiteral("window.fullscreen"), ActionCategory::Window},
+        {QStringLiteral("session.disconnect-client"), ActionCategory::Session},
+        {QStringLiteral("session.quit-perigee"), ActionCategory::Session},
+        {targetId, ActionCategory::Display},
+        {QStringLiteral("clipboard.send-local"), ActionCategory::Clipboard},
+        {QStringLiteral("clipboard.fetch-remote"), ActionCategory::Clipboard},
+        {QStringLiteral("session.end-host"), ActionCategory::Session},
+        {QStringLiteral("host.command.0"), ActionCategory::Session},
+    };
+    for (auto it = expected.cbegin(); it != expected.cend(); ++it) {
+        if (!adapter.currentSnapshot.actionStates.contains(it.key())) {
+            adapter.currentSnapshot.actionStates.insert(
+                it.key(), availableState());
+        }
+    }
+
+    ActionRegistry registry(PolarisAdapter::descriptors(), adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+
+    QSet<QString> reached;
+    const QVector<ActionCategory> categories = ActionCategories::ordered();
+    for (int categoryIndex = 0;
+         categoryIndex < categories.size(); ++categoryIndex) {
+        controller.selectCategory(categoryIndex);
+        QCOMPARE(controller.searchText(), QString());
+        for (int row = 0; row < controller.actionModel()->rowCount(); ++row) {
+            const QModelIndex index = controller.actionModel()->index(row, 0);
+            const QString id = controller.actionModel()->data(
+                index, ActionListModel::IdRole).toString();
+            QVERIFY2(expected.contains(id), qPrintable(id));
+            QCOMPARE(expected.value(id), categories.at(categoryIndex));
+            QCOMPARE(controller.actionModel()->data(
+                         index, ActionListModel::CategoryRole).toString(),
+                     ActionCategories::displayName(categories.at(categoryIndex)));
+            reached.insert(id);
+        }
+    }
+    QCOMPARE(reached, QSet<QString>(expected.keyBegin(), expected.keyEnd()));
+
+    MutableHostAdapter fallbackAdapter;
+    ActionRegistry fallbackRegistry(
+        PolarisAdapter::descriptors(), fallbackAdapter);
+    DeckController fallbackController(&fallbackRegistry);
+    fallbackController.openFromKeyboard();
+    QCOMPARE(fallbackController.actionModel()->rowCount(), 1);
+    QCOMPARE(fallbackController.actionModel()->data(
+                 fallbackController.actionModel()->index(0, 0),
+                 ActionListModel::IdRole).toString(),
+             QStringLiteral("display.switch"));
+}
+
+void DeckControllerTest::controllerOpenPublishesEffectiveGlyphLayout()
+{
+    MutableHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.select"), availableState());
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.select"),
+                   QStringLiteral("Choose display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+
+    controller.setControllerLayout(ControllerLayout::Family::Nintendo, true);
+    controller.openFromController();
+
+    QCOMPARE(controller.controllerLayout()->family(),
+             ControllerLayout::Family::Nintendo);
+    QVERIFY(controller.controllerLayout()->swapFaceButtons());
+    QCOMPARE(controller.controllerLayout()->confirmLabel(),
+             QStringLiteral("A"));
+    QCOMPARE(controller.controllerLayout()->backLabel(),
+             QStringLiteral("B"));
+    QCOMPARE(controller.controllerLayout()->searchLabel(),
+             QStringLiteral("Y"));
 }
 
 void DeckControllerTest::refreshPreservesFocusedActionAndUpdatesItsState()

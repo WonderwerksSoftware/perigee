@@ -1,0 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 28">
+  <rect x="2" y="3" width="44" height="22" rx="8" fill="#25333b" stroke="#b7e4ea" stroke-width="2"/>
+  <path d="M8 22h32" stroke="#667f89" stroke-width="1"/>
+</svg>

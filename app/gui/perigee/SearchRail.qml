@@ -59,6 +59,9 @@ FocusScope {
             text: deckController.searchText
             activeFocusOnTab: false
             clip: true
+            Accessible.role: Accessible.EditableText
+            Accessible.name: "Search session controls"
+            Accessible.description: "Filter controls by name, alias, or category"
 
             Text {
                 anchors.fill: parent
@@ -102,6 +105,9 @@ FocusScope {
         width: parent.width - 32
         height: 32
         activeFocusOnTab: false
+        Accessible.role: Accessible.PageTabList
+        Accessible.name: "Control categories"
+        Accessible.description: "Choose a category of session controls"
 
         onActiveFocusChanged: {
             if (activeFocus)
@@ -128,6 +134,14 @@ FocusScope {
                     border.width: categoryRail.activeFocus &&
                                   deckController.activeCategory === index ? 1 : 0
                     border.color: "#a7e8ff"
+                    Accessible.role: Accessible.PageTab
+                    Accessible.name: modelData
+                    Accessible.description: modelData + " session controls"
+                    Accessible.selected: deckController.activeCategory === index
+                    Accessible.onPressAction: {
+                        deckController.selectCategory(index)
+                        categoryRail.forceActiveFocus()
+                    }
 
                     Text {
                         anchors.centerIn: parent

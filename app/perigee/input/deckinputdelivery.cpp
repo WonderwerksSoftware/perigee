@@ -1,5 +1,7 @@
 #include "deckinputdelivery.h"
 
+#include "perigee/deck/deckcontroller.h"
+
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -92,4 +94,24 @@ void DeckInputDelivery::deliver(const DeckInputRouter::Result& result,
     default:
         break;
     }
+}
+
+bool DeckInputDelivery::openDeck(const DeckInputRouter::Result& result,
+                                 DeckController& controller,
+                                 bool swapFaceButtons)
+{
+    if (result.action == DeckInputRouter::Action::OpenFromKeyboard) {
+        controller.openFromKeyboard();
+        return true;
+    }
+    if (result.action != DeckInputRouter::Action::OpenFromController) {
+        return false;
+    }
+
+    // The opening controller owns both navigation and the artwork shown on the
+    // first Deck frame. Configure its effective mapping before openChanged can
+    // cause QML to become visible.
+    controller.setControllerLayout(result.controllerFamily, swapFaceButtons);
+    controller.openFromController();
+    return true;
 }

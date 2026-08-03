@@ -13,6 +13,7 @@ include(../globaldefs.pri)
 
 SOURCES += \
     ../app/perigee/actions/actionregistry.cpp \
+    ../app/perigee/actions/actioncategories.cpp \
     ../app/perigee/display/displaytransaction.cpp \
     ../app/perigee/display/sessiontransitioncoordinator.cpp \
     ../app/perigee/actions/gamestreamadapter.cpp \
@@ -21,6 +22,7 @@ SOURCES += \
     ../app/perigee/deck/deckuipump.cpp \
     ../app/perigee/deck/decksurfacerenderer.cpp \
     ../app/perigee/input/deckbindings.cpp \
+    ../app/perigee/input/controllerlayout.cpp \
     ../app/perigee/input/deckinputrouter.cpp \
     ../app/perigee/input/deckinputdelivery.cpp \
     ../app/perigee/polaris/polarismodels.cpp \
@@ -52,6 +54,7 @@ SOURCES += \
     test_deckbindingsqml.cpp \
     test_deckinputrouter.cpp \
     test_deckinputdelivery.cpp \
+    test_controllerlayout.cpp \
     test_displaytransaction.cpp \
     test_inputneutralization.cpp \
     test_inputintegration.cpp \
@@ -81,6 +84,7 @@ PKGCONFIG += sdl2 SDL2_ttf opus openssl
 
 HEADERS += \
     ../app/perigee/actions/actionregistry.h \
+    ../app/perigee/actions/actioncategories.h \
     ../app/perigee/actions/actiontypes.h \
     ../app/perigee/actions/gamestreamadapter.h \
     ../app/perigee/actions/hostadapter.h \
@@ -92,6 +96,7 @@ HEADERS += \
     ../app/perigee/display/displaytransaction.h \
     ../app/perigee/display/sessiontransitioncoordinator.h \
     ../app/perigee/input/deckbindings.h \
+    ../app/perigee/input/controllerlayout.h \
     ../app/perigee/input/deckinputrouter.h \
     ../app/perigee/input/deckinputdelivery.h \
     ../app/perigee/polaris/polarisapiclient.h \

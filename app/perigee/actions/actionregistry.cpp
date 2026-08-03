@@ -1,4 +1,5 @@
 #include "actionregistry.h"
+#include "actioncategories.h"
 
 #include <QHash>
 #include <QMutex>
@@ -18,25 +19,6 @@ constexpr auto CommandPrefix = "host.command.";
 constexpr auto DisplayTemplateId = "display.switch";
 constexpr auto DisplayPrefix = "display.target.";
 
-QString categoryName(ActionCategory category)
-{
-    switch (category) {
-    case ActionCategory::Display:
-        return QStringLiteral("display");
-    case ActionCategory::Input:
-        return QStringLiteral("input");
-    case ActionCategory::Clipboard:
-        return QStringLiteral("clipboard");
-    case ActionCategory::Stats:
-        return QStringLiteral("stats");
-    case ActionCategory::Window:
-        return QStringLiteral("window");
-    case ActionCategory::Session:
-        return QStringLiteral("session");
-    }
-    return {};
-}
-
 int searchRank(const ActionDescriptor& descriptor, const QString& query)
 {
     if (descriptor.label.startsWith(query, Qt::CaseInsensitive)) {
@@ -55,7 +37,8 @@ int searchRank(const ActionDescriptor& descriptor, const QString& query)
             return 3;
         }
     }
-    if (categoryName(descriptor.category).contains(query, Qt::CaseInsensitive)) {
+    if (ActionCategories::displayName(descriptor.category).contains(
+            query, Qt::CaseInsensitive)) {
         return 4;
     }
     return -1;

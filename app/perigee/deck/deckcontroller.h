@@ -1,6 +1,7 @@
 #pragma once
 
 #include "actionlistmodel.h"
+#include "perigee/input/controllerlayout.h"
 
 #include <QObject>
 #include <QStringList>
@@ -21,6 +22,7 @@ class DeckController final : public QObject
     Q_PROPERTY(int activeCategory READ activeCategory NOTIFY activeCategoryChanged)
     Q_PROPERTY(QStringList categories READ categories CONSTANT)
     Q_PROPERTY(ActionListModel* actionModel READ actionModel CONSTANT)
+    Q_PROPERTY(ControllerLayout* controllerLayout READ controllerLayout CONSTANT)
     Q_PROPERTY(bool confirmationVisible READ confirmationVisible NOTIFY confirmationChanged)
     Q_PROPERTY(QString confirmationActionLabel READ confirmationActionLabel NOTIFY confirmationChanged)
     Q_PROPERTY(QString confirmationMessage READ confirmationMessage NOTIFY confirmationChanged)
@@ -45,12 +47,16 @@ public:
     QStringList categories() const;
     ActionListModel* actionModel();
     const ActionListModel* actionModel() const;
+    ControllerLayout* controllerLayout();
+    const ControllerLayout* controllerLayout() const;
     bool confirmationVisible() const;
     QString confirmationActionLabel() const;
     QString confirmationMessage() const;
 
     Q_INVOKABLE void openFromKeyboard();
     Q_INVOKABLE void openFromController();
+    void setControllerLayout(ControllerLayout::Family family,
+                             bool swapFaceButtons);
     Q_INVOKABLE void close();
     Q_INVOKABLE void setSearchText(const QString& searchText);
     Q_INVOKABLE void selectCategory(int categoryIndex);
@@ -86,6 +92,7 @@ private:
 
     ActionRegistry* m_Registry;
     ActionListModel m_ActionModel;
+    ControllerLayout m_ControllerLayout;
     bool m_IsOpen = false;
     FocusRegion m_FocusRegion = SearchRegion;
     QString m_SearchText;

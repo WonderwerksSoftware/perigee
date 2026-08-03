@@ -2,6 +2,7 @@
 
 #include <QQmlComponent>
 #include <QQmlEngine>
+#include <QAccessible>
 #include <QQuickItem>
 #include <QtTest>
 
@@ -117,6 +118,7 @@ private slots:
     void keypadClassificationModifierIsNotStoredAsPartOfShortcut();
     void keypadClassificationModifierDoesNotSatisfyModifierRequirement();
     void hidingTheSettingsViewCancelsControllerCapture();
+    void focusableSettingsControlsExposeAccessibleDescriptions();
 };
 
 void DeckBindingsQmlTest::captureCanBeCancelledExplicitly()
@@ -286,6 +288,45 @@ void DeckBindingsQmlTest::hidingTheSettingsViewCancelsControllerCapture()
 
     QVERIFY(!navigation.captureActive);
     QCOMPARE(root->property("captureMode").toString(), QString());
+}
+
+void DeckBindingsQmlTest::focusableSettingsControlsExposeAccessibleDescriptions()
+{
+    QQmlEngine engine;
+    QQmlComponent component(&engine,
+        QUrl(QStringLiteral("qrc:/gui/perigee/DeckBindingSettings.qml")));
+    FakeDeckPreferences preferences;
+    FakeGamepadNavigation navigation;
+    QScopedPointer<QObject> root(component.createWithInitialProperties({
+        {QStringLiteral("preferences"), QVariant::fromValue(&preferences)},
+        {QStringLiteral("gamepadNavigation"), QVariant::fromValue(&navigation)},
+    }));
+    QVERIFY2(root, qPrintable(component.errorString()));
+    QVERIFY(QMetaObject::invokeMethod(root.data(), "beginControllerCapture"));
+    QCoreApplication::processEvents();
+
+    const QHash<QString, QString> expectedNames {
+        {QStringLiteral("deckKeyboardCaptureButton"),
+         QStringLiteral("Capture keyboard shortcut")},
+        {QStringLiteral("deckControllerCaptureButton"),
+         QStringLiteral("Capture controller chord")},
+        {QStringLiteral("deckCaptureCancelButton"),
+         QStringLiteral("Cancel binding capture")},
+        {QStringLiteral("deckBindingsResetButton"),
+         QStringLiteral("Reset Perigee Deck bindings")},
+        {QStringLiteral("legacyDisconnectCheck"),
+         QStringLiteral("Legacy direct disconnect")},
+    };
+    for (auto it = expectedNames.cbegin(); it != expectedNames.cend(); ++it) {
+        QObject* control = root->findChild<QObject*>(it.key());
+        QVERIFY2(control != nullptr, qPrintable(it.key()));
+        QAccessibleInterface* interface =
+            QAccessible::queryAccessibleInterface(control);
+        QVERIFY2(interface != nullptr, qPrintable(it.key()));
+        QCOMPARE(interface->text(QAccessible::Name), it.value());
+        QVERIFY2(!interface->text(QAccessible::Description).trimmed().isEmpty(),
+                 qPrintable(it.key()));
+    }
 }
 
 REGISTER_PERIGEE_TEST(DeckBindingsQmlTest);

@@ -27,5 +27,30 @@
         <file>gui/perigee/ActionRow.qml</file>
         <file>gui/perigee/ConfirmationCard.qml</file>
         <file>gui/perigee/ControllerHint.qml</file>
+        <file>gui/perigee/ControllerGlyph.qml</file>
+        <file alias="gui/perigee/glyphs/xbox-a.svg">gui/perigee/glyphs/xbox-face.svg</file>
+        <file alias="gui/perigee/glyphs/xbox-b.svg">gui/perigee/glyphs/xbox-face.svg</file>
+        <file alias="gui/perigee/glyphs/xbox-x.svg">gui/perigee/glyphs/xbox-face.svg</file>
+        <file alias="gui/perigee/glyphs/xbox-y.svg">gui/perigee/glyphs/xbox-face.svg</file>
+        <file alias="gui/perigee/glyphs/xbox-lb.svg">gui/perigee/glyphs/xbox-shoulder.svg</file>
+        <file alias="gui/perigee/glyphs/xbox-rb.svg">gui/perigee/glyphs/xbox-shoulder.svg</file>
+        <file alias="gui/perigee/glyphs/playstation-cross.svg">gui/perigee/glyphs/playstation-face.svg</file>
+        <file alias="gui/perigee/glyphs/playstation-circle.svg">gui/perigee/glyphs/playstation-face.svg</file>
+        <file alias="gui/perigee/glyphs/playstation-square.svg">gui/perigee/glyphs/playstation-face.svg</file>
+        <file alias="gui/perigee/glyphs/playstation-triangle.svg">gui/perigee/glyphs/playstation-face.svg</file>
+        <file alias="gui/perigee/glyphs/playstation-l1.svg">gui/perigee/glyphs/playstation-shoulder.svg</file>
+        <file alias="gui/perigee/glyphs/playstation-r1.svg">gui/perigee/glyphs/playstation-shoulder.svg</file>
+        <file alias="gui/perigee/glyphs/nintendo-a.svg">gui/perigee/glyphs/nintendo-face.svg</file>
+        <file alias="gui/perigee/glyphs/nintendo-b.svg">gui/perigee/glyphs/nintendo-face.svg</file>
+        <file alias="gui/perigee/glyphs/nintendo-x.svg">gui/perigee/glyphs/nintendo-face.svg</file>
+        <file alias="gui/perigee/glyphs/nintendo-y.svg">gui/perigee/glyphs/nintendo-face.svg</file>
+        <file alias="gui/perigee/glyphs/nintendo-l.svg">gui/perigee/glyphs/nintendo-shoulder.svg</file>
+        <file alias="gui/perigee/glyphs/nintendo-r.svg">gui/perigee/glyphs/nintendo-shoulder.svg</file>
+        <file alias="gui/perigee/glyphs/steamdeck-a.svg">gui/perigee/glyphs/steamdeck-face.svg</file>
+        <file alias="gui/perigee/glyphs/steamdeck-b.svg">gui/perigee/glyphs/steamdeck-face.svg</file>
+        <file alias="gui/perigee/glyphs/steamdeck-x.svg">gui/perigee/glyphs/steamdeck-face.svg</file>
+        <file alias="gui/perigee/glyphs/steamdeck-y.svg">gui/perigee/glyphs/steamdeck-face.svg</file>
+        <file alias="gui/perigee/glyphs/steamdeck-l1.svg">gui/perigee/glyphs/steamdeck-shoulder.svg</file>
+        <file alias="gui/perigee/glyphs/steamdeck-r1.svg">gui/perigee/glyphs/steamdeck-shoulder.svg</file>
     </qresource>
 </RCC>

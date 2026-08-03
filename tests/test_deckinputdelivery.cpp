@@ -1,6 +1,8 @@
 #include "test_registry.h"
 
 #include "perigee/input/deckinputdelivery.h"
+#include "perigee/actions/actionregistry.h"
+#include "perigee/deck/deckcontroller.h"
 
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -8,6 +10,22 @@
 #include <QtTest>
 
 namespace {
+
+class OpenHostAdapter final : public HostAdapter
+{
+public:
+    HostSnapshot snapshot() override
+    {
+        HostSnapshot snapshot;
+        ActionState state;
+        state.enabled = true;
+        snapshot.actionStates.insert(QStringLiteral("display.select"), state);
+        return snapshot;
+    }
+
+    void execute(const QString&, QVariantMap, Completion) override {}
+    void cancel(const QString&) override {}
+};
 
 class RecordingSink final : public DeckInputSink
 {
@@ -69,6 +87,7 @@ class DeckInputDeliveryTest : public QObject
 
 private slots:
     void deliversWheelAndCommitsTextOnlyOnce();
+    void sessionOpenSeamAppliesOpeningControllerLayoutFirst();
 };
 
 void DeckInputDeliveryTest::deliversWheelAndCommitsTextOnlyOnce()
@@ -111,6 +130,31 @@ void DeckInputDeliveryTest::deliversWheelAndCommitsTextOnlyOnce()
     QCOMPARE(sink.wheelEvents, 1);
     QCOMPARE(sink.wheelPosition, QPointF(800, 450));
     QCOMPARE(sink.wheelDelta, QPoint(240, -360));
+}
+
+void DeckInputDeliveryTest::sessionOpenSeamAppliesOpeningControllerLayoutFirst()
+{
+    OpenHostAdapter adapter;
+    ActionRegistry registry({ActionDescriptor {
+        QStringLiteral("display.select"),
+        QStringLiteral("Select display"),
+        ActionCategory::Display,
+        {}, {}, {}, 0, ConfirmationPolicy::Never, {},
+    }}, adapter);
+    DeckController controller(&registry);
+    DeckInputRouter::Result opening;
+    opening.action = DeckInputRouter::Action::OpenFromController;
+    opening.controllerId = 73;
+    opening.controllerFamily = ControllerLayout::Family::PlayStation;
+
+    DeckInputDelivery::openDeck(opening, controller, true);
+
+    QVERIFY(controller.isOpen());
+    QCOMPARE(controller.controllerLayout()->family(),
+             ControllerLayout::Family::PlayStation);
+    QVERIFY(controller.controllerLayout()->swapFaceButtons());
+    QCOMPARE(controller.controllerLayout()->confirmLabel(),
+             QStringLiteral("Circle"));
 }
 
 REGISTER_PERIGEE_TEST(DeckInputDeliveryTest);

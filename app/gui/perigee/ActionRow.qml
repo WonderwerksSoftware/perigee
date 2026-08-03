@@ -23,6 +23,17 @@ Rectangle {
     border.width: actionFocused ? 2 : 1
     border.color: actionFocused ? "#80d8ff" : "#34455a"
     opacity: actionEnabled || phase === "working" ? 1.0 : 0.76
+    enabled: actionEnabled
+    Accessible.role: Accessible.Button
+    Accessible.name: actionLabel
+    Accessible.description: !actionEnabled ? disabledReason
+                            : requiresConfirmation
+                              ? actionCategory + "; confirmation required"
+                              : actionCategory
+    Accessible.onPressAction: {
+        if (actionEnabled)
+            row.chosen()
+    }
 
     Rectangle {
         id: statusMark

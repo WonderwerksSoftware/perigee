@@ -1,11 +1,13 @@
 #include "deckcontroller.h"
 
+#include "perigee/actions/actioncategories.h"
 #include "perigee/actions/actionregistry.h"
 
 DeckController::DeckController(ActionRegistry* registry, QObject* parent)
     : QObject(parent)
     , m_Registry(registry)
     , m_ActionModel(registry, this)
+    , m_ControllerLayout(this)
     , m_PendingRefresh(std::make_shared<std::atomic_bool>(false))
 {
 }
@@ -42,14 +44,7 @@ int DeckController::activeCategory() const
 
 QStringList DeckController::categories() const
 {
-    return {
-        QStringLiteral("Display"),
-        QStringLiteral("Input"),
-        QStringLiteral("Clipboard"),
-        QStringLiteral("Stats"),
-        QStringLiteral("Window"),
-        QStringLiteral("Session"),
-    };
+    return ActionCategories::displayNames();
 }
 
 ActionListModel* DeckController::actionModel()
@@ -60,6 +55,16 @@ ActionListModel* DeckController::actionModel()
 const ActionListModel* DeckController::actionModel() const
 {
     return &m_ActionModel;
+}
+
+ControllerLayout* DeckController::controllerLayout()
+{
+    return &m_ControllerLayout;
+}
+
+const ControllerLayout* DeckController::controllerLayout() const
+{
+    return &m_ControllerLayout;
 }
 
 bool DeckController::confirmationVisible() const
@@ -112,6 +117,12 @@ void DeckController::openFromController()
     }
     selectCategory(0);
     focusSearch();
+}
+
+void DeckController::setControllerLayout(ControllerLayout::Family family,
+                                         bool swapFaceButtons)
+{
+    m_ControllerLayout.configure(family, swapFaceButtons);
 }
 
 void DeckController::close()
@@ -328,22 +339,7 @@ bool DeckController::pumpPendingWork()
 
 ActionCategory DeckController::categoryForIndex(int categoryIndex)
 {
-    switch (categoryIndex) {
-    case 0:
-        return ActionCategory::Display;
-    case 1:
-        return ActionCategory::Input;
-    case 2:
-        return ActionCategory::Clipboard;
-    case 3:
-        return ActionCategory::Stats;
-    case 4:
-        return ActionCategory::Window;
-    case 5:
-        return ActionCategory::Session;
-    default:
-        return ActionCategory::Display;
-    }
+    return ActionCategories::at(categoryIndex);
 }
 
 void DeckController::setFocusRegion(FocusRegion region)

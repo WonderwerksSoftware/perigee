@@ -5,6 +5,7 @@
 class QKeyEvent;
 class QMouseEvent;
 class QWheelEvent;
+class DeckController;
 
 class DeckInputSink
 {
@@ -22,4 +23,7 @@ public:
     static bool handles(DeckInputRouter::Action action);
     static void deliver(const DeckInputRouter::Result& result,
                         DeckInputSink& sink);
+    static bool openDeck(const DeckInputRouter::Result& result,
+                         DeckController& controller,
+                         bool swapFaceButtons);
 };

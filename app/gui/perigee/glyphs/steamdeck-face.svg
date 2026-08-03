@@ -1,0 +1,5 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <circle cx="16" cy="16" r="13" fill="#25333b" stroke="#b7e4ea" stroke-width="2"/>
+  <circle cx="16" cy="16" r="10" fill="none" stroke="#667f89" stroke-width="1"/>
+</svg>

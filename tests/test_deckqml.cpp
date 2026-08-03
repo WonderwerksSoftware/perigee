@@ -7,11 +7,13 @@
 #include "streaming/video/overlaymanager.h"
 
 #include <QAbstractItemModel>
+#include <QAccessible>
 #include <QCoreApplication>
 #include <QDir>
 #include <QImage>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickItem>
@@ -21,6 +23,7 @@
 
 #include <SDL.h>
 
+#include <cmath>
 #include <memory>
 
 namespace {
@@ -129,6 +132,37 @@ QQuickItem* findListViewWithCount(QQuickItem* root, int count)
     return nullptr;
 }
 
+qreal relativeLuminance(const QColor& color)
+{
+    const auto linearChannel = [](qreal channel) {
+        channel /= 255.0;
+        return channel <= 0.04045
+            ? channel / 12.92
+            : std::pow((channel + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * linearChannel(color.red()) +
+           0.7152 * linearChannel(color.green()) +
+           0.0722 * linearChannel(color.blue());
+}
+
+qreal contrastRatio(const QColor& first, const QColor& second)
+{
+    const qreal firstLuminance = relativeLuminance(first);
+    const qreal secondLuminance = relativeLuminance(second);
+    const qreal lighter = qMax(firstLuminance, secondLuminance);
+    const qreal darker = qMin(firstLuminance, secondLuminance);
+    return (lighter + 0.05) / (darker + 0.05);
+}
+
+QImage compositeOver(const QImage& foreground, const QColor& background)
+{
+    QImage composite(foreground.size(), QImage::Format_ARGB32_Premultiplied);
+    composite.fill(background);
+    QPainter painter(&composite);
+    painter.drawImage(QPoint(), foreground);
+    return composite;
+}
+
 }
 
 class DeckQmlTest : public QObject
@@ -144,6 +178,11 @@ private slots:
     void realKeysKeepControllerAndQmlFocusInSync();
     void keyboardFocusKeepsFifthActionVisible();
     void controllerOpenRevealsInitiallyOffscreenFirstEnabledAction();
+    void controllerGlyphsFollowEffectiveLayout();
+    void focusedActionBorderContrastsAgainstLightAndDarkVideo();
+    void exposesAccessibleNamesAndDisabledReasons();
+    void confirmationTrapsFocusUntilAcceptedOrCancelled();
+    void rendersControllerLayoutReferencePngs();
     void rendersAndPublishesOwnedArgbSurface();
     void realPointerEventSelectsCategoryThroughRenderer();
     void realTextInputCommitsThroughRenderer();
@@ -481,6 +520,324 @@ void DeckQmlTest::controllerOpenRevealsInitiallyOffscreenFirstEnabledAction()
     QVERIFY(actionList != nullptr);
     QTRY_COMPARE(actionList->property("currentIndex").toInt(), 20);
     QTRY_VERIFY(actionList->property("contentY").toReal() > 0.0);
+}
+
+void DeckQmlTest::controllerGlyphsFollowEffectiveLayout()
+{
+    ControllerLayout layout;
+    layout.configure(ControllerLayout::Family::PlayStation, false);
+    QQmlEngine engine;
+    QQmlComponent component(
+        &engine, QUrl(QStringLiteral("qrc:/gui/perigee/ControllerHint.qml")));
+    std::unique_ptr<QObject> object(component.createWithInitialProperties({
+        {QStringLiteral("confirming"), false},
+        {QStringLiteral("controllerLayout"), QVariant::fromValue(&layout)},
+    }));
+    QVERIFY2(object != nullptr, qPrintable(component.errorString()));
+    auto* root = qobject_cast<QQuickItem*>(object.get());
+    QVERIFY(root != nullptr);
+
+    QQuickItem* confirmGlyph = root->findChild<QQuickItem*>(
+        QStringLiteral("controllerConfirmGlyph"));
+    QQuickItem* backGlyph = root->findChild<QQuickItem*>(
+        QStringLiteral("controllerBackGlyph"));
+    QVERIFY(confirmGlyph != nullptr);
+    QVERIFY(backGlyph != nullptr);
+    QCOMPARE(confirmGlyph->property("label").toString(),
+             QStringLiteral("Cross"));
+    QCOMPARE(confirmGlyph->property("visualLabel").toString(),
+             QString::fromUtf8("×"));
+    QCOMPARE(backGlyph->property("label").toString(),
+             QStringLiteral("Circle"));
+    QCOMPARE(backGlyph->property("visualLabel").toString(),
+             QString::fromUtf8("○"));
+    QCOMPARE(confirmGlyph->property("source").toUrl(),
+             QUrl(QStringLiteral(
+                 "qrc:/gui/perigee/glyphs/playstation-cross.svg")));
+
+    layout.configure(ControllerLayout::Family::Nintendo, true);
+    QCoreApplication::processEvents();
+    QCOMPARE(confirmGlyph->property("label").toString(), QStringLiteral("A"));
+    QCOMPARE(confirmGlyph->property("visualLabel").toString(),
+             QStringLiteral("A"));
+    QCOMPARE(backGlyph->property("label").toString(), QStringLiteral("B"));
+    QCOMPARE(confirmGlyph->property("source").toUrl(),
+             QUrl(QStringLiteral("qrc:/gui/perigee/glyphs/nintendo-a.svg")));
+}
+
+void DeckQmlTest::focusedActionBorderContrastsAgainstLightAndDarkVideo()
+{
+    DeckQmlHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.select"), state(true));
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.select"),
+                   QStringLiteral("Choose display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+    QQmlEngine engine;
+    DeckSurfaceRenderer renderer;
+    QString error;
+
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    renderer.resize(QSize(960, 540), 1.0);
+    QImage frame;
+    QVERIFY2(renderer.render(&frame, &error), qPrintable(error));
+
+    auto* root = qobject_cast<QQuickItem*>(renderer.rootObject());
+    QVERIFY(root != nullptr);
+    QQuickItem* focusedRow = findVisualItemWithProperty(
+        root, "actionId", QStringLiteral("display.select"));
+    QVERIFY(focusedRow != nullptr);
+    QVERIFY(focusedRow->property("actionFocused").toBool());
+    const QPointF rowTopLeft = focusedRow->mapToItem(root, QPointF());
+    const QPoint borderSample(
+        qRound(rowTopLeft.x() + focusedRow->width() / 2.0),
+        qRound(rowTopLeft.y() + 1.0));
+    const QPoint interiorSample(
+        qRound(rowTopLeft.x() + focusedRow->width() - 24.0),
+        qRound(rowTopLeft.y() + focusedRow->height() / 2.0));
+    QVERIFY(frame.rect().contains(borderSample));
+    QVERIFY(frame.rect().contains(interiorSample));
+
+    const QColor videoBackgrounds[] { Qt::black, Qt::white };
+    for (const QColor& videoBackground : videoBackgrounds) {
+        const QImage composite = compositeOver(frame, videoBackground);
+        const QColor border = composite.pixelColor(borderSample);
+        const QColor interior = composite.pixelColor(interiorSample);
+        const qreal ratio = contrastRatio(border, interior);
+        qInfo().noquote()
+            << QStringLiteral("Focused action contrast over %1 video: %2:1")
+                   .arg(videoBackground == QColor(Qt::black)
+                            ? QStringLiteral("dark")
+                            : QStringLiteral("light"))
+                   .arg(ratio, 0, 'f', 2);
+        QVERIFY2(ratio >= 3.0,
+                 qPrintable(QStringLiteral(
+                     "Focused action contrast over %1 video was %2:1 (%3 vs %4)")
+                     .arg(videoBackground == QColor(Qt::black)
+                              ? QStringLiteral("dark")
+                              : QStringLiteral("light"))
+                     .arg(ratio, 0, 'f', 2)
+                     .arg(border.name(QColor::HexArgb),
+                          interior.name(QColor::HexArgb))));
+    }
+}
+
+void DeckQmlTest::exposesAccessibleNamesAndDisabledReasons()
+{
+    DeckQmlHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.select"), state(true));
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.disabled"),
+        state(false, {}, QStringLiteral("No alternate display is available.")));
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.select"),
+                   QStringLiteral("Choose display"),
+                   ActionCategory::Display),
+        descriptor(QStringLiteral("display.disabled"),
+                   QStringLiteral("Unavailable display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+    QQmlEngine engine;
+    QQmlComponent component(
+        &engine, QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")));
+    std::unique_ptr<QObject> object(component.createWithInitialProperties({
+        {QStringLiteral("deckController"), QVariant::fromValue(&controller)},
+    }));
+    QVERIFY2(object != nullptr, qPrintable(component.errorString()));
+    auto* root = qobject_cast<QQuickItem*>(object.get());
+    QVERIFY(root != nullptr);
+
+    const auto verifyAccessible = [](QQuickItem* item,
+                                     const QString& expectedName) {
+        QVERIFY(item != nullptr);
+        QAccessibleInterface* interface =
+            QAccessible::queryAccessibleInterface(item);
+        QVERIFY(interface != nullptr);
+        QCOMPARE(interface->text(QAccessible::Name), expectedName);
+        QVERIFY(!interface->text(QAccessible::Description).trimmed().isEmpty());
+    };
+
+    verifyAccessible(root->findChild<QQuickItem*>(
+                         QStringLiteral("searchField")),
+                     QStringLiteral("Search session controls"));
+    verifyAccessible(root->findChild<QQuickItem*>(
+                         QStringLiteral("categoryRail")),
+                     QStringLiteral("Control categories"));
+    verifyAccessible(root->findChild<QQuickItem*>(
+                         QStringLiteral("actionTray")),
+                     QStringLiteral("Session controls"));
+
+    QQmlComponent rowComponent(
+        &engine, QUrl(QStringLiteral("qrc:/gui/perigee/ActionRow.qml")));
+    std::unique_ptr<QObject> rowObject(rowComponent.createWithInitialProperties({
+        {QStringLiteral("actionId"), QStringLiteral("display.disabled")},
+        {QStringLiteral("actionLabel"), QStringLiteral("Unavailable display")},
+        {QStringLiteral("actionCategory"), QStringLiteral("Display")},
+        {QStringLiteral("valueText"), QString()},
+        {QStringLiteral("actionEnabled"), false},
+        {QStringLiteral("disabledReason"),
+         QStringLiteral("No alternate display is available.")},
+        {QStringLiteral("phase"), QStringLiteral("idle")},
+        {QStringLiteral("message"), QString()},
+        {QStringLiteral("actionFocused"), false},
+        {QStringLiteral("requiresConfirmation"), false},
+    }));
+    QVERIFY2(rowObject != nullptr, qPrintable(rowComponent.errorString()));
+    auto* disabledRow = qobject_cast<QQuickItem*>(rowObject.get());
+    QVERIFY(disabledRow != nullptr);
+    QAccessibleInterface* disabledInterface =
+        QAccessible::queryAccessibleInterface(disabledRow);
+    QVERIFY(disabledInterface != nullptr);
+    QCOMPARE(disabledInterface->text(QAccessible::Name),
+             QStringLiteral("Unavailable display"));
+    QCOMPARE(disabledInterface->text(QAccessible::Description),
+             QStringLiteral("No alternate display is available."));
+    QVERIFY(disabledInterface->state().disabled);
+}
+
+void DeckQmlTest::confirmationTrapsFocusUntilAcceptedOrCancelled()
+{
+    QQmlEngine engine;
+    QQmlComponent component(
+        &engine, QUrl(QStringLiteral("qrc:/gui/perigee/ConfirmationCard.qml")));
+    std::unique_ptr<QObject> object(component.createWithInitialProperties({
+        {QStringLiteral("actionLabel"), QStringLiteral("Disconnect client")},
+        {QStringLiteral("message"),
+         QStringLiteral("This disconnects only this client.")},
+    }));
+    QVERIFY2(object != nullptr, qPrintable(component.errorString()));
+    auto* root = qobject_cast<QQuickItem*>(object.get());
+    QVERIFY(root != nullptr);
+    QQuickItem* cancelButton = root->findChild<QQuickItem*>(
+        QStringLiteral("confirmationCancel"));
+    QQuickItem* confirmButton = root->findChild<QQuickItem*>(
+        QStringLiteral("confirmationConfirm"));
+    QVERIFY(cancelButton != nullptr);
+    QVERIFY(confirmButton != nullptr);
+    QCOMPARE(root->property("focusedChoice").toInt(), 0);
+    QVERIFY(QMetaObject::invokeMethod(
+        root, "moveChoice", Q_ARG(QVariant, 1)));
+    QCOMPARE(root->property("focusedChoice").toInt(), 1);
+    QVERIFY(QMetaObject::invokeMethod(
+        root, "moveChoice", Q_ARG(QVariant, 1)));
+    QCOMPARE(root->property("focusedChoice").toInt(), 0);
+
+    QSignalSpy cancelSpy(root, SIGNAL(cancelRequested()));
+    QSignalSpy confirmSpy(root, SIGNAL(confirmRequested()));
+    root->setProperty("focusedChoice", 1);
+    QVERIFY(QMetaObject::invokeMethod(root, "activateFocused"));
+    QCOMPARE(confirmSpy.count(), 1);
+    QCOMPARE(cancelSpy.count(), 0);
+    root->setProperty("focusedChoice", 0);
+    QVERIFY(QMetaObject::invokeMethod(root, "activateFocused"));
+    QCOMPARE(confirmSpy.count(), 1);
+    QCOMPARE(cancelSpy.count(), 1);
+}
+
+void DeckQmlTest::rendersControllerLayoutReferencePngs()
+{
+    DeckQmlHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.select"),
+        state(true, QStringLiteral("Desk monitor")));
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.unavailable"),
+        state(false, {}, QStringLiteral("No alternate display is available.")));
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.select"),
+                   QStringLiteral("Choose display"),
+                   ActionCategory::Display),
+        descriptor(QStringLiteral("display.unavailable"),
+                   QStringLiteral("Unavailable display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    const QDir artifactDirectory(
+        QDir(QCoreApplication::applicationDirPath()).filePath(
+            QStringLiteral("../artifacts")));
+    QVERIFY(QDir().mkpath(artifactDirectory.path()));
+
+    struct ReferenceLayout {
+        ControllerLayout::Family family;
+        const char* name;
+    };
+    const ReferenceLayout layouts[] {
+        {ControllerLayout::Family::Xbox, "xbox"},
+        {ControllerLayout::Family::PlayStation, "playstation"},
+        {ControllerLayout::Family::Nintendo, "nintendo"},
+    };
+    controller.setControllerLayout(ControllerLayout::Family::Xbox, false);
+    controller.openFromController();
+    QQmlEngine engine;
+    DeckSurfaceRenderer renderer;
+    QString error;
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    renderer.resize(QSize(960, 540), 1.0);
+
+    QVector<QImage> referenceImages;
+    for (const ReferenceLayout& layout : layouts) {
+        controller.setControllerLayout(layout.family, false);
+        renderer.markDirty();
+        QCoreApplication::processEvents();
+        QImage warmup;
+        QVERIFY2(renderer.render(&warmup, &error), qPrintable(error));
+        renderer.markDirty();
+        QCoreApplication::processEvents();
+        QImage image;
+        QVERIFY2(renderer.render(&image, &error), qPrintable(error));
+        QCOMPARE(image.size(), QSize(960, 540));
+        QCOMPARE(image.format(), QImage::Format_ARGB32_Premultiplied);
+        const auto visibleSamples = [&image](const QRect& region) {
+            int count = 0;
+            for (int y = region.top(); y <= region.bottom(); y += 8) {
+                for (int x = region.left(); x <= region.right(); x += 8) {
+                    const QColor color = image.pixelColor(x, y);
+                    count += color.alpha() > 0 &&
+                             color.red() + color.green() + color.blue() > 20
+                        ? 1 : 0;
+                }
+            }
+            return count;
+        };
+        const int searchRailCoverage = visibleSamples(QRect(70, 24, 820, 112));
+        const int actionTrayCoverage = visibleSamples(QRect(70, 146, 820, 200));
+        QVERIFY2(searchRailCoverage > 800,
+                 qPrintable(QStringLiteral("%1 search rail is incomplete (%2 samples)")
+                                .arg(QString::fromLatin1(layout.name))
+                                .arg(searchRailCoverage)));
+        QVERIFY2(actionTrayCoverage > 1200,
+                 qPrintable(QStringLiteral("%1 action tray is incomplete (%2 samples)")
+                                .arg(QString::fromLatin1(layout.name))
+                                .arg(actionTrayCoverage)));
+        const QString artifactPath = artifactDirectory.filePath(
+            QStringLiteral("perigee-controller-%1.png")
+                .arg(QString::fromLatin1(layout.name)));
+        QVERIFY2(image.save(artifactPath), qPrintable(artifactPath));
+        qInfo().noquote() << "Deck controller artifact:" << artifactPath;
+        referenceImages.push_back(std::move(image));
+    }
+
+    QCOMPARE(referenceImages.size(), 3);
+    QVERIFY(referenceImages.at(0) != referenceImages.at(1));
+    QVERIFY(referenceImages.at(0) != referenceImages.at(2));
+    QVERIFY(referenceImages.at(1) != referenceImages.at(2));
 }
 
 void DeckQmlTest::rendersAndPublishesOwnedArgbSurface()

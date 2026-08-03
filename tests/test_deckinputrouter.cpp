@@ -35,7 +35,7 @@ SDL_Event buttonEvent(Uint32 type, SDL_JoystickID controller,
 }
 
 SDL_Event axisEvent(SDL_JoystickID controller, SDL_GameControllerAxis axis,
-                    Sint16 value)
+                    Sint16 value, Uint32 timestamp = 0)
 {
     SDL_Event event {};
     event.type = SDL_CONTROLLERAXISMOTION;
@@ -43,6 +43,7 @@ SDL_Event axisEvent(SDL_JoystickID controller, SDL_GameControllerAxis axis,
     event.caxis.which = controller;
     event.caxis.axis = axis;
     event.caxis.value = value;
+    event.caxis.timestamp = timestamp;
     return event;
 }
 
@@ -114,6 +115,8 @@ private slots:
     void nonOwnerCannotTriggerLegacyDisconnectWhileControllerOwnsDeck();
     void controllerNavigationHonorsFaceButtonSwap();
     void stickNavigationUsesPressAndReleaseDeadzones();
+    void heldStickRepeatsFromTicksAndNeutralResetsTiming();
+    void stickRepeatStopsBelowPressThresholdAndRestartsDeterministically();
     void mouseMapsViewportAndRejectsOrClampsOutOfBoundsInput();
     void statsChordPassesThroughWhenClosedAndStaysLocalWhenOpen();
     void openStatsChordHonorsFaceSwapAndWinsOverDeckCandidate();
@@ -365,6 +368,62 @@ void DeckInputRouterTest::stickNavigationUsesPressAndReleaseDeadzones()
              DeckInputRouter::Action::NavigateUp);
     QCOMPARE(router.route(axisEvent(8, SDL_CONTROLLER_AXIS_LEFTX, 22000)).action,
              DeckInputRouter::Action::NavigateRight);
+}
+
+void DeckInputRouterTest::heldStickRepeatsFromTicksAndNeutralResetsTiming()
+{
+    DeckInputRouter router;
+    routeChord(router, 8, SDL_CONTROLLER_BUTTON_START);
+
+    QCOMPARE(router.route(axisEvent(
+                 8, SDL_CONTROLLER_AXIS_LEFTY, 18021, 1000)).action,
+             DeckInputRouter::Action::None);
+    QCOMPARE(router.tick(1200).action, DeckInputRouter::Action::None);
+
+    QCOMPARE(router.route(axisEvent(
+                 8, SDL_CONTROLLER_AXIS_LEFTY, 18022, 2000)).action,
+             DeckInputRouter::Action::NavigateDown);
+    QCOMPARE(router.tick(2349).action, DeckInputRouter::Action::None);
+    QCOMPARE(router.tick(2350).action, DeckInputRouter::Action::NavigateDown);
+    QCOMPARE(router.tick(2439).action, DeckInputRouter::Action::None);
+    QCOMPARE(router.tick(2440).action, DeckInputRouter::Action::NavigateDown);
+
+    QCOMPARE(router.route(axisEvent(
+                 8, SDL_CONTROLLER_AXIS_LEFTY, 0, 2450)).action,
+             DeckInputRouter::Action::None);
+    QCOMPARE(router.tick(5000).action, DeckInputRouter::Action::None);
+
+    QCOMPARE(router.route(axisEvent(
+                 8, SDL_CONTROLLER_AXIS_LEFTY, -20000, 5100)).action,
+             DeckInputRouter::Action::NavigateUp);
+    QCOMPARE(router.tick(5449).action, DeckInputRouter::Action::None);
+    QCOMPARE(router.tick(5450).action, DeckInputRouter::Action::NavigateUp);
+}
+
+void DeckInputRouterTest::
+stickRepeatStopsBelowPressThresholdAndRestartsDeterministically()
+{
+    DeckInputRouter router;
+    routeChord(router, 8, SDL_CONTROLLER_BUTTON_START);
+
+    QCOMPARE(router.route(axisEvent(
+                 8, SDL_CONTROLLER_AXIS_LEFTY, 18022, 1000)).action,
+             DeckInputRouter::Action::NavigateDown);
+    QCOMPARE(router.route(axisEvent(
+                 8, SDL_CONTROLLER_AXIS_LEFTY, 18021, 1100)).action,
+             DeckInputRouter::Action::None);
+    QCOMPARE(router.tick(2000).action, DeckInputRouter::Action::None);
+
+    QCOMPARE(router.route(axisEvent(
+                 8, SDL_CONTROLLER_AXIS_LEFTY, 18022, 2100)).action,
+             DeckInputRouter::Action::NavigateDown);
+    QCOMPARE(router.tick(2449).action, DeckInputRouter::Action::None);
+    QCOMPARE(router.tick(2450).action, DeckInputRouter::Action::NavigateDown);
+
+    QCOMPARE(router.route(axisEvent(
+                 8, SDL_CONTROLLER_AXIS_LEFTY, 0, 2500)).action,
+             DeckInputRouter::Action::None);
+    QCOMPARE(router.tick(3000).action, DeckInputRouter::Action::None);
 }
 
 void DeckInputRouterTest::mouseMapsViewportAndRejectsOrClampsOutOfBoundsInput()

@@ -12,6 +12,9 @@ FocusScope {
     height: Math.max(90, Math.min(4, actionList.count) * 68 + 28) +
             (confirmation.visible ? confirmation.height + 10 : 0) + 36
     activeFocusOnTab: false
+    Accessible.role: Accessible.List
+    Accessible.name: "Session controls"
+    Accessible.description: "Available controls for the current streaming session"
 
     Rectangle {
         anchors.fill: parent
@@ -86,6 +89,7 @@ FocusScope {
         anchors.topMargin: 8
         width: parent.width - 24
         visible: deckController.confirmationVisible
+        focus: visible
         actionLabel: deckController.confirmationActionLabel
         message: deckController.confirmationMessage
         onCancelRequested: {
@@ -104,6 +108,7 @@ FocusScope {
         anchors.bottomMargin: 9
         width: parent.width - 36
         confirming: confirmation.visible
+        controllerLayout: tray.deckController.controllerLayout
     }
 
     onActiveFocusChanged: {

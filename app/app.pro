@@ -205,6 +205,7 @@ SOURCES += \
     streaming/streamutils.cpp \
     backend/autoupdatechecker.cpp \
     perigee/actions/actionregistry.cpp \
+    perigee/actions/actioncategories.cpp \
     perigee/actions/gamestreamadapter.cpp \
     perigee/display/displaytransaction.cpp \
     perigee/display/sessiontransitioncoordinator.cpp \
@@ -213,6 +214,7 @@ SOURCES += \
     perigee/deck/deckuipump.cpp \
     perigee/deck/decksurfacerenderer.cpp \
     perigee/input/deckbindings.cpp \
+    perigee/input/controllerlayout.cpp \
     perigee/input/deckinputrouter.cpp \
     perigee/input/deckinputdelivery.cpp \
     perigee/polaris/polarismodels.cpp \
@@ -261,6 +263,7 @@ HEADERS += \
     streaming/streamutils.h \
     backend/autoupdatechecker.h \
     perigee/actions/actionregistry.h \
+    perigee/actions/actioncategories.h \
     perigee/actions/actiontypes.h \
     perigee/actions/gamestreamadapter.h \
     perigee/actions/hostadapter.h \
@@ -274,6 +277,7 @@ HEADERS += \
     perigee/deck/deckuipump.h \
     perigee/deck/decksurfacerenderer.h \
     perigee/input/deckbindings.h \
+    perigee/input/controllerlayout.h \
     perigee/input/deckinputrouter.h \
     perigee/input/deckinputdelivery.h \
     perigee/polaris/polarisapiclient.h \
