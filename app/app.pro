@@ -213,6 +213,8 @@ SOURCES += \
     perigee/input/deckbindings.cpp \
     perigee/input/deckinputrouter.cpp \
     perigee/input/deckinputdelivery.cpp \
+    perigee/polaris/polarismodels.cpp \
+    perigee/polaris/polarisadapter.cpp \
     perigee/polaris/polarisapiclient.cpp \
     perigee/support/redaction.cpp \
     path.cpp \
@@ -261,6 +263,8 @@ HEADERS += \
     perigee/actions/gamestreamadapter.h \
     perigee/actions/hostadapter.h \
     perigee/actions/sessionfacade.h \
+    perigee/polaris/polarismodels.h \
+    perigee/polaris/polarisadapter.h \
     perigee/deck/actionlistmodel.h \
     perigee/deck/deckcontroller.h \
     perigee/deck/deckuipump.h \

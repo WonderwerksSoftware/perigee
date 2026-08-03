@@ -1,0 +1,33 @@
+{
+  "server": "polaris",
+  "version": "2026.8",
+  "features": {
+    "session_stop_v1": true,
+    "client_settings_v1": true,
+    "named_commands_v1": true,
+    "display_targets_v1": true,
+    "clipboard_limits_v1": true,
+    "future_feature_v2": true
+  },
+  "session": {
+    "status_endpoint": "/polaris/v1/session/status"
+  },
+  "client_settings": {
+    "version": 1,
+    "endpoint": "/polaris/v1/client-settings"
+  },
+  "named_commands": {
+    "version": 1,
+    "endpoint": "/polaris/v1/commands",
+    "commands": [
+      {"index": 0, "id": "restart-shell", "name": "Restart shell", "risk": "disruptive", "command": "secret raw command"},
+      {"index": 2, "name": "Clear cache", "risk": "safe", "extra": "ignored"}
+    ]
+  },
+  "clipboard": {
+    "read": true,
+    "write": true,
+    "max_text_bytes": 262144
+  },
+  "unknown": {"nested": [1, 2, 3]}
+}

@@ -1,0 +1,40 @@
+{
+  "status": true,
+  "client_settings": {
+    "version": 1,
+    "revision": "fixture-current-upstream",
+    "desired": {
+      "stream_display_mode": "desktop_display"
+    },
+    "effective": {
+      "stream_display_mode": "desktop_display"
+    },
+    "capabilities": {
+      "modes": [
+        {"value": "desktop_display", "label": "Mirror Desktop", "available": true, "restart_required": true, "reason": "Mirror the desktop"},
+        {"value": "headless_stream", "label": "Private Stream", "available": true, "restart_required": true, "reason": "Use a private stream"}
+      ],
+      "future_current_capability": true
+    },
+    "sync_status": {
+      "available": true,
+      "version": 1,
+      "fields": {
+        "stream_display_mode": {
+          "direction": "read_write",
+          "scope": "host",
+          "desired": "desktop_display",
+          "effective": "desktop_display",
+          "requires_relaunch": false
+        }
+      }
+    }
+  },
+  "sync_status": {
+    "available": true,
+    "version": 1,
+    "fields": {"unknown_duplicate": {"direction": "read_only", "scope": "host"}}
+  },
+  "stream_policy": {"unknown": "ignored"},
+  "health": {"unknown": "ignored"}
+}

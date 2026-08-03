@@ -1,0 +1,18 @@
+{
+  "state": "streaming",
+  "streaming_active": true,
+  "session_token": "fixture-viewer-token",
+  "client_role": "viewer",
+  "owned_by_client": false,
+  "controls": {
+    "stop_allowed": false,
+    "stop_endpoint": "/polaris/v1/session/stop",
+    "quit_allowed": false,
+    "display_selection_allowed": false,
+    "shutdown_in_progress": false,
+    "client_commands_enabled": true,
+    "device_commands_enabled": true,
+    "clipboard_read_allowed": true,
+    "clipboard_write_allowed": false
+  }
+}

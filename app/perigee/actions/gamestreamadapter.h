@@ -17,6 +17,8 @@ public:
     void cancel(const QString& resourceKey) override;
 
 private:
+    friend class PolarisAdapter;
+
     void execute(const QString& actionId,
                  QVariantMap parameters,
                  Completion completion) override;

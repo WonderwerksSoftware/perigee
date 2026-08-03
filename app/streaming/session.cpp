@@ -7,6 +7,7 @@
 #include "perigee/actions/actionregistry.h"
 #include "perigee/actions/gamestreamadapter.h"
 #include "perigee/actions/sessionfacade.h"
+#include "perigee/polaris/polarisadapter.h"
 #include "perigee/input/deckinputrouter.h"
 #include "streaming/sdleventcodes.h"
 
@@ -665,6 +666,7 @@ Session::~Session()
     m_DeckInputRouter.reset();
     m_DeckController.reset();
     m_ActionRegistry.reset();
+    m_PolarisAdapter.reset();
     m_GameStreamAdapter.reset();
     m_SessionFacade.reset();
     SDL_DestroyMutex(m_DecoderLock);
@@ -684,8 +686,10 @@ bool Session::initialize(QQuickWindow* qtWindow)
         auto sessionFacade = std::make_unique<GameStreamSessionFacade>(this);
         auto gameStreamAdapter = std::make_unique<GameStreamAdapter>(
             sessionFacade.get());
+        auto polarisAdapter = std::make_unique<PolarisAdapter>(
+            *gameStreamAdapter, *m_Computer);
         auto actionRegistry = std::make_unique<ActionRegistry>(
-            GameStreamAdapter::descriptors(), *gameStreamAdapter);
+            PolarisAdapter::descriptors(), *polarisAdapter);
         auto deckController = std::make_unique<DeckController>(
             actionRegistry.get());
         auto deckRenderer = std::make_unique<DeckSurfaceRenderer>();
@@ -703,6 +707,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
         else {
             m_SessionFacade = std::move(sessionFacade);
             m_GameStreamAdapter = std::move(gameStreamAdapter);
+            m_PolarisAdapter = std::move(polarisAdapter);
             m_ActionRegistry = std::move(actionRegistry);
             m_DeckController = std::move(deckController);
             m_DeckSurfaceRenderer = std::move(deckRenderer);
@@ -1192,6 +1197,9 @@ void Session::applyDeckInputResult(const DeckInputRouter::Result& result)
             else {
                 m_DeckController->openFromController();
             }
+            if (m_PolarisAdapter != nullptr) {
+                m_PolarisAdapter->refresh();
+            }
             m_DeckController->refresh();
             m_OverlayManager.setOverlayState(Overlay::OverlayDeck, true);
             m_DeckSurfaceRenderer->markDirty();
@@ -1270,6 +1278,12 @@ void Session::pumpDeckUi()
         return;
     }
 
+    if (m_PolarisAdapter != nullptr &&
+            m_PolarisAdapter->pumpCompletions(
+                PolarisAdapter::CompletionPumpLimit) > 0) {
+        m_DeckController->refresh();
+        m_DeckSurfaceRenderer->markDirty();
+    }
     m_DeckController->pumpPendingWork();
     const DeckUiPump::Decision decision = m_DeckUiPump.plan(
         m_DeckController->isOpen(),
@@ -2216,6 +2230,10 @@ void Session::exec()
         SDL_QuitSubSystem(SDL_INIT_VIDEO);
         QThreadPool::globalInstance()->start(new DeferredSessionCleanupTask(this));
         return;
+    }
+
+    if (m_PolarisAdapter != nullptr) {
+        m_PolarisAdapter->startDiscovery();
     }
 
     // Pump the Qt event loop one last time before we create our SDL window

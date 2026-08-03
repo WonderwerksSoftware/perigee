@@ -21,6 +21,7 @@ class DeckSurfaceRenderer;
 class DeckController;
 class ActionRegistry;
 class GameStreamAdapter;
+class PolarisAdapter;
 class GameStreamSessionFacade;
 
 class SupportedVideoFormatList : public QList<int>
@@ -320,6 +321,7 @@ private:
     Overlay::OverlayManager m_OverlayManager;
     std::unique_ptr<GameStreamSessionFacade> m_SessionFacade;
     std::unique_ptr<GameStreamAdapter> m_GameStreamAdapter;
+    std::unique_ptr<PolarisAdapter> m_PolarisAdapter;
     std::unique_ptr<ActionRegistry> m_ActionRegistry;
     std::unique_ptr<DeckController> m_DeckController;
     std::unique_ptr<DeckSurfaceRenderer> m_DeckSurfaceRenderer;

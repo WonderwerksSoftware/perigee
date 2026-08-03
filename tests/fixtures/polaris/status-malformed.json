@@ -1,0 +1,10 @@
+{
+  "state": ["streaming"],
+  "session_token": 22,
+  "client_role": {"name": "owner"},
+  "owned_by_client": "yes",
+  "controls": {
+    "stop_allowed": "yes",
+    "stop_endpoint": "https://attacker.invalid/polaris/v1/session/stop"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "server": "polaris",
+  "version": "0.0.9",
+  "features": {
+    "session_lifecycle": true,
+    "client_settings_v1": true
+  },
+  "client_settings": {
+    "version": 1,
+    "endpoint": "/polaris/v1/client-settings"
+  }
+}

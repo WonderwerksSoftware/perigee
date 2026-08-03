@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "desired": {
+    "stream_display_mode": "desktop_display"
+  },
+  "effective": {
+    "stream_display_mode": "desktop_display",
+    "output_name": "DP-1"
+  },
+  "fields": {
+    "stream_display_mode": {
+      "direction": "read_write",
+      "scope": "host",
+      "desired": "desktop_display",
+      "effective": "desktop_display",
+      "requires_relaunch": false
+    },
+    "output_name": {
+      "direction": "read_write",
+      "scope": "paired_client",
+      "desired": "DP-1",
+      "effective": "DP-1",
+      "requires_reconnect": true
+    }
+  },
+  "capabilities": {
+    "modes": [
+      {"value": "desktop_display", "label": "Mirror Desktop", "available": true, "restart_required": false},
+      {"value": "headless_stream", "label": "Private Stream", "available": true, "restart_required": true},
+      {"value": "host_virtual_display", "label": "Private Stream", "available": false, "restart_required": true, "unavailable_reason": "No virtual display driver"},
+      {"value": 44, "label": "Malformed", "available": true}
+    ],
+    "outputs": [
+      {"id": "DP-1", "label": "Primary monitor", "connected": true, "active": true, "requires_reconnect": true},
+      {"id": "HDMI-A-1", "label": "Primary monitor", "connected": true, "active": false, "requires_reconnect": true},
+      {"id": "DP-9", "label": "Disconnected monitor", "connected": false, "active": false, "requires_reconnect": true, "unavailable_reason": "Display is disconnected"},
+      {"id": 17, "label": "Malformed output", "connected": true}
+    ],
+    "future_capability": {"ignored": true}
+  }
+}

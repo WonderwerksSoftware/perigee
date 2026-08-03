@@ -68,6 +68,7 @@ public:
     bool cancel(RequestId requestId);
     int drainCompletions(int maximum = 16);
     qsizetype pendingCompletionCount() const;
+    QUrl origin() const;
 
     static QUrl pairedOrigin(const NvAddress& address, quint16 httpsPort);
     static QUrl resolveAdvertisedEndpoint(const QUrl& pairedOrigin,

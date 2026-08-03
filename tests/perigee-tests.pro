@@ -20,6 +20,8 @@ SOURCES += \
     ../app/perigee/input/deckbindings.cpp \
     ../app/perigee/input/deckinputrouter.cpp \
     ../app/perigee/input/deckinputdelivery.cpp \
+    ../app/perigee/polaris/polarismodels.cpp \
+    ../app/perigee/polaris/polarisadapter.cpp \
     ../app/perigee/polaris/polarisapiclient.cpp \
     ../app/perigee/support/redaction.cpp \
     ../app/backend/nvaddress.cpp \
@@ -53,6 +55,8 @@ SOURCES += \
     test_streamingpreferences.cpp \
     input_integration_stubs.cpp \
     test_overlaylayout.cpp \
+    test_polarismodels.cpp \
+    test_polarisadapter.cpp \
     test_polarisapiclient.cpp \
     test_redaction.cpp \
     test_smoke.cpp
@@ -88,6 +92,8 @@ HEADERS += \
     input_integration_stubs.h \
     ../app/path.h \
     ../app/streaming/video/overlaymanager.h \
+    ../app/perigee/polaris/polarismodels.h \
+    ../app/perigee/polaris/polarisadapter.h \
     test_registry.h
 
 RESOURCES += ../app/qml.qrc

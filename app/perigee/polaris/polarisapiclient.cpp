@@ -792,6 +792,11 @@ qsizetype PolarisApiClient::pendingCompletionCount() const
     return state->queue.size();
 }
 
+QUrl PolarisApiClient::origin() const
+{
+    return d != nullptr ? d->origin : QUrl();
+}
+
 QUrl PolarisApiClient::pairedOrigin(const NvAddress& address,
                                     quint16 httpsPort)
 {
