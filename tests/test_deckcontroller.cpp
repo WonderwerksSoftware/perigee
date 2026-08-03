@@ -46,11 +46,11 @@ public:
     }
 
     void execute(const QString& actionId,
-                 const QVariantMap& parameters,
+                 const ActionInvocation& invocation,
                  Completion completion) override
     {
         executedActionIds.push_back(actionId);
-        executedParameters.push_back(parameters);
+        executedParameters.push_back(invocation.parameters());
         if (synchronousResult.has_value()) {
             completion(*synchronousResult);
         }
@@ -100,6 +100,7 @@ private slots:
     void refreshPreservesFocusedActionAndUpdatesItsState();
     void backUnwindsConfirmationActionsSearchAndDeck();
     void confirmationCanBeCancelledOrAccepted();
+    void refreshAndStateChangeInvalidateConfirmation();
     void disabledFocusedActionFallsBackToAnEnabledPeer();
     void controllerOpenSkipsEmptyDisplayCategory();
     void controllerOpenSkipsAllDisabledDisplayCategory();
@@ -266,10 +267,54 @@ void DeckControllerTest::confirmationCanBeCancelledOrAccepted()
     controller.acceptConfirmation();
     QCOMPARE(adapter.executedActionIds,
              QStringList({ QStringLiteral("session.end") }));
-    QCOMPARE(adapter.executedParameters,
-             QVector<QVariantMap>({{{QStringLiteral("confirmed"), true}}}));
+    QCOMPARE(adapter.executedParameters, QVector<QVariantMap>({{}}));
     QVERIFY(!controller.confirmationVisible());
     QCOMPARE(valueForAction(controller, QStringLiteral("session.end")), QString());
+}
+
+void DeckControllerTest::refreshAndStateChangeInvalidateConfirmation()
+{
+    MutableHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("session.end"), availableState());
+    adapter.synchronousResult = ActionResult {
+        true, QStringLiteral("Session ended"), {}, {}
+    };
+    ActionRegistry registry({
+        descriptor(QStringLiteral("session.end"), QStringLiteral("End session"),
+                   ActionCategory::Session, ConfirmationPolicy::Always),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromKeyboard();
+    controller.setSearchText(QStringLiteral("session"));
+    controller.focusActions();
+
+    controller.activateFocusedAction();
+    QVERIFY(controller.confirmationVisible());
+    controller.refresh();
+    QVERIFY(!controller.confirmationVisible());
+    ActionResult result;
+    registry.acceptConfirmation(
+        QStringLiteral("session.end"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QVERIFY(adapter.executedActionIds.isEmpty());
+
+    controller.activateFocusedAction();
+    QVERIFY(controller.confirmationVisible());
+    ActionState disabled;
+    disabled.disabledReason = QStringLiteral("Session is no longer available.");
+    adapter.currentSnapshot.actionStates[QStringLiteral("session.end")] = disabled;
+    controller.acceptConfirmation();
+    QVERIFY(!controller.confirmationVisible());
+    QVERIFY(adapter.executedActionIds.isEmpty());
+
+    adapter.currentSnapshot.actionStates[QStringLiteral("session.end")] = availableState();
+    registry.acceptConfirmation(
+        QStringLiteral("session.end"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QVERIFY(adapter.executedActionIds.isEmpty());
 }
 
 void DeckControllerTest::disabledFocusedActionFallsBackToAnEnabledPeer()
@@ -444,6 +489,12 @@ void DeckControllerTest::pointerFocusCancelsConfirmationOnlyAfterSuccessfulChang
     controller.focusAction(QStringLiteral("display.other"));
     QVERIFY(!controller.confirmationVisible());
     QCOMPARE(focusedActionId(controller), QStringLiteral("display.other"));
+    ActionResult result;
+    registry.acceptConfirmation(
+        QStringLiteral("display.confirm"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QVERIFY(adapter.executedActionIds.isEmpty());
 }
 
 void DeckControllerTest::textInputRequestTracksOpenSearchFocus()

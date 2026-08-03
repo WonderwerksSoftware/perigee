@@ -434,6 +434,13 @@ bool Session::setKeyboardCaptureEnabled(bool enabled)
                                     : QStringLiteral("keyboard:off"));
     return g_KeyboardCaptureEnabled;
 }
+bool Session::toggleKeyboardCaptureFromShortcut()
+{
+    QMutexLocker locker(&g_Mutex);
+    g_KeyboardCaptureEnabled = !g_KeyboardCaptureEnabled;
+    g_SessionActions.append(QStringLiteral("keyboard:shortcut-toggle"));
+    return g_KeyboardCaptureEnabled;
+}
 bool Session::setFullscreenEnabled(bool enabled)
 {
     QMutexLocker locker(&g_Mutex);
@@ -442,20 +449,30 @@ bool Session::setFullscreenEnabled(bool enabled)
                                     : QStringLiteral("fullscreen:off"));
     return g_FullscreenEnabled;
 }
-void Session::requestClientDisconnect()
+bool Session::requestClientDisconnect(ClientDisconnectPolicy policy)
 {
     {
         QMutexLocker locker(&g_Mutex);
-        g_SessionActions.append(QStringLiteral("disconnect"));
+        g_SessionActions.append(
+            policy == ClientDisconnectPolicy::KeepHostRunning
+                ? QStringLiteral("disconnect:keep-host")
+                : QStringLiteral("disconnect:honor-preference"));
     }
     SDL_Event event {};
     event.type = SDL_QUIT;
     event.quit.timestamp = SDL_GetTicks();
-    SDL_PushEvent(&event);
+    return SDL_PushEvent(&event) > 0;
 }
-void Session::requestPerigeeQuit()
+bool Session::requestPerigeeQuit()
 {
     QMutexLocker locker(&g_Mutex);
     g_SessionActions.append(QStringLiteral("quit"));
+    return true;
+}
+bool Session::requestQuitAndExit()
+{
+    QMutexLocker locker(&g_Mutex);
+    g_SessionActions.append(QStringLiteral("quit-and-exit"));
+    return true;
 }
 void Session::setShouldExit(bool) {}

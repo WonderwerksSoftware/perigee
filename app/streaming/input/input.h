@@ -174,6 +174,8 @@ public:
 
     bool setKeyboardCaptureEnabled(bool enabled);
 
+    bool toggleKeyboardCaptureFromShortcut();
+
     void setCaptureActive(bool active);
 
     bool isMouseInVideoRegion(int mouseX, int mouseY, int windowWidth = -1, int windowHeight = -1);

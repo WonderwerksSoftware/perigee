@@ -20,7 +20,8 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected quit key combo");
 
-        Session::get()->requestClientDisconnect();
+        Session::get()->requestClientDisconnect(
+            ClientDisconnectPolicy::HonorHostQuitPreference);
         break;
 
     case KeyComboUngrabInput:
@@ -139,16 +140,14 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected quitAndExit key combo");
 
-        Session::get()->requestClientDisconnect();
-        Session::get()->setShouldExit(true);
+        Session::get()->requestQuitAndExit();
         break;
 
     case KeyComboToggleKeyboardGrab:
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected keyboard grab toggle combo");
 
-        Session::get()->setKeyboardCaptureEnabled(
-            !Session::get()->keyboardCaptureEnabled());
+        Session::get()->toggleKeyboardCaptureFromShortcut();
         break;
 
     default:

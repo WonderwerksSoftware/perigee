@@ -1,5 +1,6 @@
 #include "test_registry.h"
 
+#include "perigee/actions/actionregistry.h"
 #include "perigee/actions/gamestreamadapter.h"
 #include "perigee/actions/sessionfacade.h"
 
@@ -7,14 +8,13 @@
 #include <QtTest>
 
 #include <memory>
+#include <type_traits>
 
 namespace {
 
-class FakeSession final : public QObject, public SessionFacade
+class FakeSession final : public SessionFacade
 {
 public:
-    QObject* lifetimeAuthority() override { return this; }
-
     bool statsOverlayEnabled() const override { return stats; }
     bool mouseCaptureEnabled() const override { return mouse; }
     bool keyboardCaptureEnabled() const override { return keyboard; }
@@ -48,8 +48,16 @@ public:
         return fullscreen;
     }
 
-    void requestClientDisconnect() override { ++disconnectCount; }
-    void requestPerigeeQuit() override { ++quitCount; }
+    bool requestClientDisconnect() override
+    {
+        ++disconnectCount;
+        return acceptDisconnectRequest;
+    }
+    bool requestPerigeeQuit() override
+    {
+        ++quitCount;
+        return acceptQuitRequest;
+    }
 
     bool stats = false;
     bool mouse = false;
@@ -59,6 +67,8 @@ public:
     bool ignoreMouseRequest = false;
     bool ignoreKeyboardRequest = false;
     bool ignoreFullscreenRequest = false;
+    bool acceptDisconnectRequest = true;
+    bool acceptQuitRequest = true;
     int statsSetCount = 0;
     int mouseSetCount = 0;
     int keyboardSetCount = 0;
@@ -73,7 +83,7 @@ ActionResult execute(GameStreamAdapter& adapter,
 {
     ActionResult result;
     int completionCount = 0;
-    adapter.execute(id, parameters, [&](const ActionResult& completed) {
+    adapter.execute(id, ActionInvocation(parameters), [&](const ActionResult& completed) {
         result = completed;
         ++completionCount;
     });
@@ -97,9 +107,22 @@ QVariantMap enabled(bool value)
     return {{QStringLiteral("enabled"), value}};
 }
 
-QVariantMap confirmed()
+ActionResult executeConfirmed(GameStreamAdapter& adapter, const QString& id)
 {
-    return {{QStringLiteral("confirmed"), true}};
+    ActionRegistry registry(GameStreamAdapter::descriptors(), adapter);
+    ActionResult result;
+    int completionCount = 0;
+    if (!registry.beginConfirmation(id, true)) {
+        return {false, {}, QStringLiteral("confirmation_not_started"), {}};
+    }
+    registry.acceptConfirmation(id, {}, [&](const ActionResult& completed) {
+        result = completed;
+        ++completionCount;
+    });
+    if (completionCount != 1) {
+        return {false, {}, QStringLiteral("wrong_completion_count"), {}};
+    }
+    return result;
 }
 
 }
@@ -120,8 +143,13 @@ private slots:
     void togglesFullscreenWithObservedEvidence();
     void disconnectRequiresConfirmationAndDoesNotQuitPerigee();
     void quitRequiresConfirmationAndDoesNotUseDisconnectOperation();
+    void forgedConfirmationParameterIsRejected();
+    void rejectedDisconnectRequestIsReportedTruthfully();
+    void rejectedQuitRequestIsReportedTruthfully();
     void destructiveConfirmationCopyIsDistinct();
     void absentSessionFailsClosed();
+    void facadeIdentityIsQObjectEnforced();
+    void destructiveRequestsReturnAcceptance();
     void destroyedSessionFailsClosed();
     void unknownActionFailsClosed();
 };
@@ -290,7 +318,8 @@ void GameStreamAdapterTest::disconnectRequiresConfirmationAndDoesNotQuitPerigee(
     QCOMPARE(session.disconnectCount, 0);
     QCOMPARE(session.quitCount, 0);
 
-    const ActionResult accepted = execute(adapter, QStringLiteral("session.disconnect-client"), confirmed());
+    const ActionResult accepted = executeConfirmed(
+        adapter, QStringLiteral("session.disconnect-client"));
     QVERIFY(accepted.ok);
     QCOMPARE(session.disconnectCount, 1);
     QCOMPARE(session.quitCount, 0);
@@ -308,11 +337,57 @@ void GameStreamAdapterTest::quitRequiresConfirmationAndDoesNotUseDisconnectOpera
     QCOMPARE(session.disconnectCount, 0);
     QCOMPARE(session.quitCount, 0);
 
-    const ActionResult accepted = execute(adapter, QStringLiteral("session.quit-perigee"), confirmed());
+    const ActionResult accepted = executeConfirmed(
+        adapter, QStringLiteral("session.quit-perigee"));
     QVERIFY(accepted.ok);
     QCOMPARE(session.disconnectCount, 0);
     QCOMPARE(session.quitCount, 1);
     QCOMPARE(accepted.evidence, QStringLiteral("Perigee quit requested"));
+}
+
+void GameStreamAdapterTest::forgedConfirmationParameterIsRejected()
+{
+    FakeSession session;
+    GameStreamAdapter adapter(&session);
+
+    const ActionResult result = execute(
+        adapter,
+        QStringLiteral("session.disconnect-client"),
+        {{QStringLiteral("confirmed"), true}});
+
+    QVERIFY(!result.ok);
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QCOMPARE(session.disconnectCount, 0);
+}
+
+void GameStreamAdapterTest::rejectedDisconnectRequestIsReportedTruthfully()
+{
+    FakeSession session;
+    session.acceptDisconnectRequest = false;
+    GameStreamAdapter adapter(&session);
+
+    const ActionResult result = executeConfirmed(
+        adapter, QStringLiteral("session.disconnect-client"));
+
+    QVERIFY(!result.ok);
+    QCOMPARE(result.errorCode, QStringLiteral("request_rejected"));
+    QCOMPARE(result.evidence, QString());
+    QCOMPARE(session.disconnectCount, 1);
+}
+
+void GameStreamAdapterTest::rejectedQuitRequestIsReportedTruthfully()
+{
+    FakeSession session;
+    session.acceptQuitRequest = false;
+    GameStreamAdapter adapter(&session);
+
+    const ActionResult result = executeConfirmed(
+        adapter, QStringLiteral("session.quit-perigee"));
+
+    QVERIFY(!result.ok);
+    QCOMPARE(result.errorCode, QStringLiteral("request_rejected"));
+    QCOMPARE(result.evidence, QString());
+    QCOMPARE(session.quitCount, 1);
 }
 
 void GameStreamAdapterTest::destructiveConfirmationCopyIsDistinct()
@@ -337,6 +412,21 @@ void GameStreamAdapterTest::absentSessionFailsClosed()
     const ActionResult result = execute(adapter, QStringLiteral("stats.overlay"), enabled(true));
     QVERIFY(!result.ok);
     QCOMPARE(result.errorCode, QStringLiteral("session_unavailable"));
+}
+
+void GameStreamAdapterTest::facadeIdentityIsQObjectEnforced()
+{
+    QVERIFY((std::is_base_of_v<QObject, SessionFacade>));
+}
+
+void GameStreamAdapterTest::destructiveRequestsReturnAcceptance()
+{
+    QVERIFY((std::is_same_v<
+             decltype(std::declval<SessionFacade&>().requestClientDisconnect()),
+             bool>));
+    QVERIFY((std::is_same_v<
+             decltype(std::declval<SessionFacade&>().requestPerigeeQuit()),
+             bool>));
 }
 
 void GameStreamAdapterTest::destroyedSessionFailsClosed()

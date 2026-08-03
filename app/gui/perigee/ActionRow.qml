@@ -33,6 +33,7 @@ Rectangle {
         radius: 2
         color: phase === "failed" ? "#ff7c8c"
              : phase === "working" ? "#ffd166"
+             : phase === "succeeded" ? "#65d98b"
              : actionFocused ? "#80d8ff" : "#52677e"
     }
 
@@ -55,11 +56,14 @@ Rectangle {
         elide: Text.ElideRight
         text: phase === "working" ? (message.length > 0 ? message : "Working…")
               : phase === "failed" ? message
+              : phase === "succeeded" && message.length > 0
+                    ? actionCategory + "  •  " + message
               : !actionEnabled ? disabledReason
               : requiresConfirmation ? actionCategory + "  •  confirmation required"
               : actionCategory
         color: phase === "failed" ? "#ff9eaa"
              : phase === "working" ? "#ffd166"
+             : phase === "succeeded" ? "#8de6a7"
              : !actionEnabled ? "#d2a7ad" : "#91a6ba"
         font.pixelSize: 12
     }

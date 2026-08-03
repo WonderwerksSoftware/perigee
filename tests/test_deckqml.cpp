@@ -12,6 +12,7 @@
 #include <QImage>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -35,7 +36,7 @@ public:
         return currentSnapshot;
     }
 
-    void execute(const QString& actionId, const QVariantMap&, Completion) override
+    void execute(const QString& actionId, const ActionInvocation&, Completion) override
     {
         executedActionIds.push_back(actionId);
     }
@@ -137,6 +138,7 @@ class DeckQmlTest : public QObject
 private slots:
     void initTestCase();
     void exposesOnlyTheApprovedActionRoles();
+    void actionRowRendersSucceededEvidence();
     void loadsShellAndReachesCategoriesAndActionsFromKeyboard();
     void disabledRowCannotActivatePreviouslyFocusedAction();
     void realKeysKeepControllerAndQmlFocusInSync();
@@ -187,6 +189,35 @@ void DeckQmlTest::exposesOnlyTheApprovedActionRoles()
     QVERIFY(controller.actionModel()->data(
         controller.actionModel()->index(0, 0),
         ActionListModel::RequiresConfirmationRole).toBool());
+}
+
+void DeckQmlTest::actionRowRendersSucceededEvidence()
+{
+    QQmlEngine engine;
+    QQmlComponent component(
+        &engine, QUrl(QStringLiteral("qrc:/gui/perigee/ActionRow.qml")));
+    std::unique_ptr<QObject> object(component.createWithInitialProperties({
+        {QStringLiteral("actionId"), QStringLiteral("display.select")},
+        {QStringLiteral("actionLabel"), QStringLiteral("Choose display")},
+        {QStringLiteral("actionCategory"), QStringLiteral("Display")},
+        {QStringLiteral("valueText"), QStringLiteral("Desk monitor")},
+        {QStringLiteral("actionEnabled"), true},
+        {QStringLiteral("disabledReason"), QString()},
+        {QStringLiteral("phase"), QStringLiteral("succeeded")},
+        {QStringLiteral("message"), QStringLiteral("Display confirmed")},
+        {QStringLiteral("actionFocused"), false},
+        {QStringLiteral("requiresConfirmation"), false},
+    }));
+    QVERIFY2(object != nullptr, qPrintable(component.errorString()));
+    auto* root = qobject_cast<QQuickItem*>(object.get());
+    QVERIFY(root != nullptr);
+
+    QQuickItem* evidence = findVisualItemWithProperty(
+        root, "text", QStringLiteral("Display  •  Display confirmed"));
+
+    QVERIFY(evidence != nullptr);
+    QCOMPARE(evidence->property("color").value<QColor>(),
+             QColor(QStringLiteral("#8de6a7")));
 }
 
 void DeckQmlTest::loadsShellAndReachesCategoriesAndActionsFromKeyboard()

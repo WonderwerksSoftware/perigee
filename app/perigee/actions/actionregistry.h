@@ -20,12 +20,21 @@ public:
     QVector<ActionDescriptor> search(const QString& query) const;
     ActionState state(const QString& actionId);
     bool requiresConfirmation(const QString& actionId, bool disruptive) const;
+    bool beginConfirmation(const QString& actionId, bool disruptive);
+    void cancelConfirmation();
+    void acceptConfirmation(const QString& actionId,
+                            const QVariantMap& parameters,
+                            HostAdapter::Completion completion);
     void execute(const QString& actionId,
                  const QVariantMap& parameters,
                  HostAdapter::Completion completion);
 
 private:
     struct RuntimeState;
+
+    void executeInvocation(const QString& actionId,
+                           ActionInvocation invocation,
+                           HostAdapter::Completion completion);
 
     QVector<ActionDescriptor> m_Descriptors;
     HostAdapter& m_Adapter;

@@ -10,7 +10,10 @@ class SessionExitIntentTest : public QObject
 
 private slots:
     void disconnectKeepsPerigeeAndHostRunning();
+    void legacyDisconnectStillHonorsHostPreference();
     void quitPerigeeKeepsHostRunning();
+    void rejectedDisconnectDoesNotLeaveStaleKeepHostIntent();
+    void rejectedQuitDoesNotLeaveStaleExitIntent();
     void legacyQuitHostAndExitOverridesDisconnectIntent();
     void ordinaryPerigeeExitStillHonorsHostPreference();
     void unexpectedTerminationNeverQuitsHost();
@@ -20,20 +23,62 @@ void SessionExitIntentTest::disconnectKeepsPerigeeAndHostRunning()
 {
     SessionExitIntent intent;
 
-    intent.requestClientDisconnect();
+    QVERIFY(SessionRequest::disconnectClient(
+        intent,
+        ClientDisconnectPolicy::KeepHostRunning,
+        [] { return 1; }));
 
     QVERIFY(!intent.shouldExitPerigee());
     QVERIFY(!intent.shouldQuitHost(false, true));
+}
+
+void SessionExitIntentTest::legacyDisconnectStillHonorsHostPreference()
+{
+    SessionExitIntent intent;
+
+    QVERIFY(SessionRequest::disconnectClient(
+        intent,
+        ClientDisconnectPolicy::HonorHostQuitPreference,
+        [] { return 1; }));
+
+    QVERIFY(!intent.shouldExitPerigee());
+    QVERIFY(intent.shouldQuitHost(false, true));
+    QVERIFY(!intent.shouldQuitHost(false, false));
 }
 
 void SessionExitIntentTest::quitPerigeeKeepsHostRunning()
 {
     SessionExitIntent intent;
 
-    intent.requestPerigeeQuit();
+    QVERIFY(SessionRequest::quitPerigee(intent, [] { return 1; }));
 
     QVERIFY(intent.shouldExitPerigee());
     QVERIFY(!intent.shouldQuitHost(false, true));
+}
+
+void SessionExitIntentTest::rejectedDisconnectDoesNotLeaveStaleKeepHostIntent()
+{
+    SessionExitIntent intent;
+
+    QVERIFY(!SessionRequest::disconnectClient(
+        intent,
+        ClientDisconnectPolicy::KeepHostRunning,
+        [] { return -1; }));
+    intent.requestPerigeeExit(false);
+
+    QVERIFY(intent.shouldExitPerigee());
+    QVERIFY(intent.shouldQuitHost(false, true));
+}
+
+void SessionExitIntentTest::rejectedQuitDoesNotLeaveStaleExitIntent()
+{
+    SessionExitIntent intent;
+
+    QVERIFY(!SessionRequest::quitPerigee(intent, [] { return 0; }));
+    QVERIFY(!intent.shouldExitPerigee());
+    intent.requestPerigeeExit(false);
+
+    QVERIFY(intent.shouldQuitHost(false, true));
 }
 
 void SessionExitIntentTest::legacyQuitHostAndExitOverridesDisconnectIntent()
@@ -66,6 +111,7 @@ void SessionExitIntentTest::unexpectedTerminationNeverQuitsHost()
     intent.requestPerigeeExit(true);
 
     QVERIFY(!intent.shouldQuitHost(true, true));
+    QVERIFY(!intent.shouldQuitHost(true, false));
 }
 
 REGISTER_PERIGEE_TEST(SessionExitIntentTest);

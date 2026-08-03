@@ -81,7 +81,7 @@ private:
     static ActionCategory categoryForIndex(int categoryIndex);
     void setFocusRegion(FocusRegion region);
     void clearConfirmation();
-    void executeAction(const QString& actionId, bool confirmed = false);
+    void executeAction(const QString& actionId);
 
     ActionRegistry* m_Registry;
     ActionListModel m_ActionModel;

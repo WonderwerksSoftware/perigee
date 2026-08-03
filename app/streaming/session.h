@@ -148,9 +148,11 @@ public:
     bool setStatsOverlayEnabled(bool enabled);
     bool setMouseCaptureEnabled(bool enabled);
     bool setKeyboardCaptureEnabled(bool enabled);
+    bool toggleKeyboardCaptureFromShortcut();
     bool setFullscreenEnabled(bool enabled);
-    void requestClientDisconnect();
-    void requestPerigeeQuit();
+    bool requestClientDisconnect(ClientDisconnectPolicy policy);
+    bool requestPerigeeQuit();
+    bool requestQuitAndExit();
 
 signals:
     void stageStarting(QString stage);

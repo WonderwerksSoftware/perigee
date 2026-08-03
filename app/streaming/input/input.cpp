@@ -755,6 +755,11 @@ bool SdlInputHandler::setKeyboardCaptureEnabled(bool enabled)
     return keyboardCaptureEnabled();
 }
 
+bool SdlInputHandler::toggleKeyboardCaptureFromShortcut()
+{
+    return setKeyboardCaptureEnabled(!isSystemKeyCaptureActive());
+}
+
 void SdlInputHandler::setCaptureActive(bool active)
 {
     if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {

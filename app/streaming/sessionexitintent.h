@@ -1,5 +1,10 @@
 #pragma once
 
+enum class ClientDisconnectPolicy {
+    HonorHostQuitPreference,
+    KeepHostRunning,
+};
+
 class SessionExitIntent
 {
 public:
@@ -40,4 +45,33 @@ private:
     bool m_ShouldExitPerigee = false;
     bool m_KeepHostSessionRunning = false;
     bool m_ForceQuitHost = false;
+};
+
+class SessionRequest
+{
+public:
+    template<typename EnqueueQuit>
+    static bool disconnectClient(SessionExitIntent& intent,
+                                 ClientDisconnectPolicy policy,
+                                 EnqueueQuit enqueueQuit)
+    {
+        if (enqueueQuit() <= 0) {
+            return false;
+        }
+        if (policy == ClientDisconnectPolicy::KeepHostRunning) {
+            intent.requestClientDisconnect();
+        }
+        return true;
+    }
+
+    template<typename EnqueueQuit>
+    static bool quitPerigee(SessionExitIntent& intent,
+                            EnqueueQuit enqueueQuit)
+    {
+        if (enqueueQuit() <= 0) {
+            return false;
+        }
+        intent.requestPerigeeQuit();
+        return true;
+    }
 };

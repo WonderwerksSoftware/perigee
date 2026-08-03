@@ -64,12 +64,12 @@ public:
     }
 
     void execute(const QString& actionId,
-                 const QVariantMap& parameters,
+                 const ActionInvocation& invocation,
                  Completion completion) override
     {
         ++executeCallCount;
         executedActionIds.push_back(actionId);
-        executedParameters.push_back(parameters);
+        executedParameters.push_back(invocation.parameters());
         if (synchronousResult.has_value()) {
             completion(*synchronousResult);
             return;
@@ -103,6 +103,9 @@ private slots:
     void enablesActionWhenAllRequiredPermissionsAreGranted();
     void preservesAdapterDisabledReason();
     void resolvesConfirmationPolicyForInvocationRisk();
+    void directCallerCannotForgeConfirmationWithParameters();
+    void confirmationGrantIsActionBoundOneUseAndStateChecked();
+    void executingAnotherActionInvalidatesPendingConfirmation();
     void rechecksPreconditionsAtExecutionTime();
     void limitsInFlightActionsPerResourceAndTracksCompletion();
     void allowsConcurrentActionsWithoutAResourceKey();
@@ -272,6 +275,137 @@ void ActionRegistryTest::resolvesConfirmationPolicyForInvocationRisk()
     QVERIFY(registry.requiresConfirmation(QStringLiteral("session.end"), false));
     QVERIFY(!registry.requiresConfirmation(QStringLiteral("command.run"), false));
     QVERIFY(registry.requiresConfirmation(QStringLiteral("command.run"), true));
+}
+
+void ActionRegistryTest::directCallerCannotForgeConfirmationWithParameters()
+{
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("session.disconnect"), availableState());
+    ActionRegistry registry({
+        descriptor(QStringLiteral("session.disconnect"),
+                   QStringLiteral("Disconnect"),
+                   ActionCategory::Session,
+                   {}, {}, {}, 0, ConfirmationPolicy::Always),
+    }, adapter);
+    ActionResult result;
+
+    registry.execute(
+        QStringLiteral("session.disconnect"),
+        {{QStringLiteral("confirmed"), true}},
+        [&result](const ActionResult& completed) { result = completed; });
+
+    QVERIFY(!result.ok);
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QVERIFY(adapter.executedActionIds.isEmpty());
+}
+
+void ActionRegistryTest::confirmationGrantIsActionBoundOneUseAndStateChecked()
+{
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("session.disconnect"), availableState());
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("session.quit"), availableState());
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.change"), availableState());
+    adapter.synchronousResult = ActionResult {
+        true, QStringLiteral("accepted"), {}, {}
+    };
+    ActionRegistry registry({
+        descriptor(QStringLiteral("session.disconnect"),
+                   QStringLiteral("Disconnect"), ActionCategory::Session,
+                   {}, {}, {}, 0, ConfirmationPolicy::Always),
+        descriptor(QStringLiteral("session.quit"),
+                   QStringLiteral("Quit"), ActionCategory::Session,
+                   {}, {}, {}, 0, ConfirmationPolicy::Always),
+        descriptor(QStringLiteral("display.change"),
+                   QStringLiteral("Change display"), ActionCategory::Display,
+                   {}, {}, {}, 0, ConfirmationPolicy::WhenDisruptive),
+    }, adapter);
+    ActionResult result;
+
+    QVERIFY(registry.beginConfirmation(QStringLiteral("session.disconnect"), true));
+    registry.acceptConfirmation(
+        QStringLiteral("session.quit"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QVERIFY(adapter.executedActionIds.isEmpty());
+
+    registry.acceptConfirmation(
+        QStringLiteral("session.disconnect"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QVERIFY(adapter.executedActionIds.isEmpty());
+
+    QVERIFY(registry.beginConfirmation(QStringLiteral("session.disconnect"), true));
+    registry.acceptConfirmation(
+        QStringLiteral("session.disconnect"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+    QVERIFY(result.ok);
+    QCOMPARE(adapter.executedActionIds,
+             QStringList({QStringLiteral("session.disconnect")}));
+
+    registry.acceptConfirmation(
+        QStringLiteral("session.disconnect"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QCOMPARE(adapter.executedActionIds.size(), 1);
+
+    QVERIFY(registry.beginConfirmation(QStringLiteral("session.quit"), true));
+    ActionState disabled;
+    disabled.disabledReason = QStringLiteral("Session is no longer available.");
+    adapter.currentSnapshot.actionStates[QStringLiteral("session.quit")] = disabled;
+    registry.acceptConfirmation(
+        QStringLiteral("session.quit"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+    QCOMPARE(result.errorCode, QStringLiteral("state_changed"));
+    QCOMPARE(adapter.executedActionIds.size(), 1);
+    registry.acceptConfirmation(
+        QStringLiteral("session.quit"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+
+    QVERIFY(!registry.beginConfirmation(QStringLiteral("display.change"), false));
+    QVERIFY(registry.beginConfirmation(QStringLiteral("display.change"), true));
+    registry.acceptConfirmation(
+        QStringLiteral("display.change"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+    QVERIFY(result.ok);
+    QCOMPARE(adapter.executedActionIds.last(), QStringLiteral("display.change"));
+}
+
+void ActionRegistryTest::executingAnotherActionInvalidatesPendingConfirmation()
+{
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("session.disconnect"), availableState());
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("stats.toggle"), availableState());
+    adapter.synchronousResult = ActionResult {
+        true, QStringLiteral("accepted"), {}, {}
+    };
+    ActionRegistry registry({
+        descriptor(QStringLiteral("session.disconnect"),
+                   QStringLiteral("Disconnect"), ActionCategory::Session,
+                   {}, {}, {}, 0, ConfirmationPolicy::Always),
+        descriptor(QStringLiteral("stats.toggle"),
+                   QStringLiteral("Statistics"), ActionCategory::Stats),
+    }, adapter);
+    ActionResult result;
+
+    QVERIFY(registry.beginConfirmation(QStringLiteral("session.disconnect"), true));
+    registry.execute(
+        QStringLiteral("stats.toggle"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+    QVERIFY(result.ok);
+    registry.acceptConfirmation(
+        QStringLiteral("session.disconnect"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QCOMPARE(adapter.executedActionIds,
+             QStringList({QStringLiteral("stats.toggle")}));
 }
 
 void ActionRegistryTest::rechecksPreconditionsAtExecutionTime()

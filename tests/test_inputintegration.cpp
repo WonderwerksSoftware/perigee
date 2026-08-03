@@ -157,7 +157,10 @@ private slots:
     void neutralRemoteInputPrecedesPhysicalCaptureRelease();
     void startupCaptureRequestsAreDeferredWhileDeckIsOpen();
     void keyboardCaptureIntentChangesWithoutGrabbingBehindDeck();
+    void fullscreenOnlyWindowedShortcutEnablesAlwaysCapture();
+    void activeKeyboardGrabShortcutDisablesCapture();
     void keyboardShortcutsUseSharedSessionActions();
+    void forcedQuitShortcutUsesSharedForcedOperation();
     void statsChordNeutralizesOnlyItsController();
     void statsChordPreservesOtherPhysicalControllerInMergedMode();
     void closedStatsChordUsesRemoteHandlerAndReleasesGamepadMouseButtons();
@@ -610,6 +613,49 @@ void InputIntegrationTest::keyboardCaptureIntentChangesWithoutGrabbingBehindDeck
     SDL_DestroyWindow(window);
 }
 
+void InputIntegrationTest::fullscreenOnlyWindowedShortcutEnablesAlwaysCapture()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    preferences.captureSysKeysMode = StreamingPreferences::CSK_FULLSCREEN;
+    SdlInputHandler handler(preferences, 1920, 1080);
+    SDL_Window* window = SDL_CreateWindow(
+        "keyboard-shortcut", 0, 0, 640, 360, SDL_WINDOW_HIDDEN);
+    QVERIFY(window != nullptr);
+    handler.setWindow(window);
+    handler.m_KeyboardCaptureActive = true;
+
+    QVERIFY(handler.keyboardCaptureEnabled());
+    QVERIFY(!handler.isSystemKeyCaptureActive());
+    QVERIFY(handler.toggleKeyboardCaptureFromShortcut());
+
+    QCOMPARE(handler.m_CaptureSystemKeysMode, StreamingPreferences::CSK_ALWAYS);
+    handler.setWindow(nullptr);
+    SDL_DestroyWindow(window);
+}
+
+void InputIntegrationTest::activeKeyboardGrabShortcutDisablesCapture()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    preferences.captureSysKeysMode = StreamingPreferences::CSK_ALWAYS;
+    SdlInputHandler handler(preferences, 1920, 1080);
+    SDL_Window* window = SDL_CreateWindow(
+        "active-keyboard-shortcut", 0, 0, 640, 360, SDL_WINDOW_SHOWN);
+    QVERIFY(window != nullptr);
+    handler.setWindow(window);
+    handler.setCaptureActive(true);
+    handler.updateKeyboardGrabState();
+
+    QTRY_VERIFY(handler.isSystemKeyCaptureActive());
+    QVERIFY(!handler.toggleKeyboardCaptureFromShortcut());
+
+    QCOMPARE(handler.m_CaptureSystemKeysMode, StreamingPreferences::CSK_OFF);
+    handler.setCaptureActive(false);
+    handler.setWindow(nullptr);
+    SDL_DestroyWindow(window);
+}
+
 void InputIntegrationTest::keyboardShortcutsUseSharedSessionActions()
 {
     StreamingPreferences preferences(nullptr);
@@ -626,9 +672,21 @@ void InputIntegrationTest::keyboardShortcutsUseSharedSessionActions()
         QStringLiteral("mouse:on"),
         QStringLiteral("fullscreen:on"),
         QStringLiteral("stats:on"),
-        QStringLiteral("keyboard:on"),
-        QStringLiteral("disconnect"),
+        QStringLiteral("keyboard:shortcut-toggle"),
+        QStringLiteral("disconnect:honor-preference"),
     }));
+}
+
+void InputIntegrationTest::forcedQuitShortcutUsesSharedForcedOperation()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    SdlInputHandler handler(preferences, 1920, 1080);
+
+    handler.performSpecialKeyCombo(SdlInputHandler::KeyComboQuitAndExit);
+
+    QCOMPARE(InputIntegrationStubs::sessionActions(),
+             QStringList({QStringLiteral("quit-and-exit")}));
 }
 
 void InputIntegrationTest::statsChordNeutralizesOnlyItsController()
@@ -1305,6 +1363,8 @@ void InputIntegrationTest::legacyDisconnectHelperBypassesOverlayGate()
         sawQuit |= queued.type == SDL_QUIT;
     }
     QVERIFY(sawQuit);
+    QCOMPARE(InputIntegrationStubs::sessionActions(),
+             QStringList({QStringLiteral("disconnect:honor-preference")}));
     QCOMPARE(state.buttons, 0);
     state.controller = nullptr;
 }

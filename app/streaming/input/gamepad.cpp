@@ -232,7 +232,8 @@ bool SdlInputHandler::handleLegacyGamepadDisconnect(SDL_JoystickID id)
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "Detected quit gamepad button combo");
-    Session::get()->requestClientDisconnect();
+    Session::get()->requestClientDisconnect(
+        ClientDisconnectPolicy::HonorHostQuitPreference);
 
     // This helper is also called while Deck owns ordinary input, so it must
     // bypass the overlay gate and neutralize only the triggering controller.

@@ -229,6 +229,12 @@ void DeckController::activateFocusedAction()
         return;
     }
     if (m_ActionModel.focusedActionRequiresConfirmation()) {
+        if (m_Registry == nullptr ||
+                !m_Registry->beginConfirmation(
+                    m_ActionModel.focusedActionId(), true)) {
+            refresh();
+            return;
+        }
         m_ConfirmationActionId = m_ActionModel.focusedActionId();
         m_ConfirmationActionLabel = m_ActionModel.focusedActionLabel();
         m_ConfirmationMessage =
@@ -248,11 +254,23 @@ void DeckController::cancelConfirmation()
 void DeckController::acceptConfirmation()
 {
     const QString actionId = m_ConfirmationActionId;
-    if (actionId.isEmpty()) {
+    if (actionId.isEmpty() || m_Registry == nullptr) {
         return;
     }
-    clearConfirmation();
-    executeAction(actionId, true);
+    m_ConfirmationActionId.clear();
+    m_ConfirmationActionLabel.clear();
+    m_ConfirmationMessage.clear();
+    m_ActionModel.setAwaitingConfirmation({});
+    emit confirmationChanged();
+
+    std::weak_ptr<std::atomic_bool> pendingRefresh = m_PendingRefresh;
+    m_Registry->acceptConfirmation(
+        actionId, {}, [pendingRefresh](const ActionResult&) {
+            if (const auto pending = pendingRefresh.lock()) {
+                pending->store(true, std::memory_order_release);
+            }
+        });
+    refresh();
 }
 
 void DeckController::back()
@@ -278,14 +296,13 @@ void DeckController::back()
 
 void DeckController::refresh()
 {
+    if (confirmationVisible()) {
+        clearConfirmation();
+    }
     m_ActionModel.refresh();
     if (m_FocusRegion == ActionsRegion &&
             m_ActionModel.focusedActionId().isEmpty()) {
         m_ActionModel.focusFirstEnabled();
-    }
-    if (confirmationVisible() &&
-            m_ActionModel.focusedActionId() != m_ConfirmationActionId) {
-        clearConfirmation();
     }
 }
 
@@ -333,6 +350,9 @@ void DeckController::setFocusRegion(FocusRegion region)
 
 void DeckController::clearConfirmation()
 {
+    if (m_Registry != nullptr) {
+        m_Registry->cancelConfirmation();
+    }
     if (m_ConfirmationActionId.isEmpty()) {
         return;
     }
@@ -343,18 +363,14 @@ void DeckController::clearConfirmation()
     emit confirmationChanged();
 }
 
-void DeckController::executeAction(const QString& actionId, bool confirmed)
+void DeckController::executeAction(const QString& actionId)
 {
     if (m_Registry == nullptr || actionId.isEmpty()) {
         return;
     }
 
     std::weak_ptr<std::atomic_bool> pendingRefresh = m_PendingRefresh;
-    QVariantMap parameters;
-    if (confirmed) {
-        parameters.insert(QStringLiteral("confirmed"), true);
-    }
-    m_Registry->execute(actionId, parameters,
+    m_Registry->execute(actionId, {},
                         [pendingRefresh](const ActionResult&) {
         if (const auto pending = pendingRefresh.lock()) {
             pending->store(true, std::memory_order_release);

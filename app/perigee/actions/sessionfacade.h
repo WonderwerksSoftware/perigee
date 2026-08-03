@@ -1,15 +1,15 @@
 #pragma once
 
-class QObject;
+#include <QObject>
 
-class SessionFacade
+class SessionFacade : public QObject
 {
 public:
+    explicit SessionFacade(QObject* parent = nullptr)
+        : QObject(parent)
+    {
+    }
     virtual ~SessionFacade() = default;
-
-    // This object must share the facade lifetime. GameStreamAdapter observes it
-    // without extending the streaming session's authority.
-    virtual QObject* lifetimeAuthority() = 0;
 
     virtual bool statsOverlayEnabled() const = 0;
     virtual bool mouseCaptureEnabled() const = 0;
@@ -21,6 +21,6 @@ public:
     virtual bool setKeyboardCaptureEnabled(bool enabled) = 0;
     virtual bool setFullscreenEnabled(bool enabled) = 0;
 
-    virtual void requestClientDisconnect() = 0;
-    virtual void requestPerigeeQuit() = 0;
+    virtual bool requestClientDisconnect() = 0;
+    virtual bool requestPerigeeQuit() = 0;
 };

@@ -48,7 +48,19 @@
 
 #define CONN_TEST_SERVER "qt.conntest.moonlight-stream.org"
 
-class GameStreamSessionFacade final : public QObject, public SessionFacade
+namespace {
+
+int enqueueSessionQuitEvent()
+{
+    SDL_Event event {};
+    event.type = SDL_QUIT;
+    event.quit.timestamp = SDL_GetTicks();
+    return SDL_PushEvent(&event);
+}
+
+}
+
+class GameStreamSessionFacade final : public SessionFacade
 {
 public:
     explicit GameStreamSessionFacade(Session* session)
@@ -56,7 +68,6 @@ public:
     {
     }
 
-    QObject* lifetimeAuthority() override { return this; }
     bool statsOverlayEnabled() const override
     {
         return m_Session && m_Session->statsOverlayEnabled();
@@ -89,17 +100,14 @@ public:
     {
         return m_Session && m_Session->setFullscreenEnabled(enabled);
     }
-    void requestClientDisconnect() override
+    bool requestClientDisconnect() override
     {
-        if (m_Session) {
-            m_Session->requestClientDisconnect();
-        }
+        return m_Session && m_Session->requestClientDisconnect(
+            ClientDisconnectPolicy::KeepHostRunning);
     }
-    void requestPerigeeQuit() override
+    bool requestPerigeeQuit() override
     {
-        if (m_Session) {
-            m_Session->requestPerigeeQuit();
-        }
+        return m_Session && m_Session->requestPerigeeQuit();
     }
 
 private:
@@ -1951,22 +1959,33 @@ bool Session::setKeyboardCaptureEnabled(bool enabled)
     return keyboardCaptureEnabled();
 }
 
-void Session::requestClientDisconnect()
+bool Session::toggleKeyboardCaptureFromShortcut()
 {
-    m_ExitIntent.requestClientDisconnect();
-    SDL_Event event {};
-    event.type = SDL_QUIT;
-    event.quit.timestamp = SDL_GetTicks();
-    SDL_PushEvent(&event);
+    return m_InputHandler != nullptr &&
+        m_InputHandler->toggleKeyboardCaptureFromShortcut();
 }
 
-void Session::requestPerigeeQuit()
+bool Session::requestClientDisconnect(ClientDisconnectPolicy policy)
 {
-    m_ExitIntent.requestPerigeeQuit();
-    SDL_Event event {};
-    event.type = SDL_QUIT;
-    event.quit.timestamp = SDL_GetTicks();
-    SDL_PushEvent(&event);
+    return SessionRequest::disconnectClient(
+        m_ExitIntent, policy, enqueueSessionQuitEvent);
+}
+
+bool Session::requestPerigeeQuit()
+{
+    return SessionRequest::quitPerigee(m_ExitIntent, enqueueSessionQuitEvent);
+}
+
+bool Session::requestQuitAndExit()
+{
+    if (!SessionRequest::disconnectClient(
+            m_ExitIntent,
+            ClientDisconnectPolicy::HonorHostQuitPreference,
+            enqueueSessionQuitEvent)) {
+        return false;
+    }
+    setShouldExit(true);
+    return true;
 }
 
 class AsyncConnectionStartThread : public QThread

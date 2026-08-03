@@ -60,6 +60,16 @@ ActionResult unavailableResult()
     };
 }
 
+ActionResult requestRejectedResult(const QString& operation)
+{
+    return {
+        false,
+        {},
+        QStringLiteral("request_rejected"),
+        QStringLiteral("%1 could not be queued.").arg(operation),
+    };
+}
+
 ActionResult mismatchResult(const QString& setting)
 {
     return {
@@ -89,11 +99,6 @@ bool requestedState(const QVariantMap& parameters, bool current)
         : !current;
 }
 
-bool isConfirmed(const QVariantMap& parameters)
-{
-    return parameters.value(QStringLiteral("confirmed"), false).toBool();
-}
-
 void complete(const HostAdapter::Completion& completion,
               const ActionResult& result)
 {
@@ -106,7 +111,6 @@ void complete(const HostAdapter::Completion& completion,
 
 GameStreamAdapter::GameStreamAdapter(SessionFacade* session)
     : m_Session(session)
-    , m_LifetimeAuthority(session != nullptr ? session->lifetimeAuthority() : nullptr)
 {
 }
 
@@ -173,7 +177,7 @@ HostSnapshot GameStreamAdapter::snapshot()
 }
 
 void GameStreamAdapter::execute(const QString& actionId,
-                                const QVariantMap& parameters,
+                                const ActionInvocation& invocation,
                                 Completion completion)
 {
     SessionFacade* authority = session();
@@ -181,6 +185,8 @@ void GameStreamAdapter::execute(const QString& actionId,
         complete(completion, unavailableResult());
         return;
     }
+
+    const QVariantMap& parameters = invocation.parameters();
 
     if (actionId == QString::fromLatin1(StatsOverlayId)) {
         const bool requested = requestedState(parameters,
@@ -241,27 +247,37 @@ void GameStreamAdapter::execute(const QString& actionId,
         return;
     }
     if (actionId == QString::fromLatin1(DisconnectClientId)) {
-        if (!isConfirmed(parameters)) {
+        if (!invocation.confirmationGrantedFor(actionId)) {
             complete(completion,
                      {false, {}, QStringLiteral("confirmation_required"),
                       QStringLiteral("Confirm the client disconnect before continuing.")});
             return;
         }
-        authority->requestClientDisconnect();
-        complete(completion,
-                 {true, QStringLiteral("Client disconnect requested"), {}, {}});
+        if (authority->requestClientDisconnect()) {
+            complete(completion,
+                     {true, QStringLiteral("Client disconnect requested"), {}, {}});
+        }
+        else {
+            complete(completion,
+                     requestRejectedResult(QStringLiteral("Client disconnect")));
+        }
         return;
     }
     if (actionId == QString::fromLatin1(QuitPerigeeId)) {
-        if (!isConfirmed(parameters)) {
+        if (!invocation.confirmationGrantedFor(actionId)) {
             complete(completion,
                      {false, {}, QStringLiteral("confirmation_required"),
                       QStringLiteral("Confirm quitting Perigee before continuing.")});
             return;
         }
-        authority->requestPerigeeQuit();
-        complete(completion,
-                 {true, QStringLiteral("Perigee quit requested"), {}, {}});
+        if (authority->requestPerigeeQuit()) {
+            complete(completion,
+                     {true, QStringLiteral("Perigee quit requested"), {}, {}});
+        }
+        else {
+            complete(completion,
+                     requestRejectedResult(QStringLiteral("Perigee quit")));
+        }
         return;
     }
 
@@ -277,5 +293,5 @@ void GameStreamAdapter::cancel(const QString&)
 
 SessionFacade* GameStreamAdapter::session() const
 {
-    return m_LifetimeAuthority.isNull() ? nullptr : m_Session;
+    return m_Session.data();
 }
