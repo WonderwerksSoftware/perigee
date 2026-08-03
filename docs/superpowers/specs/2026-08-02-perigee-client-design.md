@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-02
 
-**Status:** Design approved; written specification awaiting user review
+**Status:** Approved
 
 **Working tagline:** Moonlight, brought closer.
 
@@ -80,7 +80,9 @@ The current Moonlight Qt streaming engine remains the authority for video, audio
 
 ### 5.2 Perigee Deck
 
-Deck is an in-stream QML overlay owned by the streaming window. Keeping it in the same process and window allows it to remain above accelerated video under KDE Wayland and fullscreen modes without relying on a separate always-on-top window.
+Deck is an in-stream QML overlay owned by the streaming window. Perigee renders the QML scene offscreen with Qt Quick Render Control, converts the result to an ARGB overlay surface, and submits that surface through Moonlight's existing renderer overlay path. Keeping it in the same process and compositor allows it to remain above accelerated video under KDE Wayland and fullscreen modes without relying on a separate always-on-top window.
+
+Perigee v0.1 requires Qt 6.7 or newer. The launcher UI and offscreen Deck use Qt Quick's OpenGL rendering path on Linux; this does not replace or constrain Moonlight's SDL video decoder and renderer selection.
 
 Its default presentation is the approved **Search Rail**:
 
@@ -115,9 +117,11 @@ This boundary allows QML to remain presentation-focused and lets local, standard
 
 Polaris data is authoritative for Polaris-specific state. The adapter consumes advertised endpoints, such as a server-provided stop endpoint, instead of assuming fixed routes when the capability response provides the route.
 
-### 5.5 Optional Perigee Bridge
+### 5.5 Polaris client-control extension and optional Bridge
 
-Bridge is not part of the initial implementation. It may be introduced only when a required v0.1 capability cannot be expressed through upstream Polaris.
+Source inspection demonstrated two concrete gaps in the current Polaris paired-client API: named server commands have no structured request acknowledgement, and physical display targets have no paired-client enumeration or selection operation. v0.1 therefore includes the smallest Polaris patch that exposes those existing server capabilities through authenticated, permission-checked `/polaris/v1` JSON operations. The patch reuses Polaris's current command configuration, display registry, session ownership checks, and config persistence rather than adding another execution or display-management system.
+
+Bridge is not part of the initial implementation. It may be introduced only if the narrow Polaris patch cannot be deployed or upstreamed and a required v0.1 capability remains unavailable.
 
 If required, Bridge must:
 
