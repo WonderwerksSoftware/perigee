@@ -11,6 +11,7 @@
 #include <QDir>
 #include <QImage>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -142,6 +143,8 @@ private slots:
     void keyboardFocusKeepsFifthActionVisible();
     void controllerOpenRevealsInitiallyOffscreenFirstEnabledAction();
     void rendersAndPublishesOwnedArgbSurface();
+    void realPointerEventSelectsCategoryThroughRenderer();
+    void realTextInputCommitsThroughRenderer();
 };
 
 void DeckQmlTest::initTestCase()
@@ -533,6 +536,71 @@ void DeckQmlTest::rendersAndPublishesOwnedArgbSurface()
         QStringLiteral("perigee-search-rail.png"));
     QVERIFY2(ownedImage.save(artifactPath), qPrintable(artifactPath));
     qInfo().noquote() << "Deck visual artifact:" << artifactPath;
+}
+
+void DeckQmlTest::realPointerEventSelectsCategoryThroughRenderer()
+{
+    DeckQmlHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.select"), state(true));
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("input.capture"), state(true));
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.select"), QStringLiteral("Display"),
+                   ActionCategory::Display),
+        descriptor(QStringLiteral("input.capture"), QStringLiteral("Input"),
+                   ActionCategory::Input),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromKeyboard();
+    QQmlEngine engine;
+    DeckSurfaceRenderer renderer;
+    QString error;
+    QImage image;
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    renderer.resize(QSize(960, 540), 1.0);
+    QVERIFY2(renderer.render(&image, &error), qPrintable(error));
+
+    // The Input category is the second 120px item in the centered 745px row.
+    const QPointF inputCategoryCenter(300.0, 105.0);
+    QMouseEvent press(QEvent::MouseButtonPress, inputCategoryCenter,
+                      inputCategoryCenter, inputCategoryCenter,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QVERIFY(renderer.sendPointerEvent(&press));
+    QMouseEvent release(QEvent::MouseButtonRelease, inputCategoryCenter,
+                        inputCategoryCenter, inputCategoryCenter,
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QVERIFY(renderer.sendPointerEvent(&release));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+
+    QTRY_COMPARE(controller.activeCategory(), 1);
+    QCOMPARE(controller.focusRegion(), DeckController::CategoriesRegion);
+}
+
+void DeckQmlTest::realTextInputCommitsThroughRenderer()
+{
+    DeckController controller;
+    controller.openFromKeyboard();
+    QQmlEngine engine;
+    DeckSurfaceRenderer renderer;
+    QString error;
+    QImage image;
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    renderer.resize(QSize(960, 540), 1.0);
+    QVERIFY2(renderer.render(&image, &error), qPrintable(error));
+
+    QVERIFY(renderer.sendTextInput(QString::fromUtf8("hé")));
+    QTRY_COMPARE(controller.searchText(), QString::fromUtf8("hé"));
 }
 
 REGISTER_PERIGEE_TEST(DeckQmlTest);

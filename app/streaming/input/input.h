@@ -4,8 +4,19 @@
 #include "backend/computermanager.h"
 
 #include "SDL_compat.h"
+#include "remoteinputstate.h"
+
+#include <atomic>
+
+struct CaptureSnapshot {
+    bool mouseCaptured;
+    bool keyboardCaptured;
+};
+
+class SdlInputHandler;
 
 struct GamepadState {
+    SdlInputHandler* inputHandler;
     SDL_GameController* controller;
     SDL_JoystickID jsId;
     short index;
@@ -134,6 +145,12 @@ public:
 
     void raiseAllKeys();
 
+    CaptureSnapshot beginLocalOverlayInput();
+
+    void endLocalOverlayInput(CaptureSnapshot snapshot, bool keepReleased);
+
+    void sendNeutralRemoteInput();
+
     void notifyMouseLeave();
 
     void notifyFocusLost();
@@ -188,6 +205,8 @@ private:
 
     void performSpecialKeyCombo(KeyCombo combo);
 
+    void sendTrackedMouseButtonEvent(int action, int button);
+
     static
     Uint32 longPressTimerCallback(Uint32 interval, void* param);
 
@@ -218,7 +237,8 @@ private:
 
     int m_GamepadMask;
     GamepadState m_GamepadState[MAX_GAMEPADS];
-    QSet<short> m_KeysDown;
+    RemoteInputState m_RemoteInputState;
+    std::atomic_bool m_LocalOverlayInputActive {false};
     bool m_FakeMouseCaptureActive;
     bool m_KeyboardCaptureActive;
     QString m_OldIgnoreDevices;

@@ -156,6 +156,11 @@ void SdlInputHandler::sendGamepadBatteryState(GamepadState* state, SDL_JoystickP
 Uint32 SdlInputHandler::mouseEmulationTimerCallback(Uint32 interval, void *param)
 {
     auto gamepad = reinterpret_cast<GamepadState*>(param);
+    if (gamepad->inputHandler != nullptr &&
+            gamepad->inputHandler->m_LocalOverlayInputActive.load(
+                std::memory_order_acquire)) {
+        return interval;
+    }
 
     int rawX;
     int rawY;
@@ -291,19 +296,19 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         }
         else if (state->mouseEmulationTimer != 0) {
             if (event->button == SDL_CONTROLLER_BUTTON_A) {
-                LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
+                sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
             }
             else if (event->button == SDL_CONTROLLER_BUTTON_B) {
-                LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
+                sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
             }
             else if (event->button == SDL_CONTROLLER_BUTTON_X) {
-                LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_MIDDLE);
+                sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_MIDDLE);
             }
             else if (event->button == SDL_CONTROLLER_BUTTON_LEFTSHOULDER) {
-                LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_X1);
+                sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_X1);
             }
             else if (event->button == SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) {
-                LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_X2);
+                sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_X2);
             }
             else if (event->button == SDL_CONTROLLER_BUTTON_DPAD_UP) {
                 LiSendScrollEvent(1);
@@ -346,19 +351,19 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         }
         else if (state->mouseEmulationTimer != 0) {
             if (event->button == SDL_CONTROLLER_BUTTON_A) {
-                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+                sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
             }
             else if (event->button == SDL_CONTROLLER_BUTTON_B) {
-                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+                sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
             }
             else if (event->button == SDL_CONTROLLER_BUTTON_X) {
-                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_MIDDLE);
+                sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_MIDDLE);
             }
             else if (event->button == SDL_CONTROLLER_BUTTON_LEFTSHOULDER) {
-                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_X1);
+                sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_X1);
             }
             else if (event->button == SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) {
-                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_X2);
+                sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_X2);
             }
         }
     }
@@ -565,7 +570,9 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
         }
 
         state->controller = controller;
+        state->inputHandler = this;
         state->jsId = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(state->controller));
+        m_RemoteInputState.controllerAllocated(state->index);
 
         hapticCaps = 0;
 #if SDL_VERSION_ATLEAST(2, 0, 18)
@@ -758,8 +765,21 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
             LiSendMultiControllerEvent(state->index, m_GamepadMask,
                                        0, 0, 0, 0, 0, 0, 0);
 
+            const short removedIndex = state->index;
+
             // Clear all remaining state from this slot
             SDL_memset(state, 0, sizeof(*state));
+            bool indexStillAllocated = false;
+            for (const GamepadState& remaining : m_GamepadState) {
+                if (remaining.controller != nullptr &&
+                        remaining.index == removedIndex) {
+                    indexStillAllocated = true;
+                    break;
+                }
+            }
+            if (!indexStillAllocated) {
+                m_RemoteInputState.controllerRemoved(removedIndex);
+            }
         }
     }
 }

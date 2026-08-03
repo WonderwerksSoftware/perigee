@@ -23,6 +23,11 @@ bool DeckController::searchFocused() const
     return m_FocusRegion == SearchRegion;
 }
 
+bool DeckController::textInputRequested() const
+{
+    return m_IsOpen && m_FocusRegion == SearchRegion;
+}
+
 DeckController::FocusRegion DeckController::focusRegion() const
 {
     return m_FocusRegion;
@@ -89,6 +94,7 @@ void DeckController::openFromKeyboard()
     if (!m_IsOpen) {
         m_IsOpen = true;
         emit openChanged();
+        emit textInputRequestedChanged();
     }
 }
 
@@ -114,6 +120,9 @@ void DeckController::close()
     }
     m_IsOpen = false;
     emit openChanged();
+    if (m_FocusRegion == SearchRegion) {
+        emit textInputRequestedChanged();
+    }
 }
 
 void DeckController::setSearchText(const QString& searchText)
@@ -301,8 +310,12 @@ void DeckController::setFocusRegion(FocusRegion region)
     if (m_FocusRegion == region) {
         return;
     }
+    const bool previouslyRequested = textInputRequested();
     m_FocusRegion = region;
     emit focusModeChanged();
+    if (previouslyRequested != textInputRequested()) {
+        emit textInputRequestedChanged();
+    }
 }
 
 void DeckController::clearConfirmation()

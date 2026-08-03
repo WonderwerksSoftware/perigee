@@ -10,8 +10,10 @@
 #include "video/decoder.h"
 #include "audio/renderers/renderer.h"
 #include "video/overlaymanager.h"
+#include "perigee/input/deckinputrouter.h"
 
 #include <memory>
+#include <optional>
 
 class DeckSurfaceRenderer;
 class DeckController;
@@ -178,6 +180,16 @@ private:
 
     void notifyMouseEmulationMode(bool enabled);
 
+    bool routeDeckInputEvent(const SDL_Event& event);
+
+    void applyDeckInputResult(const DeckInputRouter::Result& result);
+
+    void closeDeckInput(bool keepReleased = false);
+
+    void pumpDeckUi();
+
+    void updateDeckPointerMapping();
+
     void updateOptimalWindowDisplayMode();
 
     enum class DecoderAvailability {
@@ -292,6 +304,9 @@ private:
     Overlay::OverlayManager m_OverlayManager;
     std::unique_ptr<DeckController> m_DeckController;
     std::unique_ptr<DeckSurfaceRenderer> m_DeckSurfaceRenderer;
+    std::unique_ptr<DeckInputRouter> m_DeckInputRouter;
+    std::optional<CaptureSnapshot> m_DeckCaptureSnapshot;
+    bool m_DeckTextInputActive = false;
 
     static CONNECTION_LISTENER_CALLBACKS k_ConnCallbacks;
     static Session* s_ActiveSession;

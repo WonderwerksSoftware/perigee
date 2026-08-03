@@ -10,7 +10,8 @@
 #include <QGuiApplication>
 
 SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, int streamHeight)
-    : m_MultiController(prefs.multiController),
+    : m_Window(nullptr),
+      m_MultiController(prefs.multiController),
       m_GamepadMouse(prefs.gamepadMouse),
       m_SwapMouseButtons(prefs.swapMouseButtons),
       m_ReverseScrollDirection(prefs.reverseScrollDirection),
@@ -272,19 +273,96 @@ void SdlInputHandler::setWindow(SDL_Window *window)
 
 void SdlInputHandler::raiseAllKeys()
 {
-    if (m_KeysDown.isEmpty()) {
+    const QVector<short> keys = m_RemoteInputState.takeKeyReleases();
+    if (keys.isEmpty()) {
         return;
     }
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "Raising %d keys",
-                (int)m_KeysDown.count());
+                (int)keys.count());
 
-    for (auto keyDown : std::as_const(m_KeysDown)) {
+    for (short keyDown : keys) {
         LiSendKeyboardEvent(keyDown, KEY_ACTION_UP, 0);
     }
+}
 
-    m_KeysDown.clear();
+CaptureSnapshot SdlInputHandler::beginLocalOverlayInput()
+{
+    const CaptureSnapshot snapshot {
+        isCaptureActive(),
+        isSystemKeyCaptureActive(),
+    };
+    m_LocalOverlayInputActive.store(true, std::memory_order_release);
+    sendNeutralRemoteInput();
+
+    // Touch gestures can finish from SDL timer threads after their last event.
+    // Stop those callbacks at the ownership boundary so they cannot recreate
+    // remote button state after the neutral packet has been sent.
+    SDL_RemoveTimer(m_LongPressTimer);
+    SDL_RemoveTimer(m_LeftButtonReleaseTimer);
+    SDL_RemoveTimer(m_RightButtonReleaseTimer);
+    SDL_RemoveTimer(m_DragTimer);
+    m_LongPressTimer = 0;
+    m_LeftButtonReleaseTimer = 0;
+    m_RightButtonReleaseTimer = 0;
+    m_DragTimer = 0;
+    m_DragButton = 0;
+    m_NumFingersDown = 0;
+    SDL_zero(m_LastTouchDownEvent);
+    SDL_zero(m_LastTouchUpEvent);
+    SDL_zero(m_TouchDownEvent);
+
+    setCaptureActive(false);
+    return snapshot;
+}
+
+void SdlInputHandler::endLocalOverlayInput(CaptureSnapshot snapshot,
+                                           bool keepReleased)
+{
+    sendNeutralRemoteInput();
+    setCaptureActive(!keepReleased && snapshot.mouseCaptured);
+    if (!keepReleased && snapshot.keyboardCaptured &&
+            !m_KeyboardCaptureActive) {
+        updateKeyboardGrabState();
+    }
+    m_LocalOverlayInputActive.store(false, std::memory_order_release);
+}
+
+void SdlInputHandler::sendNeutralRemoteInput()
+{
+    const NeutralRemoteInput neutral = m_RemoteInputState.takeNeutralInput();
+    for (short keyCode : neutral.keyReleases) {
+        LiSendKeyboardEvent(keyCode, KEY_ACTION_UP, 0);
+    }
+    for (int button : neutral.mouseButtonReleases) {
+        LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, button);
+    }
+
+    for (GamepadState& state : m_GamepadState) {
+        if (state.controller == nullptr) {
+            continue;
+        }
+        state.buttons = 0;
+        state.lsX = state.lsY = 0;
+        state.rsX = state.rsY = 0;
+        state.lt = state.rt = 0;
+        state.emulatedClickpadButtonDown = false;
+    }
+    for (short controllerIndex : neutral.controllerIndicesToZero) {
+        LiSendMultiControllerEvent(controllerIndex, m_GamepadMask,
+                                   0, 0, 0, 0, 0, 0, 0);
+    }
+}
+
+void SdlInputHandler::sendTrackedMouseButtonEvent(int action, int button)
+{
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return;
+    }
+    const bool pressed = action == BUTTON_ACTION_PRESS;
+    m_RemoteInputState.mouseButtonSent(button, pressed);
+    LiSendMouseButtonEvent(action, button);
 }
 
 void SdlInputHandler::notifyMouseLeave()

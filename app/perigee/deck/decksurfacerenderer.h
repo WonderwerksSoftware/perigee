@@ -9,6 +9,7 @@
 
 class QKeyEvent;
 class QMouseEvent;
+class QWheelEvent;
 class QObject;
 class QQmlEngine;
 class DeckController;
@@ -39,6 +40,10 @@ public:
                               QString* error);
     bool sendKeyEvent(QKeyEvent* event);
     bool sendPointerEvent(QMouseEvent* event);
+    bool sendWheelEvent(QWheelEvent* event);
+    bool sendTextInput(const QString& text);
+    bool isDirty() const;
+    void markDirty();
     QObject* rootObject() const;
 
 private:

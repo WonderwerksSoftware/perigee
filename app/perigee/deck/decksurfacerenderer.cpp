@@ -6,6 +6,8 @@
 #include <QCoreApplication>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QInputMethodEvent>
+#include <QWheelEvent>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
@@ -150,6 +152,7 @@ public:
     qreal devicePixelRatio = 1.0;
     qreal renderTargetDevicePixelRatio = 0.0;
     bool initialized = false;
+    bool dirty = true;
 };
 
 DeckSurfaceRenderer::DeckSurfaceRenderer() : m_Impl(std::make_unique<Impl>())
@@ -281,6 +284,28 @@ bool DeckSurfaceRenderer::initialize(QQmlEngine* engine,
     m_Impl->quickWindow = std::move(quickWindow);
     m_Impl->rootItem = rootItem;
     m_Impl->initialized = true;
+    m_Impl->dirty = true;
+    QObject::connect(m_Impl->renderControl.get(),
+                     &QQuickRenderControl::renderRequested,
+                     m_Impl->quickWindow.get(),
+                     [impl = m_Impl.get()] { impl->dirty = true; });
+    QObject::connect(m_Impl->renderControl.get(),
+                     &QQuickRenderControl::sceneChanged,
+                     m_Impl->quickWindow.get(),
+                     [impl = m_Impl.get()] { impl->dirty = true; });
+    if (controller != nullptr) {
+        const auto dirty = [impl = m_Impl.get()] { impl->dirty = true; };
+        QObject::connect(controller, &DeckController::openChanged,
+                         m_Impl->quickWindow.get(), dirty);
+        QObject::connect(controller, &DeckController::searchTextChanged,
+                         m_Impl->quickWindow.get(), dirty);
+        QObject::connect(controller, &DeckController::activeCategoryChanged,
+                         m_Impl->quickWindow.get(), dirty);
+        QObject::connect(controller, &DeckController::focusModeChanged,
+                         m_Impl->quickWindow.get(), dirty);
+        QObject::connect(controller, &DeckController::confirmationChanged,
+                         m_Impl->quickWindow.get(), dirty);
+    }
     return true;
 }
 
@@ -290,6 +315,10 @@ void DeckSurfaceRenderer::resize(QSize logicalSize, qreal devicePixelRatio)
         return;
     }
 
+    if (m_Impl->logicalSize != logicalSize ||
+            m_Impl->devicePixelRatio != devicePixelRatio) {
+        m_Impl->dirty = true;
+    }
     m_Impl->logicalSize = logicalSize;
     m_Impl->devicePixelRatio = devicePixelRatio;
     m_Impl->pixelSize = QSize();
@@ -379,6 +408,7 @@ bool DeckSurfaceRenderer::render(QImage* premultipliedArgb, QString* error)
     }
 
     *premultipliedArgb = std::move(converted);
+    m_Impl->dirty = false;
     return true;
 }
 
@@ -451,16 +481,58 @@ bool DeckSurfaceRenderer::renderAndPublishDeck(
 
 bool DeckSurfaceRenderer::sendKeyEvent(QKeyEvent* event)
 {
-    return event != nullptr && m_Impl->initialized &&
-        m_Impl->isOnOwnerThread(nullptr, QStringLiteral("key event delivery")) &&
-        QCoreApplication::sendEvent(m_Impl->quickWindow.get(), event);
+    if (event == nullptr || !m_Impl->initialized ||
+            !m_Impl->isOnOwnerThread(nullptr, QStringLiteral("key event delivery"))) {
+        return false;
+    }
+    const bool delivered = QCoreApplication::sendEvent(m_Impl->quickWindow.get(), event);
+    m_Impl->dirty = true;
+    return delivered;
 }
 
 bool DeckSurfaceRenderer::sendPointerEvent(QMouseEvent* event)
 {
-    return event != nullptr && m_Impl->initialized &&
-        m_Impl->isOnOwnerThread(nullptr, QStringLiteral("pointer event delivery")) &&
-        QCoreApplication::sendEvent(m_Impl->quickWindow.get(), event);
+    if (event == nullptr || !m_Impl->initialized ||
+            !m_Impl->isOnOwnerThread(nullptr, QStringLiteral("pointer event delivery"))) {
+        return false;
+    }
+    const bool delivered = QCoreApplication::sendEvent(m_Impl->quickWindow.get(), event);
+    m_Impl->dirty = true;
+    return delivered;
+}
+
+bool DeckSurfaceRenderer::sendWheelEvent(QWheelEvent* event)
+{
+    if (event == nullptr || !m_Impl->initialized ||
+            !m_Impl->isOnOwnerThread(nullptr, QStringLiteral("wheel event delivery"))) {
+        return false;
+    }
+    const bool delivered = QCoreApplication::sendEvent(m_Impl->quickWindow.get(), event);
+    m_Impl->dirty = true;
+    return delivered;
+}
+
+bool DeckSurfaceRenderer::sendTextInput(const QString& text)
+{
+    if (text.isEmpty() || !m_Impl->initialized ||
+            !m_Impl->isOnOwnerThread(nullptr, QStringLiteral("text input delivery"))) {
+        return false;
+    }
+    QInputMethodEvent event;
+    event.setCommitString(text);
+    const bool delivered = QCoreApplication::sendEvent(m_Impl->quickWindow.get(), &event);
+    m_Impl->dirty = true;
+    return delivered;
+}
+
+bool DeckSurfaceRenderer::isDirty() const
+{
+    return m_Impl->dirty;
+}
+
+void DeckSurfaceRenderer::markDirty()
+{
+    m_Impl->dirty = true;
 }
 
 QObject* DeckSurfaceRenderer::rootObject() const

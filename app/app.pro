@@ -195,6 +195,7 @@ SOURCES += \
     streaming/input/keyboard.cpp \
     streaming/input/mouse.cpp \
     streaming/input/reltouch.cpp \
+    streaming/input/remoteinputstate.cpp \
     streaming/session.cpp \
     streaming/audio/audio.cpp \
     streaming/audio/renderers/sdlaud.cpp \
@@ -207,6 +208,7 @@ SOURCES += \
     perigee/deck/actionlistmodel.cpp \
     perigee/deck/deckcontroller.cpp \
     perigee/deck/decksurfacerenderer.cpp \
+    perigee/input/deckinputrouter.cpp \
     path.cpp \
     settings/mappingmanager.cpp \
     gui/sdlgamepadkeynavigation.cpp \
@@ -236,6 +238,7 @@ HEADERS += \
     cli/startstream.h \
     settings/streamingpreferences.h \
     streaming/input/input.h \
+    streaming/input/remoteinputstate.h \
     streaming/session.h \
     streaming/audio/renderers/renderer.h \
     streaming/audio/renderers/sdl.h \
@@ -251,6 +254,7 @@ HEADERS += \
     perigee/deck/actionlistmodel.h \
     perigee/deck/deckcontroller.h \
     perigee/deck/decksurfacerenderer.h \
+    perigee/input/deckinputrouter.h \
     path.h \
     settings/mappingmanager.h \
     gui/sdlgamepadkeynavigation.h \

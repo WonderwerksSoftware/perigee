@@ -11,6 +11,8 @@ SOURCES += \
     ../app/perigee/deck/actionlistmodel.cpp \
     ../app/perigee/deck/deckcontroller.cpp \
     ../app/perigee/deck/decksurfacerenderer.cpp \
+    ../app/perigee/input/deckinputrouter.cpp \
+    ../app/streaming/input/remoteinputstate.cpp \
     ../app/path.cpp \
     ../app/streaming/video/overlaymanager.cpp \
     test_main.cpp \
@@ -18,6 +20,8 @@ SOURCES += \
     test_deckcontroller.cpp \
     test_deckqml.cpp \
     test_decksurfacerenderer.cpp \
+    test_deckinputrouter.cpp \
+    test_inputneutralization.cpp \
     test_overlaylayout.cpp \
     test_smoke.cpp
 
@@ -32,6 +36,8 @@ HEADERS += \
     ../app/perigee/deck/actionlistmodel.h \
     ../app/perigee/deck/deckcontroller.h \
     ../app/perigee/deck/decksurfacerenderer.h \
+    ../app/perigee/input/deckinputrouter.h \
+    ../app/streaming/input/remoteinputstate.h \
     ../app/path.h \
     ../app/streaming/video/overlaymanager.h \
     test_registry.h

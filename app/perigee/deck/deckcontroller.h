@@ -12,6 +12,7 @@ class DeckController final : public QObject
     Q_OBJECT
     Q_PROPERTY(bool isOpen READ isOpen NOTIFY openChanged)
     Q_PROPERTY(bool searchFocused READ searchFocused NOTIFY focusModeChanged)
+    Q_PROPERTY(bool textInputRequested READ textInputRequested NOTIFY textInputRequestedChanged)
     Q_PROPERTY(FocusRegion focusRegion READ focusRegion NOTIFY focusModeChanged)
     Q_PROPERTY(QString searchText READ searchText WRITE setSearchText NOTIFY searchTextChanged)
     Q_PROPERTY(int activeCategory READ activeCategory NOTIFY activeCategoryChanged)
@@ -33,6 +34,7 @@ public:
 
     bool isOpen() const;
     bool searchFocused() const;
+    bool textInputRequested() const;
     FocusRegion focusRegion() const;
     QString searchText() const;
     int activeCategory() const;
@@ -66,6 +68,7 @@ signals:
     void searchTextChanged();
     void activeCategoryChanged();
     void focusModeChanged();
+    void textInputRequestedChanged();
     void confirmationChanged();
 
 private:

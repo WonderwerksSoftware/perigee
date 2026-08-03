@@ -4,6 +4,7 @@
 #include "backend/richpresencemanager.h"
 #include "perigee/deck/deckcontroller.h"
 #include "perigee/deck/decksurfacerenderer.h"
+#include "perigee/input/deckinputrouter.h"
 
 #include <Limelight.h>
 #include "SDL_compat.h"
@@ -43,6 +44,9 @@
 #include <QCursor>
 #include <QScreen>
 #include <QQmlEngine>
+#include <QKeyEvent>
+#include <QMouseEvent>
+#include <QWheelEvent>
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QQuickOpenGLUtils>
@@ -599,6 +603,7 @@ Session::~Session()
     // Session is a QML-owned GUI-thread object. Release Deck's context-bound
     // QML/GL resources here, before the associated engine and application exit.
     m_DeckSurfaceRenderer.reset();
+    m_DeckInputRouter.reset();
     m_DeckController.reset();
     SDL_DestroyMutex(m_DecoderLock);
 }
@@ -630,6 +635,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
         else {
             m_DeckController = std::move(deckController);
             m_DeckSurfaceRenderer = std::move(deckRenderer);
+            m_DeckInputRouter = std::make_unique<DeckInputRouter>();
         }
     }
 #endif
@@ -1010,6 +1016,211 @@ bool Session::renderAndPublishDeck(QSize logicalSize, qreal devicePixelRatio)
         return false;
     }
     return true;
+}
+
+void Session::updateDeckPointerMapping()
+{
+    if (m_DeckInputRouter == nullptr || m_Window == nullptr) {
+        return;
+    }
+    SDL_Rect source {0, 0, m_StreamConfig.width, m_StreamConfig.height};
+    SDL_Rect destination {0, 0, 0, 0};
+    SDL_GetWindowSize(m_Window, &destination.w, &destination.h);
+    StreamUtils::scaleSourceToDestinationSurface(&source, &destination);
+    m_DeckInputRouter->setPointerMapping(
+        QRect(destination.x, destination.y, destination.w, destination.h),
+        QSize(m_StreamConfig.width, m_StreamConfig.height));
+}
+
+bool Session::routeDeckInputEvent(const SDL_Event& event)
+{
+    if (m_DeckInputRouter == nullptr || m_DeckController == nullptr ||
+            m_DeckSurfaceRenderer == nullptr || m_InputHandler == nullptr) {
+        return false;
+    }
+    updateDeckPointerMapping();
+    const DeckInputRouter::Result result = m_DeckInputRouter->route(event);
+    applyDeckInputResult(result);
+    return result.disposition == DeckInputRouter::Disposition::Consumed;
+}
+
+void Session::applyDeckInputResult(const DeckInputRouter::Result& result)
+{
+    if (m_DeckController == nullptr || m_DeckSurfaceRenderer == nullptr ||
+            m_InputHandler == nullptr) {
+        return;
+    }
+
+    const bool wasOpen = m_DeckController->isOpen();
+    const auto sendNavigationKey = [this](int key) {
+        QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+        m_DeckSurfaceRenderer->sendKeyEvent(&press);
+        QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+        m_DeckSurfaceRenderer->sendKeyEvent(&release);
+    };
+
+    switch (result.action) {
+    case DeckInputRouter::Action::None:
+        break;
+    case DeckInputRouter::Action::OpenFromKeyboard:
+    case DeckInputRouter::Action::OpenFromController:
+        if (!wasOpen) {
+            // Capture is snapshotted and all remote state is neutralized before
+            // Deck begins accepting local navigation.
+            m_DeckCaptureSnapshot = m_InputHandler->beginLocalOverlayInput();
+            if (result.action == DeckInputRouter::Action::OpenFromKeyboard) {
+                m_DeckController->openFromKeyboard();
+            }
+            else {
+                m_DeckController->openFromController();
+            }
+            m_DeckController->refresh();
+            m_OverlayManager.setOverlayState(Overlay::OverlayDeck, true);
+            m_DeckSurfaceRenderer->markDirty();
+        }
+        break;
+    case DeckInputRouter::Action::Close:
+        closeDeckInput(false);
+        break;
+    case DeckInputRouter::Action::ToggleStats:
+        m_InputHandler->sendNeutralRemoteInput();
+        m_OverlayManager.setOverlayState(
+            Overlay::OverlayDebug,
+            !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
+        break;
+    case DeckInputRouter::Action::Key: {
+        QKeyEvent keyEvent(
+            result.pressed ? QEvent::KeyPress : QEvent::KeyRelease,
+            result.key,
+            result.keyModifiers,
+            result.text,
+            result.autoRepeat);
+        m_DeckSurfaceRenderer->sendKeyEvent(&keyEvent);
+        break;
+    }
+    case DeckInputRouter::Action::TextInput:
+        m_DeckSurfaceRenderer->sendTextInput(result.text);
+        break;
+    case DeckInputRouter::Action::NavigateUp:
+        sendNavigationKey(Qt::Key_Up);
+        break;
+    case DeckInputRouter::Action::NavigateDown:
+        sendNavigationKey(Qt::Key_Down);
+        break;
+    case DeckInputRouter::Action::NavigateLeft:
+        sendNavigationKey(Qt::Key_Left);
+        break;
+    case DeckInputRouter::Action::NavigateRight:
+        sendNavigationKey(Qt::Key_Right);
+        break;
+    case DeckInputRouter::Action::Activate:
+        sendNavigationKey(Qt::Key_Return);
+        break;
+    case DeckInputRouter::Action::Back:
+        sendNavigationKey(Qt::Key_Escape);
+        break;
+    case DeckInputRouter::Action::PreviousCategory:
+        m_DeckController->previousCategory();
+        break;
+    case DeckInputRouter::Action::NextCategory:
+        m_DeckController->nextCategory();
+        break;
+    case DeckInputRouter::Action::FocusSearch:
+        m_DeckController->focusSearch();
+        break;
+    case DeckInputRouter::Action::PointerMove:
+    case DeckInputRouter::Action::PointerPress:
+    case DeckInputRouter::Action::PointerRelease: {
+        QEvent::Type type = QEvent::MouseMove;
+        if (result.action == DeckInputRouter::Action::PointerPress) {
+            type = QEvent::MouseButtonPress;
+        }
+        else if (result.action == DeckInputRouter::Action::PointerRelease) {
+            type = QEvent::MouseButtonRelease;
+        }
+        QMouseEvent mouseEvent(type,
+                               result.position,
+                               result.position,
+                               result.position,
+                               result.mouseButton,
+                               result.mouseButtons,
+                               Qt::NoModifier);
+        m_DeckSurfaceRenderer->sendPointerEvent(&mouseEvent);
+        break;
+    }
+    case DeckInputRouter::Action::PointerWheel: {
+        QWheelEvent wheelEvent(result.position,
+                               result.position,
+                               QPoint(),
+                               result.wheelDelta,
+                               result.mouseButtons,
+                               Qt::NoModifier,
+                               Qt::NoScrollPhase,
+                               false);
+        m_DeckSurfaceRenderer->sendWheelEvent(&wheelEvent);
+        break;
+    }
+    }
+
+    if (wasOpen && !m_DeckController->isOpen()) {
+        closeDeckInput(false);
+    }
+}
+
+void Session::closeDeckInput(bool keepReleased)
+{
+    if (m_DeckController == nullptr || !m_DeckController->isOpen()) {
+        if (m_DeckInputRouter != nullptr) {
+            m_DeckInputRouter->syncDeckOpen(false);
+        }
+        if (m_DeckCaptureSnapshot.has_value() && m_InputHandler != nullptr) {
+            m_InputHandler->endLocalOverlayInput(
+                *m_DeckCaptureSnapshot, keepReleased);
+            m_DeckCaptureSnapshot.reset();
+        }
+        m_OverlayManager.setOverlayState(Overlay::OverlayDeck, false);
+        return;
+    }
+
+    m_DeckController->close();
+    if (m_DeckInputRouter != nullptr) {
+        m_DeckInputRouter->syncDeckOpen(false);
+    }
+    if (m_DeckCaptureSnapshot.has_value() && m_InputHandler != nullptr) {
+        m_InputHandler->endLocalOverlayInput(*m_DeckCaptureSnapshot,
+                                             keepReleased);
+        m_DeckCaptureSnapshot.reset();
+    }
+    m_OverlayManager.setOverlayState(Overlay::OverlayDeck, false);
+}
+
+void Session::pumpDeckUi()
+{
+    if (m_DeckController == nullptr || m_DeckSurfaceRenderer == nullptr) {
+        return;
+    }
+
+    // Deliver queued controller completions and QML Qt.callLater work without
+    // re-entering an unrestricted Qt event loop during the SDL stream loop.
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+
+    const bool wantsTextInput = m_DeckController->textInputRequested();
+    if (wantsTextInput != m_DeckTextInputActive) {
+        if (wantsTextInput) {
+            SDL_StartTextInput();
+        }
+        else {
+            SDL_StopTextInput();
+        }
+        m_DeckTextInputActive = wantsTextInput;
+    }
+
+    if (!m_DeckController->isOpen() || !m_DeckSurfaceRenderer->isDirty()) {
+        return;
+    }
+    updateDeckPointerMapping();
+    renderAndPublishDeck(QSize(m_StreamConfig.width, m_StreamConfig.height),
+                         1.0);
 }
 
 void Session::emitLaunchWarning(QString text)
@@ -2026,8 +2237,11 @@ void Session::exec()
         // NB: This behavior was introduced in SDL 2.0.16, but had a few critical
         // issues that could cause indefinite timeouts, delayed joystick detection,
         // and other problems.
-        if (!SDL_WaitEventTimeout(&event, 1000)) {
+        const int eventTimeout = m_DeckController != nullptr &&
+                m_DeckController->isOpen() ? 16 : 1000;
+        if (!SDL_WaitEventTimeout(&event, eventTimeout)) {
             presence.runCallbacks();
+            pumpDeckUi();
             continue;
         }
 #else
@@ -2044,9 +2258,19 @@ void Session::exec()
             SDL_Delay(10);
 #endif
             presence.runCallbacks();
+            pumpDeckUi();
             continue;
         }
 #endif
+        if (routeDeckInputEvent(event)) {
+            if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP ||
+                    event.type == SDL_CONTROLLERBUTTONDOWN ||
+                    event.type == SDL_CONTROLLERBUTTONUP) {
+                presence.runCallbacks();
+            }
+            pumpDeckUi();
+            continue;
+        }
         switch (event.type) {
         case SDL_QUIT:
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -2357,11 +2581,20 @@ void Session::exec()
             }
             break;
         }
+        pumpDeckUi();
     }
 
 DispatchDeferredCleanup:
     // Switch back to synchronous logging mode
     StreamUtils::exitAsyncLoggingMode();
+
+    if (m_DeckController != nullptr && m_DeckController->isOpen()) {
+        closeDeckInput(false);
+    }
+    if (m_DeckTextInputActive) {
+        SDL_StopTextInput();
+        m_DeckTextInputActive = false;
+    }
 
     // Uncapture the mouse and hide the window immediately,
     // so we can return to the Qt GUI ASAP.

@@ -1,6 +1,7 @@
 #include "test_registry.h"
 
 #include "perigee/deck/decksurfacerenderer.h"
+#include "perigee/deck/deckcontroller.h"
 
 #include <QImage>
 #include <QQmlEngine>
@@ -22,6 +23,7 @@ private slots:
     void rendersPremultipliedArgbWithTransparencyInQmlCoordinates();
     void updatesTargetMappingWhenOnlyDevicePixelRatioChanges();
     void reportsComponentLoadFailure();
+    void controllerAndInputChangesDirtyOnlyTheOwnedSurface();
 };
 
 void DeckSurfaceRendererTest::initTestCase()
@@ -140,6 +142,36 @@ void DeckSurfaceRendererTest::reportsComponentLoadFailure()
              qPrintable(error));
     QVERIFY2(error.contains(QStringLiteral("DoesNotExist.qml")),
              qPrintable(error));
+}
+
+void DeckSurfaceRendererTest::controllerAndInputChangesDirtyOnlyTheOwnedSurface()
+{
+    QQmlEngine engine;
+    DeckController controller;
+    DeckSurfaceRenderer renderer;
+    QString error;
+    QImage image;
+
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    renderer.resize(QSize(960, 540), 1.0);
+    QVERIFY(renderer.isDirty());
+    QVERIFY2(renderer.render(&image, &error), qPrintable(error));
+    QVERIFY(!renderer.isDirty());
+
+    controller.openFromKeyboard();
+    QVERIFY(renderer.isDirty());
+    QVERIFY2(renderer.render(&image, &error), qPrintable(error));
+    QVERIFY(!renderer.isDirty());
+
+    QKeyEvent textPress(QEvent::KeyPress, Qt::Key_X, Qt::NoModifier,
+                        QStringLiteral("x"));
+    QVERIFY(renderer.sendKeyEvent(&textPress));
+    QVERIFY(renderer.isDirty());
 }
 
 REGISTER_PERIGEE_TEST(DeckSurfaceRendererTest);

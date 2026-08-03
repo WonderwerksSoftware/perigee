@@ -19,11 +19,12 @@
 // How far the finger can move before it can override the double tap deadzone
 #define DOUBLE_TAP_DEAD_ZONE_DELTA 0.025f
 
-Uint32 SdlInputHandler::longPressTimerCallback(Uint32, void*)
+Uint32 SdlInputHandler::longPressTimerCallback(Uint32, void* param)
 {
+    auto me = reinterpret_cast<SdlInputHandler*>(param);
     // Raise the left click and start a right click
-    LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
-    LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
+    me->sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+    me->sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
 
     return 0;
 }
@@ -207,10 +208,10 @@ void SdlInputHandler::emulateAbsoluteFingerEvent(SDL_TouchFingerEvent* event)
         SDL_RemoveTimer(m_LongPressTimer);
         m_LongPressTimer = SDL_AddTimer(LONG_PRESS_ACTIVATION_DELAY,
                                         longPressTimerCallback,
-                                        nullptr);
+                                        this);
 
         // Left button down on finger down
-        LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
+        sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
     }
     else if (event->type == SDL_FINGERUP) {
         m_LastTouchUpEvent = *event;
@@ -220,9 +221,9 @@ void SdlInputHandler::emulateAbsoluteFingerEvent(SDL_TouchFingerEvent* event)
         m_LongPressTimer = 0;
 
         // Left button up on finger up
-        LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+        sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
 
         // Raise right button too in case we triggered a long press gesture
-        LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+        sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
     }
 }

@@ -466,10 +466,10 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
 
     // Track the key state so we always know which keys are down
     if (event->state == SDL_PRESSED) {
-        m_KeysDown.insert(keyCode);
+        m_RemoteInputState.keySent(keyCode, true);
     }
     else {
-        m_KeysDown.remove(keyCode);
+        m_RemoteInputState.keySent(keyCode, false);
     }
 
     LiSendKeyboardEvent2(0x8000 | keyCode,

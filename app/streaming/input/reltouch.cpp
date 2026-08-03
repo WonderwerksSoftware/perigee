@@ -14,15 +14,17 @@
 // How far the finger can move before it cancels a drag or tap
 #define DEAD_ZONE_DELTA 0.01f
 
-Uint32 SdlInputHandler::releaseLeftButtonTimerCallback(Uint32, void*)
+Uint32 SdlInputHandler::releaseLeftButtonTimerCallback(Uint32, void* param)
 {
-    LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+    auto me = reinterpret_cast<SdlInputHandler*>(param);
+    me->sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
     return 0;
 }
 
-Uint32 SdlInputHandler::releaseRightButtonTimerCallback(Uint32, void*)
+Uint32 SdlInputHandler::releaseRightButtonTimerCallback(Uint32, void* param)
 {
-    LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+    auto me = reinterpret_cast<SdlInputHandler*>(param);
+    me->sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
     return 0;
 }
 
@@ -39,7 +41,7 @@ Uint32 SdlInputHandler::dragTimerCallback(Uint32, void *param)
         me->m_DragButton = BUTTON_LEFT;
     }
 
-    LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, me->m_DragButton);
+    me->sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, me->m_DragButton);
 
     return 0;
 }
@@ -133,7 +135,7 @@ void SdlInputHandler::handleRelativeFingerEvent(SDL_TouchFingerEvent* event)
 
         // Release any drag
         if (m_DragButton != 0) {
-            LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, m_DragButton);
+            sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, m_DragButton);
             m_DragButton = 0;
         }
         // 2 finger tap
@@ -143,7 +145,7 @@ void SdlInputHandler::handleRelativeFingerEvent(SDL_TouchFingerEvent* event)
             m_TouchDownEvent[0].timestamp = 0;
 
             // Press down the right mouse button
-            LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
+            sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
 
             // Queue a timer to release it in 100 ms
             SDL_RemoveTimer(m_RightButtonReleaseTimer);
@@ -154,7 +156,7 @@ void SdlInputHandler::handleRelativeFingerEvent(SDL_TouchFingerEvent* event)
         // 1 finger tap
         else if (event->timestamp - m_TouchDownEvent[0].timestamp < 250) {
             // Press down the left mouse button
-            LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
+            sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
 
             // Queue a timer to release it in 100 ms
             SDL_RemoveTimer(m_LeftButtonReleaseTimer);

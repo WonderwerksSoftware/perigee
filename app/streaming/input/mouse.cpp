@@ -62,10 +62,10 @@ void SdlInputHandler::handleMouseButtonEvent(SDL_MouseButtonEvent* event)
             button = BUTTON_RIGHT;
     }
 
-    LiSendMouseButtonEvent(event->state == SDL_PRESSED ?
-                               BUTTON_ACTION_PRESS :
-                               BUTTON_ACTION_RELEASE,
-                           button);
+    sendTrackedMouseButtonEvent(event->state == SDL_PRESSED ?
+                                    BUTTON_ACTION_PRESS :
+                                    BUTTON_ACTION_RELEASE,
+                                button);
 }
 
 void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)

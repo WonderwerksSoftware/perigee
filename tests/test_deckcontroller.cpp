@@ -98,6 +98,7 @@ private slots:
     void inFlightEmptyResourceActionExecutesOnlyOnce();
     void repeatedActivationDoesNotRedirectFromWorkingActionToPeer();
     void pointerFocusCancelsConfirmationOnlyAfterSuccessfulChange();
+    void textInputRequestTracksOpenSearchFocus();
 };
 
 void DeckControllerTest::keyboardOpenFocusesSearchAndShowsDisplayActions()
@@ -427,6 +428,21 @@ void DeckControllerTest::pointerFocusCancelsConfirmationOnlyAfterSuccessfulChang
     controller.focusAction(QStringLiteral("display.other"));
     QVERIFY(!controller.confirmationVisible());
     QCOMPARE(focusedActionId(controller), QStringLiteral("display.other"));
+}
+
+void DeckControllerTest::textInputRequestTracksOpenSearchFocus()
+{
+    DeckController controller;
+    QVERIFY(!controller.textInputRequested());
+
+    controller.openFromKeyboard();
+    QVERIFY(controller.textInputRequested());
+    controller.focusCategories();
+    QVERIFY(!controller.textInputRequested());
+    controller.focusSearch();
+    QVERIFY(controller.textInputRequested());
+    controller.close();
+    QVERIFY(!controller.textInputRequested());
 }
 
 REGISTER_PERIGEE_TEST(DeckControllerTest);
