@@ -19,6 +19,8 @@ struct MouseButtonRecord
     int button;
 };
 
+struct MouseMoveRecord { short x; short y; };
+
 struct TouchRecord { int eventType; quint32 pointerId; };
 struct PenRecord { int eventType; };
 struct ControllerRecord { int controllerIndex; int buttons; int leftStickX; };
@@ -31,6 +33,7 @@ QVector<PenRecord> pens();
 QVector<ControllerRecord> controllers();
 QVector<BatteryRecord> batteries();
 int mouseMoveCount();
+QVector<MouseMoveRecord> mouseMoves();
 QVector<bool> mouseEmulationNotifications();
 void beginOrderingObservation();
 QStringList ordering();

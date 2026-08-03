@@ -323,3 +323,54 @@ and SDL-event lifecycle:
   main-thread gamepad-mouse dispatch, timer-add failure, handler replacement,
   and closed stats release balance — 250 passed, 0 failed.
 - `git diff --check` — clean.
+
+## Independent review fix round 3
+
+Review starting HEAD: `658070883432d8208cf2e1f7b3674f8040b49fa1`
+
+The third independent review found one Important full-range axis bug and no
+Critical or Minor findings. The gamepad-mouse stick-strength comparison passed
+four `short` values directly to `qAbs()`. SDL axes may legitimately be
+`-32768`, whose positive magnitude is not representable in a signed short. Qt
+debug builds assert on that input; unchecked builds can overflow and select the
+weaker stick.
+
+The fix promotes each of the left-X, left-Y, right-X, and right-Y terms to
+`int` before `std::abs()`. This matches the existing promotion-safe pattern in
+`gamepad.cpp` and changes only stick-strength selection at the signed-short
+minimum; the movement curve, deadzone, sign handling, and emitted deltas remain
+unchanged.
+
+### Fix-round 3 RED/GREEN evidence
+
+- Focused RED command on the review starting HEAD:
+  `QT_QPA_PLATFORM=offscreen SDL_VIDEODRIVER=dummy ./build-tests/tests/perigee-tests InputIntegrationTest gamepadMouseSelectsFullNegativeStickWithoutOverflow -v1`
+  — 2 passed, 1 failed. The parent test isolated real timer dispatch in a child
+  process; the child hit Qt's signed-minimum assertion and returned `CrashExit`
+  instead of `NormalExit`.
+- The regression drives the real controller-axis handler with left stick
+  strength 65534 and right stick input `(-32768, -32768)`. After Y-axis
+  normalization, it verifies state `LS=(32767,-32767)` and
+  `RS=(-32768,32767)`, then dispatches the real gamepad-mouse timer action and
+  requires one negative-X/negative-Y movement. This proves the right stick wins
+  the one-unit strength margin without overflow.
+- Focused GREEN: the same command passed 3 tests with 0 failures.
+- Full focused class:
+  `QT_QPA_PLATFORM=offscreen SDL_VIDEODRIVER=dummy ./build-tests/tests/perigee-tests InputIntegrationTest -silent`
+  — 18 passed, 0 failed.
+
+### Fix-round 3 verification
+
+- Debug application link:
+  `CCACHE_DIR="$PWD/build-tests/.ccache" make -C build-tests/app -f Makefile.Debug -j4`
+  — exit 0 and linked `moonlight`.
+- Canonical surfaceless full suite:
+  `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=opengl QT_OPENGL=desktop LIBGL_ALWAYS_SOFTWARE=1 EGL_PLATFORM=surfaceless ./build-tests/tests/perigee-tests -silent`
+  — 126 passed, 0 failed.
+- Live Wayland full suite:
+  `QT_QPA_PLATFORM=wayland SDL_VIDEODRIVER=wayland ./build-tests/tests/perigee-tests -silent`
+  — 126 passed, 0 failed.
+- Focused fresh-process stress: 25 repetitions of takeover token rotation,
+  ordinary main-thread gamepad-mouse dispatch, and the subprocess-isolated
+  full-negative-axis selection — 125 parent-process tests passed, 0 failed.
+- `git diff --check` — clean.

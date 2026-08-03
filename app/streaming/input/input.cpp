@@ -12,6 +12,7 @@
 #include <QtMath>
 
 #include <atomic>
+#include <cstdlib>
 
 namespace {
 
@@ -410,8 +411,8 @@ void SdlInputHandler::dispatchInputTimer(const InputTimerRequest& request)
         }
         int rawX;
         int rawY;
-        if (qAbs(gamepad->lsX) + qAbs(gamepad->lsY) >
-                qAbs(gamepad->rsX) + qAbs(gamepad->rsY)) {
+        if (std::abs(int(gamepad->lsX)) + std::abs(int(gamepad->lsY)) >
+                std::abs(int(gamepad->rsX)) + std::abs(int(gamepad->rsY))) {
             rawX = gamepad->lsX;
             rawY = -gamepad->lsY;
         }

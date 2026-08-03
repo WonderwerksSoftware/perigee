@@ -3,6 +3,8 @@
 
 #include <QtTest>
 
+#include <QProcess>
+
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -90,6 +92,7 @@ private slots:
     void ownershipWaitsForInFlightTimerSendBeforeNeutralizing();
     void takeoverRotatesGamepadTimerTokenAndDropsQueuedWork();
     void gamepadMouseDispatchReadsAxisStateOnMainThread();
+    void gamepadMouseSelectsFullNegativeStickWithoutOverflow();
     void gamepadTimerAddFailureDoesNotAdvertiseMouseMode();
     void staleTimerTokenIsIgnoredAfterHandlerReplacement();
     void neutralRemoteInputPrecedesPhysicalCaptureRelease();
@@ -364,6 +367,71 @@ void InputIntegrationTest::gamepadMouseDispatchReadsAxisStateOnMainThread()
     QVERIFY(handler.handleInputTimerEvent(
         inputTimerEvent(state.mouseEmulationTimerToken)));
     QCOMPARE(InputIntegrationStubs::mouseMoveCount(), 1);
+
+    handler.cancelInputTimer(state.mouseEmulationTimer,
+                             state.mouseEmulationTimerToken);
+    state.controller = nullptr;
+}
+
+void InputIntegrationTest::gamepadMouseSelectsFullNegativeStickWithoutOverflow()
+{
+    if (qEnvironmentVariableIsEmpty("PERIGEE_NEGATIVE_AXIS_CHILD")) {
+        QProcess child;
+        QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+        environment.insert(QStringLiteral("PERIGEE_NEGATIVE_AXIS_CHILD"),
+                           QStringLiteral("1"));
+        child.setProcessEnvironment(environment);
+        child.start(QCoreApplication::applicationFilePath(),
+                    {QStringLiteral("InputIntegrationTest"),
+                     QStringLiteral("gamepadMouseSelectsFullNegativeStickWithoutOverflow"),
+                     QStringLiteral("-silent")});
+        QVERIFY2(child.waitForFinished(5000), qPrintable(child.errorString()));
+        QCOMPARE(child.exitStatus(), QProcess::NormalExit);
+        QCOMPARE(child.exitCode(), 0);
+        return;
+    }
+
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    SdlInputHandler handler(preferences, 1920, 1080);
+    GamepadState& state = handler.m_GamepadState[0];
+    state.controller = reinterpret_cast<SDL_GameController*>(quintptr(1));
+    state.jsId = 46;
+    state.index = 0;
+    handler.m_GamepadMask = 1;
+    handler.startInputTimer(state.mouseEmulationTimer,
+                            state.mouseEmulationTimerToken,
+                            100000,
+                            SdlInputHandler::InputTimerAction::MouseEmulation,
+                            state.jsId,
+                            true);
+
+    for (const auto axisValue : {
+             std::pair<SDL_GameControllerAxis, Sint16> {
+                 SDL_CONTROLLER_AXIS_LEFTX, 32767},
+             {SDL_CONTROLLER_AXIS_LEFTY, 32767},
+             {SDL_CONTROLLER_AXIS_RIGHTX, -32768},
+             {SDL_CONTROLLER_AXIS_RIGHTY, -32768},
+         }) {
+        SDL_ControllerAxisEvent axis {};
+        axis.type = SDL_CONTROLLERAXISMOTION;
+        axis.which = state.jsId;
+        axis.axis = axisValue.first;
+        axis.value = axisValue.second;
+        handler.handleControllerAxisEvent(&axis);
+    }
+
+    QCOMPARE(state.lsX, short(32767));
+    QCOMPARE(state.lsY, short(-32767));
+    QCOMPARE(state.rsX, short(-32768));
+    QCOMPARE(state.rsY, short(32767));
+
+    QVERIFY(handler.handleInputTimerEvent(
+        inputTimerEvent(state.mouseEmulationTimerToken)));
+    const auto moves = InputIntegrationStubs::mouseMoves();
+    QCOMPARE(moves.size(), 1);
+    QVERIFY(moves.first().x < 0);
+    QVERIFY(moves.first().y < 0);
 
     handler.cancelInputTimer(state.mouseEmulationTimer,
                              state.mouseEmulationTimerToken);

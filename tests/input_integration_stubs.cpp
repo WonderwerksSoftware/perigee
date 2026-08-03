@@ -22,6 +22,7 @@ QVector<InputIntegrationStubs::ControllerRecord> g_Controllers;
 QVector<InputIntegrationStubs::BatteryRecord> g_Batteries;
 QStringList g_Ordering;
 int g_MouseMoveCount = 0;
+QVector<InputIntegrationStubs::MouseMoveRecord> g_MouseMoves;
 QVector<bool> g_MouseEmulationNotifications;
 bool g_RecordOrdering = false;
 bool g_BlockMouseButton = false;
@@ -110,6 +111,7 @@ void reset()
     g_Batteries.clear();
     g_Ordering.clear();
     g_MouseMoveCount = 0;
+    g_MouseMoves.clear();
     g_MouseEmulationNotifications.clear();
     g_RecordOrdering = false;
     g_BlockMouseButton = false;
@@ -156,6 +158,12 @@ int mouseMoveCount()
 {
     QMutexLocker locker(&g_Mutex);
     return g_MouseMoveCount;
+}
+
+QVector<MouseMoveRecord> mouseMoves()
+{
+    QMutexLocker locker(&g_Mutex);
+    return g_MouseMoves;
 }
 
 QVector<bool> mouseEmulationNotifications()
@@ -279,7 +287,7 @@ int LiSendMouseButtonEvent(char action, int button)
     }
     return 0;
 }
-int LiSendMouseMoveEvent(short, short)
+int LiSendMouseMoveEvent(short x, short y)
 {
     QMutexLocker locker(&g_Mutex);
     if (g_BlockMouseMove) {
@@ -292,6 +300,7 @@ int LiSendMouseMoveEvent(short, short)
         g_SendBlocked = false;
     }
     ++g_MouseMoveCount;
+    g_MouseMoves.append({x, y});
     return 0;
 }
 int LiSendMousePositionEvent(short, short, short, short) { return 0; }
