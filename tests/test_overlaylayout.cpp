@@ -47,6 +47,81 @@ public:
     QVector<Overlay::OverlayType> notifications;
 };
 
+class ReadinessGatedOverlayRenderer final : public Overlay::IOverlayRenderer
+{
+public:
+    explicit ReadinessGatedOverlayRenderer(Overlay::OverlayManager* manager) :
+        m_Manager(manager)
+    {
+    }
+
+    void notifyOverlayUpdated(Overlay::OverlayType type) override
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        if (m_Readiness.deferIfNotReady(type)) {
+            return;
+        }
+
+        SDL_Surface* surface = nullptr;
+        Overlay::OverlayPresentation presentation;
+        if (m_Manager->getUpdatedOverlaySurface(
+                type, &surface, &presentation)) {
+            m_ConsumedTypes.push_back(type);
+            m_ConsumedMargins.push_back(presentation.marginPx);
+            m_ConsumedSurfaces.push_back(surface != nullptr);
+            SDL_FreeSurface(surface);
+        }
+    }
+
+    QVector<Overlay::OverlayType> activateAndReplay()
+    {
+        std::vector<Overlay::OverlayType> replayTypes;
+        {
+            std::lock_guard<std::mutex> lock(m_Mutex);
+            replayTypes = m_Readiness.activate();
+        }
+
+        QVector<Overlay::OverlayType> replayed;
+        for (Overlay::OverlayType type : replayTypes) {
+            replayed.push_back(type);
+            notifyOverlayUpdated(type);
+        }
+        return replayed;
+    }
+
+    void deactivate()
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        m_Readiness.deactivate();
+    }
+
+    QVector<Overlay::OverlayType> consumedTypes() const
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        return m_ConsumedTypes;
+    }
+
+    QVector<int> consumedMargins() const
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        return m_ConsumedMargins;
+    }
+
+    QVector<bool> consumedSurfaces() const
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        return m_ConsumedSurfaces;
+    }
+
+private:
+    Overlay::OverlayManager* m_Manager;
+    mutable std::mutex m_Mutex;
+    Overlay::OverlayRendererReadiness m_Readiness;
+    QVector<Overlay::OverlayType> m_ConsumedTypes;
+    QVector<int> m_ConsumedMargins;
+    QVector<bool> m_ConsumedSurfaces;
+};
+
 class BlockingOverlayRenderer final : public Overlay::IOverlayRenderer
 {
 public:
@@ -148,6 +223,7 @@ private slots:
     void placesAndConstrainsOverlays_data();
     void placesAndConstrainsOverlays();
     void layoutStateRecomputesAfterResizeWithoutSurfaceUpdate();
+    void defersOverlayConsumptionUntilRendererIsReady();
     void singleOverlayArbitratesStatusOverRetainedDeck();
     void deletesManagerOwnedSurfacesExactlyOnce();
     void permitsSurfaceDeleterToReenterPublication();
@@ -269,6 +345,65 @@ void OverlayLayoutTest::layoutStateRecomputesAfterResizeWithoutSurfaceUpdate()
     QCOMPARE(rect.y, 0.0f);
     QCOMPARE(rect.w, 400.0f);
     QCOMPARE(rect.h, 225.0f);
+}
+
+void OverlayLayoutTest::defersOverlayConsumptionUntilRendererIsReady()
+{
+    Overlay::OverlayManager manager;
+    ReadinessGatedOverlayRenderer renderer(&manager);
+    manager.setOverlayRenderer(&renderer);
+
+    SDL_Surface* beforeReady = SDL_CreateRGBSurfaceWithFormat(
+        0, 16, 9, 32, SDL_PIXELFORMAT_ARGB8888);
+    QVERIFY(beforeReady != nullptr);
+    manager.updateOverlaySurface(
+        Overlay::OverlayDeck,
+        beforeReady,
+        {Overlay::OverlayAnchor::TopCenter, 1, 1.0f, 1.0f});
+    manager.updateOverlaySurface(
+        Overlay::OverlayDeck,
+        nullptr,
+        {Overlay::OverlayAnchor::TopCenter, 2, 1.0f, 1.0f});
+
+    QCOMPARE(renderer.consumedTypes().size(), 0);
+    QCOMPARE(renderer.activateAndReplay(),
+             QVector<Overlay::OverlayType>({Overlay::OverlayDeck}));
+    QCOMPARE(renderer.consumedTypes(),
+             QVector<Overlay::OverlayType>({Overlay::OverlayDeck}));
+    QCOMPARE(renderer.consumedMargins(), QVector<int>({2}));
+    QCOMPARE(renderer.consumedSurfaces(), QVector<bool>({false}));
+
+    SDL_Surface* whileReady = SDL_CreateRGBSurfaceWithFormat(
+        0, 32, 18, 32, SDL_PIXELFORMAT_ARGB8888);
+    QVERIFY(whileReady != nullptr);
+    manager.updateOverlaySurface(
+        Overlay::OverlayDeck,
+        whileReady,
+        {Overlay::OverlayAnchor::TopCenter, 3, 1.0f, 1.0f});
+    QCOMPARE(renderer.consumedTypes().size(), 2);
+    QCOMPARE(renderer.consumedMargins(), QVector<int>({2, 3}));
+    QCOMPARE(renderer.consumedSurfaces(), QVector<bool>({false, true}));
+
+    renderer.deactivate();
+    SDL_Surface* latestAfterDeactivate = SDL_CreateRGBSurfaceWithFormat(
+        0, 64, 36, 32, SDL_PIXELFORMAT_ARGB8888);
+    QVERIFY(latestAfterDeactivate != nullptr);
+    manager.updateOverlaySurface(
+        Overlay::OverlayDeck,
+        nullptr,
+        {Overlay::OverlayAnchor::TopCenter, 4, 1.0f, 1.0f});
+    manager.updateOverlaySurface(
+        Overlay::OverlayDeck,
+        latestAfterDeactivate,
+        {Overlay::OverlayAnchor::TopCenter, 5, 1.0f, 1.0f});
+
+    QCOMPARE(renderer.consumedTypes().size(), 2);
+    QCOMPARE(renderer.activateAndReplay(),
+             QVector<Overlay::OverlayType>({Overlay::OverlayDeck}));
+    QCOMPARE(renderer.consumedTypes().size(), 3);
+    QCOMPARE(renderer.consumedMargins(), QVector<int>({2, 3, 5}));
+    QCOMPARE(renderer.consumedSurfaces(), QVector<bool>({false, true, true}));
+    QCOMPARE(renderer.activateAndReplay().size(), 0);
 }
 
 void OverlayLayoutTest::singleOverlayArbitratesStatusOverRetainedDeck()

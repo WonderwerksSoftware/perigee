@@ -816,6 +816,7 @@ private:
     DrmPropertySetter m_PropSetter;
     SDL_Surface* m_OverlayCompositionSurface;
     std::unique_ptr<Overlay::OverlayLayerCompositor> m_OverlayCompositor;
+    Overlay::OverlayRendererReadiness m_OverlayReadiness;
     std::mutex m_OverlayLock;
     SDL_Rect m_OverlayRects[Overlay::OverlayMax];
     drmVersionPtr m_Version;

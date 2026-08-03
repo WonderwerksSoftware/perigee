@@ -543,6 +543,36 @@ bool OverlayLayoutState::updateLayout(int viewportWidth,
     return changed;
 }
 
+bool OverlayRendererReadiness::deferIfNotReady(OverlayType type)
+{
+    SDL_assert(type >= OverlayDebug && type < OverlayMax);
+    if (m_Ready) {
+        return false;
+    }
+
+    m_Deferred[type] = true;
+    return true;
+}
+
+std::vector<OverlayType> OverlayRendererReadiness::activate()
+{
+    std::vector<OverlayType> deferred;
+    deferred.reserve(OverlayMax);
+    for (int type = OverlayDebug; type < OverlayMax; type++) {
+        if (m_Deferred[type]) {
+            deferred.push_back(static_cast<OverlayType>(type));
+            m_Deferred[type] = false;
+        }
+    }
+    m_Ready = true;
+    return deferred;
+}
+
+void OverlayRendererReadiness::deactivate()
+{
+    m_Ready = false;
+}
+
 SingleOverlayArbiter::SingleOverlayArbiter(OverlaySurfaceDeleter surfaceDeleter) :
     m_SurfaceDeleter(std::move(surfaceDeleter))
 {

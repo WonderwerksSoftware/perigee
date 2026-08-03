@@ -256,6 +256,11 @@ bool DrmRenderer::prepareDecoderContextInGetFormat(AVCodecContext*, AVPixelForma
 
 void DrmRenderer::prepareToRender()
 {
+    {
+        std::lock_guard lock { m_OverlayLock };
+        m_OverlayReadiness.deactivate();
+    }
+
     // Retake DRM master if we dropped it earlier
     drmSetMaster(m_DrmFd);
 
@@ -292,15 +297,15 @@ void DrmRenderer::prepareToRender()
     }
 
     // Set the output rect to match the new CRTC size after modesetting
-    m_OutputRect.x = m_OutputRect.y = 0;
+    SDL_Rect outputRect {};
     drmModeCrtc* crtc = drmModeGetCrtc(m_DrmFd, m_Crtc.objectId());
     if (crtc != nullptr) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "CRTC size after modesetting: %ux%u",
                     crtc->width,
                     crtc->height);
-        m_OutputRect.w = crtc->width;
-        m_OutputRect.h = crtc->height;
+        outputRect.w = crtc->width;
+        outputRect.h = crtc->height;
         drmModeFreeCrtc(crtc);
     }
     else {
@@ -308,19 +313,35 @@ void DrmRenderer::prepareToRender()
                      "drmModeGetCrtc() failed: %d",
                      errno);
 
-        SDL_GetWindowSize(m_Window, &m_OutputRect.w, &m_OutputRect.h);
+        SDL_GetWindowSize(m_Window, &outputRect.w, &outputRect.h);
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Guessing CRTC is window size: %dx%d",
-                    m_OutputRect.w,
-                    m_OutputRect.h);
+                    outputRect.w,
+                    outputRect.h);
+    }
+
+    const bool hasValidOutput = outputRect.w > 0 && outputRect.h > 0;
+    if (!hasValidOutput) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Invalid DRM output size for overlays: %dx%d",
+                     outputRect.w,
+                     outputRect.h);
     }
 
     {
         std::lock_guard lock { m_OverlayLock };
-        m_OverlayCompositor = std::make_unique<Overlay::OverlayLayerCompositor>(
-            m_OutputRect.w,
-            m_OutputRect.h);
-        SDL_zero(m_OverlayRects);
+        const bool compositorMatchesOutput =
+            m_OverlayCompositor != nullptr &&
+            m_OutputRect.w == outputRect.w &&
+            m_OutputRect.h == outputRect.h;
+        m_OutputRect = outputRect;
+        if (hasValidOutput && !compositorMatchesOutput) {
+            m_OverlayCompositor =
+                std::make_unique<Overlay::OverlayLayerCompositor>(
+                    m_OutputRect.w,
+                    m_OutputRect.h);
+            SDL_zero(m_OverlayRects);
+        }
     }
 
     // Set HDMI content type to hopefully enable ALLM
@@ -400,20 +421,57 @@ void DrmRenderer::prepareToRender()
 
     // We've now changed state that must be restored
     m_DrmStateModified = true;
+
+    // FFmpeg attaches the frontend renderer before prepareToRender(), so a
+    // producer may already have published an update. Transition to ready while
+    // serialized with callbacks, then replay outside the non-recursive lock.
+    // Deferred types are replayed first; the all-type pass also catches pending
+    // manager state published before this renderer was attached.
+    std::vector<Overlay::OverlayType> deferredTypes;
+    {
+        std::lock_guard lock { m_OverlayLock };
+        if (!hasValidOutput || m_OverlayCompositor == nullptr) {
+            return;
+        }
+        deferredTypes = m_OverlayReadiness.activate();
+    }
+
+    bool replayed[Overlay::OverlayMax] = {};
+    for (Overlay::OverlayType type : deferredTypes) {
+        replayed[type] = true;
+        notifyOverlayUpdated(type);
+    }
+    for (int type = Overlay::OverlayDebug; type < Overlay::OverlayMax; type++) {
+        if (!replayed[type]) {
+            notifyOverlayUpdated(static_cast<Overlay::OverlayType>(type));
+        }
+    }
 }
 
 void DrmRenderer::cleanupRenderContext()
 {
+    {
+        std::lock_guard lock { m_OverlayLock };
+
+        // Stop callbacks from consuming manager state before tearing down any
+        // output-bound overlay resources. Updates published from this point
+        // remain pending for a subsequent activation.
+        m_OverlayReadiness.deactivate();
+
+        // If we have a composition surface, unmap it before disabling planes.
+        // The compositor retains its independent layers until this renderer is
+        // destroyed; a same-size reprepare can rebuild the composition surface.
+        if (m_OverlayCompositionSurface) {
+            munmap(m_OverlayCompositionSurface->pixels,
+                   (uintptr_t)m_OverlayCompositionSurface->userdata);
+            SDL_FreeSurface(m_OverlayCompositionSurface);
+            m_OverlayCompositionSurface = nullptr;
+        }
+    }
+
     // We might be called without prepareToRender() if we fail during decoder testing
     if (!m_DrmStateModified) {
         return;
-    }
-
-    // If we have a composition surface, unmap it before disabling planes
-    if (m_OverlayCompositionSurface) {
-        munmap(m_OverlayCompositionSurface->pixels, (uintptr_t)m_OverlayCompositionSurface->userdata);
-        SDL_FreeSurface(m_OverlayCompositionSurface);
-        m_OverlayCompositionSurface = nullptr;
     }
 
     // Ensure we're out of HDR mode
@@ -1563,6 +1621,12 @@ bool DrmRenderer::blitOverlayToCompositionSurface(
 void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 {
     std::lock_guard lg { m_OverlayLock };
+
+    // Leave the manager's one-shot pending surface untouched until output
+    // dimensions and compositor state are ready for consumption.
+    if (m_OverlayReadiness.deferIfNotReady(type)) {
+        return;
+    }
 
     // If we are not using atomic KMS, we can't support overlays
     if (!m_PropSetter.isAtomic()) {

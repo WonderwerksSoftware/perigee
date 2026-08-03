@@ -5,6 +5,7 @@
 #include <functional>
 #include <atomic>
 #include <mutex>
+#include <vector>
 
 #include "SDL_compat.h"
 #include <SDL_ttf.h>
@@ -106,6 +107,24 @@ private:
     bool m_OriginAtBottomLeft = false;
     OverlayPresentation m_Presentation;
     SDL_FRect m_Rect = {};
+};
+
+class OverlayRendererReadiness
+{
+public:
+    // Returns true when the caller must defer consuming the pending update.
+    // Calls must be serialized with renderer activation and deactivation.
+    bool deferIfNotReady(OverlayType type);
+
+    // Marks the renderer ready and returns each type deferred since the last
+    // activation exactly once. Replay callbacks after releasing the caller's
+    // renderer lock.
+    std::vector<OverlayType> activate();
+    void deactivate();
+
+private:
+    bool m_Ready = false;
+    bool m_Deferred[OverlayMax] = {};
 };
 
 class SingleOverlayArbiter
