@@ -1166,7 +1166,7 @@ bool D3D11VARenderer::createOverlayVertexBuffer(Overlay::OverlayPresentation pre
                                                 int height,
                                                 ComPtr<ID3D11Buffer>& newVertexBuffer)
 {
-    const SDL_FRect renderRect = Overlay::calculateOverlayRect(
+    SDL_FRect renderRect = Overlay::calculateOverlayRect(
         presentation,
         width,
         height,

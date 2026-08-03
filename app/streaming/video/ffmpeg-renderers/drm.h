@@ -13,6 +13,7 @@
 #include <set>
 #include <unordered_map>
 #include <mutex>
+#include <memory>
 
 // This is only defined in Linux 6.8+ headers
 #ifndef DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP
@@ -787,8 +788,9 @@ private:
     bool uploadSurfaceToFb(SDL_Surface *surface, uint32_t* handle, uint32_t* fbId);
     bool mapDumbBuffer(uint32_t handle, size_t size, void** mapping);
     bool createFbForDumbBuffer(struct drm_mode_create_dumb* createBuf, uint32_t* fbId);
-    void enterOverlayCompositionMode();
-    bool blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL_Surface* newSurface, SDL_Rect* overlayRect);
+    bool enterOverlayCompositionMode();
+    bool blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL_Surface* ownedRetainedSurface, SDL_Rect* overlayRect);
+    SDL_Surface* createRetainedOverlaySurface(SDL_Surface* sourceSurface);
     static bool drmFormatMatchesVideoFormat(uint32_t drmFormat, int videoFormat);
 
     IFFmpegRenderer* m_BackendRenderer;
@@ -813,6 +815,7 @@ private:
     DrmPropertyMap m_OverlayPlanes[Overlay::OverlayMax];
     DrmPropertySetter m_PropSetter;
     SDL_Surface* m_OverlayCompositionSurface;
+    std::unique_ptr<Overlay::OverlayLayerCompositor> m_OverlayCompositor;
     std::mutex m_OverlayLock;
     SDL_Rect m_OverlayRects[Overlay::OverlayMax];
     drmVersionPtr m_Version;

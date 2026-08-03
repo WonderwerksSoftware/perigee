@@ -193,6 +193,297 @@ bool Overlay::composeOverlaySurfacePatch(SDL_Surface* destination,
     return true;
 }
 
+OverlayLayerCompositor::OverlayLayerCompositor(
+        int canvasWidth,
+        int canvasHeight,
+        OverlaySurfaceDeleter surfaceDeleter) :
+    m_CanvasWidth(canvasWidth),
+    m_CanvasHeight(canvasHeight),
+    m_SurfaceDeleter(std::move(surfaceDeleter))
+{
+}
+
+OverlayLayerCompositor::~OverlayLayerCompositor()
+{
+    for (Layer& layer : m_Layers) {
+        freeSurface(layer.surface);
+    }
+}
+
+bool OverlayLayerCompositor::updateLayer(
+        OverlayType type,
+        SDL_Surface* ownedPremultipliedSurface,
+        SDL_Rect rect,
+        SDL_Surface* destination,
+        SDL_Rect* damagedRect)
+{
+    const bool validType = type >= OverlayDebug && type < OverlayMax;
+    const bool hasSurface = ownedPremultipliedSurface != nullptr;
+    const bool validDestination = destination == nullptr ||
+        (damagedRect != nullptr &&
+         destination->w == m_CanvasWidth &&
+         destination->h == m_CanvasHeight);
+    const Layer newLayer {
+        ownedPremultipliedSurface,
+        hasSurface ? rect : SDL_Rect {},
+    };
+    if (!validType || !validDestination || !validateLayer(newLayer)) {
+        freeSurface(ownedPremultipliedSurface);
+        return false;
+    }
+
+    Layer& current = m_Layers[type];
+    SDL_Rect damage {};
+    if (current.surface != nullptr && hasSurface) {
+        SDL_UnionRect(&current.rect, &rect, &damage);
+    }
+    else if (current.surface != nullptr) {
+        damage = current.rect;
+    }
+    else if (hasSurface) {
+        damage = rect;
+    }
+
+    Layer tentativeLayers[OverlayMax];
+    std::copy(std::begin(m_Layers), std::end(m_Layers), tentativeLayers);
+    tentativeLayers[type] = newLayer;
+    if (destination != nullptr &&
+            damage.w > 0 && damage.h > 0 &&
+            !composeDamage(destination, tentativeLayers, damage)) {
+        freeSurface(ownedPremultipliedSurface);
+        return false;
+    }
+
+    SDL_Surface* oldSurface = current.surface;
+    current = newLayer;
+    if (oldSurface != ownedPremultipliedSurface) {
+        freeSurface(oldSurface);
+    }
+    if (damagedRect != nullptr) {
+        *damagedRect = damage;
+    }
+    return true;
+}
+
+bool OverlayLayerCompositor::composeAll(
+        SDL_Surface* destination,
+        SDL_Rect* damagedRect) const
+{
+    if (destination == nullptr || damagedRect == nullptr ||
+            destination->w != m_CanvasWidth ||
+            destination->h != m_CanvasHeight ||
+            m_CanvasWidth <= 0 || m_CanvasHeight <= 0) {
+        return false;
+    }
+
+    const SDL_Rect fullCanvas {0, 0, m_CanvasWidth, m_CanvasHeight};
+    if (!composeDamage(destination, m_Layers, fullCanvas)) {
+        return false;
+    }
+    *damagedRect = fullCanvas;
+    return true;
+}
+
+bool OverlayLayerCompositor::validateLayer(const Layer& layer) const
+{
+    if (layer.surface == nullptr) {
+        return layer.rect.w == 0 && layer.rect.h == 0;
+    }
+
+    const SDL_Surface* surface = layer.surface;
+    if (surface->format == nullptr || surface->pixels == nullptr ||
+            surface->format->format != SDL_PIXELFORMAT_ARGB8888 ||
+            surface->format->BytesPerPixel != 4 ||
+            surface->pitch <= 0 ||
+            layer.rect.x < 0 || layer.rect.y < 0 ||
+            layer.rect.w <= 0 || layer.rect.h <= 0 ||
+            layer.rect.w != surface->w || layer.rect.h != surface->h ||
+            static_cast<int64_t>(layer.rect.x) + layer.rect.w > m_CanvasWidth ||
+            static_cast<int64_t>(layer.rect.y) + layer.rect.h > m_CanvasHeight) {
+        return false;
+    }
+
+    size_t visibleRowBytes;
+    const size_t bytesPerPixel = surface->format->BytesPerPixel;
+    if (static_cast<size_t>(surface->w) >
+            std::numeric_limits<size_t>::max() / bytesPerPixel) {
+        return false;
+    }
+    visibleRowBytes = static_cast<size_t>(surface->w) * bytesPerPixel;
+    return visibleRowBytes <= static_cast<size_t>(surface->pitch) &&
+           static_cast<size_t>(surface->h) <=
+               std::numeric_limits<size_t>::max() /
+                   static_cast<size_t>(surface->pitch);
+}
+
+bool OverlayLayerCompositor::composeDamage(
+        SDL_Surface* destination,
+        const Layer layers[OverlayMax],
+        SDL_Rect damageRect) const
+{
+    if (destination == nullptr || destination->format == nullptr ||
+            destination->pixels == nullptr ||
+            destination->format->format != SDL_PIXELFORMAT_ARGB8888 ||
+            destination->format->BytesPerPixel != 4 ||
+            destination->pitch <= 0 ||
+            destination->w != m_CanvasWidth ||
+            destination->h != m_CanvasHeight ||
+            damageRect.x < 0 || damageRect.y < 0 ||
+            damageRect.w <= 0 || damageRect.h <= 0 ||
+            static_cast<int64_t>(damageRect.x) + damageRect.w > m_CanvasWidth ||
+            static_cast<int64_t>(damageRect.y) + damageRect.h > m_CanvasHeight) {
+        return false;
+    }
+    for (int type = OverlayDebug; type < OverlayMax; type++) {
+        if (!validateLayer(layers[type])) {
+            return false;
+        }
+    }
+
+    const size_t bytesPerPixel = destination->format->BytesPerPixel;
+    const auto checkedMultiply = [](size_t left,
+                                    size_t right,
+                                    size_t* product) {
+        if (left != 0 && right > std::numeric_limits<size_t>::max() / left) {
+            return false;
+        }
+        *product = left * right;
+        return true;
+    };
+    size_t destinationVisibleRowBytes;
+    size_t destinationStorageBytes;
+    size_t patchRowBytes;
+    size_t patchBytes;
+    size_t damageXBytes;
+    if (!checkedMultiply(destination->w, bytesPerPixel,
+                         &destinationVisibleRowBytes) ||
+            !checkedMultiply(destination->pitch, destination->h,
+                             &destinationStorageBytes) ||
+            !checkedMultiply(damageRect.w, bytesPerPixel, &patchRowBytes) ||
+            !checkedMultiply(patchRowBytes, damageRect.h, &patchBytes) ||
+            !checkedMultiply(damageRect.x, bytesPerPixel, &damageXBytes) ||
+            destinationVisibleRowBytes > static_cast<size_t>(destination->pitch) ||
+            damageXBytes > static_cast<size_t>(destination->pitch) ||
+            patchRowBytes > static_cast<size_t>(destination->pitch) - damageXBytes) {
+        return false;
+    }
+
+    auto* patch = static_cast<uint8_t*>(SDL_calloc(1, patchBytes));
+    if (patch == nullptr) {
+        return false;
+    }
+
+    static_assert(OverlayDebug < OverlayStatusUpdate &&
+                  OverlayStatusUpdate < OverlayDeck,
+                  "Overlay enum order defines DRM composition z-order");
+    for (int type = OverlayDebug; type < OverlayMax; type++) {
+        const Layer& layer = layers[type];
+        if (layer.surface == nullptr) {
+            continue;
+        }
+
+        SDL_Rect intersection;
+        if (!SDL_IntersectRect(&layer.rect, &damageRect, &intersection)) {
+            continue;
+        }
+
+        const size_t sourceX = intersection.x - layer.rect.x;
+        const size_t sourceY = intersection.y - layer.rect.y;
+        const size_t patchX = intersection.x - damageRect.x;
+        const size_t patchY = intersection.y - damageRect.y;
+        const size_t sourcePitch = layer.surface->pitch;
+        for (int rowIndex = 0; rowIndex < intersection.h; rowIndex++) {
+            const auto* sourceRow =
+                static_cast<const uint8_t*>(layer.surface->pixels) +
+                (sourceY + rowIndex) * sourcePitch +
+                sourceX * bytesPerPixel;
+            auto* patchRow = patch +
+                (patchY + rowIndex) * patchRowBytes +
+                patchX * bytesPerPixel;
+            for (int columnIndex = 0;
+                 columnIndex < intersection.w;
+                 columnIndex++) {
+                uint32_t sourcePixel;
+                uint32_t destinationPixel;
+                memcpy(&sourcePixel,
+                       sourceRow + columnIndex * bytesPerPixel,
+                       sizeof(sourcePixel));
+                if ((sourcePixel & layer.surface->format->Amask) == 0) {
+                    continue;
+                }
+                if ((sourcePixel & layer.surface->format->Amask) ==
+                        layer.surface->format->Amask) {
+                    memcpy(patchRow + columnIndex * bytesPerPixel,
+                           &sourcePixel,
+                           sizeof(sourcePixel));
+                    continue;
+                }
+
+                memcpy(&destinationPixel,
+                       patchRow + columnIndex * bytesPerPixel,
+                       sizeof(destinationPixel));
+                Uint8 sourceRed, sourceGreen, sourceBlue, sourceAlpha;
+                Uint8 destinationRed, destinationGreen, destinationBlue,
+                    destinationAlpha;
+                SDL_GetRGBA(sourcePixel,
+                            layer.surface->format,
+                            &sourceRed,
+                            &sourceGreen,
+                            &sourceBlue,
+                            &sourceAlpha);
+                SDL_GetRGBA(destinationPixel,
+                            destination->format,
+                            &destinationRed,
+                            &destinationGreen,
+                            &destinationBlue,
+                            &destinationAlpha);
+                const unsigned inverseAlpha = 255 - sourceAlpha;
+                const auto overChannel = [inverseAlpha](Uint8 source,
+                                                        Uint8 destinationValue) {
+                    return static_cast<Uint8>(std::min(
+                        255u,
+                        static_cast<unsigned>(source) +
+                            (static_cast<unsigned>(destinationValue) *
+                                 inverseAlpha +
+                             127) /
+                                255));
+                };
+                const uint32_t outputPixel = SDL_MapRGBA(
+                    destination->format,
+                    overChannel(sourceRed, destinationRed),
+                    overChannel(sourceGreen, destinationGreen),
+                    overChannel(sourceBlue, destinationBlue),
+                    overChannel(sourceAlpha, destinationAlpha));
+                memcpy(patchRow + columnIndex * bytesPerPixel,
+                       &outputPixel,
+                       sizeof(outputPixel));
+            }
+        }
+    }
+
+    for (int rowIndex = 0; rowIndex < damageRect.h; rowIndex++) {
+        const size_t destinationOffset =
+            (static_cast<size_t>(damageRect.y) + rowIndex) *
+                static_cast<size_t>(destination->pitch) +
+            damageXBytes;
+        SDL_assert(destinationOffset + patchRowBytes <=
+                   destinationStorageBytes);
+        memcpy(static_cast<uint8_t*>(destination->pixels) + destinationOffset,
+               patch + static_cast<size_t>(rowIndex) * patchRowBytes,
+               patchRowBytes);
+    }
+
+    SDL_free(patch);
+    return true;
+}
+
+void OverlayLayerCompositor::freeSurface(SDL_Surface* surface) const
+{
+    if (surface != nullptr) {
+        m_SurfaceDeleter(surface);
+    }
+}
+
 void OverlayLayoutState::setSurface(int surfaceWidth,
                                     int surfaceHeight,
                                     OverlayPresentation presentation)

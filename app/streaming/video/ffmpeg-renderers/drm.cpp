@@ -157,6 +157,7 @@ DrmRenderer::DrmRenderer(AVHWDeviceType hwDeviceType, IFFmpegRenderer *backendRe
       m_SupportsDirectRendering(false),
       m_VideoFormat(0),
       m_OverlayCompositionSurface(nullptr),
+      m_OverlayCompositor(nullptr),
       m_OverlayRects{},
       m_Version(nullptr),
       m_HdrOutputMetadataBlobId(0),
@@ -174,6 +175,11 @@ DrmRenderer::~DrmRenderer()
 {
     // DRM state should be restored by the time we get here
     SDL_assert(!m_DrmStateModified);
+
+    {
+        std::lock_guard lock { m_OverlayLock };
+        m_OverlayCompositor.reset();
+    }
 
     for (int i = 0; i < k_SwFrameCount; i++) {
         if (m_SwFrame[i].primeFd) {
@@ -309,6 +315,14 @@ void DrmRenderer::prepareToRender()
                     m_OutputRect.h);
     }
 
+    {
+        std::lock_guard lock { m_OverlayLock };
+        m_OverlayCompositor = std::make_unique<Overlay::OverlayLayerCompositor>(
+            m_OutputRect.w,
+            m_OutputRect.h);
+        SDL_zero(m_OverlayRects);
+    }
+
     // Set HDMI content type to hopefully enable ALLM
     if (auto prop = m_Connector.property("content type")) {
         QString contentType = qgetenv("DRM_CONTENT_TYPE");
@@ -378,6 +392,7 @@ void DrmRenderer::prepareToRender()
     // Enter overlay composition mode if we don't have enough planes to display all the
     // possible overlays we might need, but we have at least one available
     if (m_OverlayPlanes[0].isValid() && !m_OverlayPlanes[Overlay::OverlayMax - 1].isValid()) {
+        std::lock_guard lock { m_OverlayLock };
         enterOverlayCompositionMode();
     }
 
@@ -1382,21 +1397,14 @@ Fail:
     return false;
 }
 
-void DrmRenderer::enterOverlayCompositionMode()
+bool DrmRenderer::enterOverlayCompositionMode()
 {
     if (m_OverlayCompositionSurface) {
-        return;
-    }
-
-    // Turn off all existing overlay planes
-    for (auto &overlay : m_OverlayPlanes) {
-        if (overlay.isValid()) {
-            m_PropSetter.disablePlane(overlay);
-        }
+        return true;
     }
 
     struct drm_mode_create_dumb createBuf = {};
-    uint32_t fbId;
+    uint32_t fbId = 0;
     void* mapping = nullptr;
 
     createBuf.width = m_OutputRect.w;
@@ -1407,7 +1415,7 @@ void DrmRenderer::enterOverlayCompositionMode()
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "DRM_IOCTL_MODE_CREATE_DUMB failed: %d",
                      errno);
-        return;
+        return false;
     }
 
     if (!mapDumbBuffer(createBuf.handle, createBuf.size, &mapping)) {
@@ -1416,6 +1424,40 @@ void DrmRenderer::enterOverlayCompositionMode()
 
     if (!createFbForDumbBuffer(&createBuf, &fbId)) {
         goto Fail;
+    }
+
+    // Create an SDL surface that wraps our dumb buffer mapping
+    m_OverlayCompositionSurface = SDL_CreateRGBSurfaceWithFormatFrom(mapping,
+                                                                     m_OutputRect.w,
+                                                                     m_OutputRect.h,
+                                                                     32,
+                                                                     createBuf.pitch,
+                                                                     SDL_PIXELFORMAT_ARGB8888);
+    if (m_OverlayCompositionSurface == nullptr) {
+        goto Fail;
+    }
+    m_OverlayCompositionSurface->userdata = (void*)createBuf.size;
+
+    // Disable blending to avoid costly reads of possibly WC/UC data
+    SDL_SetSurfaceBlendMode(m_OverlayCompositionSurface, SDL_BLENDMODE_NONE);
+
+    // Rebuild the complete CPU composition before exposing the buffer. This
+    // includes overlays retained while hardware planes were still active.
+    SDL_Rect damageRect;
+    if (m_OverlayCompositor == nullptr ||
+            !m_OverlayCompositor->composeAll(
+                m_OverlayCompositionSurface, &damageRect)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Failed to populate DRM overlay composition surface");
+        goto Fail;
+    }
+
+    // Turn off all existing overlay planes only after the replacement surface
+    // has been allocated and fully populated.
+    for (auto &overlay : m_OverlayPlanes) {
+        if (overlay.isValid()) {
+            m_PropSetter.disablePlane(overlay);
+        }
     }
 
     // Configure the overlay plane to cover the entire display
@@ -1431,21 +1473,17 @@ void DrmRenderer::enterOverlayCompositionMode()
     // but it won't free them until we stop streaming since we don't
     // flip this plane anymore after this.
     m_PropSetter.flipPlane(m_OverlayPlanes[0], fbId, createBuf.handle);
-
-    // Create an SDL surface that wraps our dumb buffer mapping
-    m_OverlayCompositionSurface = SDL_CreateRGBSurfaceWithFormatFrom(mapping,
-                                                                     m_OutputRect.w,
-                                                                     m_OutputRect.h,
-                                                                     32,
-                                                                     createBuf.pitch,
-                                                                     SDL_PIXELFORMAT_ARGB8888);
-    m_OverlayCompositionSurface->userdata = (void*)createBuf.size;
-
-    // Disable blending to avoid costly reads of possibly WC/UC data
-    SDL_SetSurfaceBlendMode(m_OverlayCompositionSurface, SDL_BLENDMODE_NONE);
-    return;
+    m_PropSetter.damagePlane(m_OverlayPlanes[0], damageRect);
+    return true;
 
 Fail:
+    if (m_OverlayCompositionSurface != nullptr) {
+        SDL_FreeSurface(m_OverlayCompositionSurface);
+        m_OverlayCompositionSurface = nullptr;
+    }
+    if (fbId != 0) {
+        drmModeRmFB(m_DrmFd, fbId);
+    }
     if (mapping) {
         munmap(mapping, createBuf.size);
     }
@@ -1453,46 +1491,71 @@ Fail:
     struct drm_mode_destroy_dumb destroyBuf = {};
     destroyBuf.handle = createBuf.handle;
     drmIoctl(m_DrmFd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroyBuf);
+    return false;
 }
 
-bool DrmRenderer::blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL_Surface* newSurface, SDL_Rect* overlayRect)
+SDL_Surface* DrmRenderer::createRetainedOverlaySurface(SDL_Surface* sourceSurface)
+{
+    if (sourceSurface == nullptr || sourceSurface->format == nullptr ||
+            sourceSurface->pixels == nullptr ||
+            sourceSurface->w <= 0 || sourceSurface->h <= 0 ||
+            sourceSurface->pitch <= 0) {
+        return nullptr;
+    }
+
+    SDL_Surface* retainedSurface = SDL_CreateRGBSurfaceWithFormat(
+        0,
+        sourceSurface->w,
+        sourceSurface->h,
+        32,
+        SDL_PIXELFORMAT_ARGB8888);
+    if (retainedSurface == nullptr) {
+        return nullptr;
+    }
+
+    if (SDL_PremultiplyAlpha(
+            sourceSurface->w,
+            sourceSurface->h,
+            sourceSurface->format->format,
+            sourceSurface->pixels,
+            sourceSurface->pitch,
+            retainedSurface->format->format,
+            retainedSurface->pixels,
+            retainedSurface->pitch) != 0) {
+        SDL_FreeSurface(retainedSurface);
+        return nullptr;
+    }
+
+    SDL_SetSurfaceBlendMode(retainedSurface, SDL_BLENDMODE_NONE);
+    return retainedSurface;
+}
+
+bool DrmRenderer::blitOverlayToCompositionSurface(
+        Overlay::OverlayType type,
+        SDL_Surface* ownedRetainedSurface,
+        SDL_Rect* overlayRect)
 {
     SDL_assert(m_OverlayCompositionSurface);
 
-    if (newSurface && overlayRect) {
-        // Disable blending of the source surface when blitting
-        SDL_SetSurfaceBlendMode(newSurface, SDL_BLENDMODE_NONE);
-
-        // Premultiply alpha in place, so we can blit directly into the composition surface
-        // without having to read anything (which may be very costly due to UC/WC memory)
-        SDL_PremultiplyAlpha(newSurface->w, newSurface->h,
-                             newSurface->format->format, newSurface->pixels, newSurface->pitch,
-                             newSurface->format->format, newSurface->pixels, newSurface->pitch);
-
-        SDL_Rect overlayUnionRect;
-        if (!Overlay::composeOverlaySurfacePatch(
-                m_OverlayCompositionSurface,
-                newSurface,
-                m_OverlayRects[type],
-                *overlayRect,
-                &overlayUnionRect)) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "Failed to compose overlay surface patch");
-            return false;
-        }
-
-        // Dirty the modified portion of the plane
-        m_PropSetter.damagePlane(m_OverlayPlanes[0], overlayUnionRect);
+    if (m_OverlayCompositor == nullptr) {
+        SDL_FreeSurface(ownedRetainedSurface);
+        return false;
     }
-    else {
-        // Clear the pixels where this overlay was drawn before
-        if (SDL_FillRect(
-                m_OverlayCompositionSurface, &m_OverlayRects[type], 0) != 0) {
-            return false;
-        }
 
-        // Dirty the modified portion of the plane
-        m_PropSetter.damagePlane(m_OverlayPlanes[0], m_OverlayRects[type]);
+    SDL_Rect damageRect {};
+    if (!m_OverlayCompositor->updateLayer(
+            type,
+            ownedRetainedSurface,
+            overlayRect != nullptr ? *overlayRect : SDL_Rect {},
+            m_OverlayCompositionSurface,
+            &damageRect)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Failed to update DRM overlay composition layer");
+        return false;
+    }
+
+    if (damageRect.w > 0 && damageRect.h > 0) {
+        m_PropSetter.damagePlane(m_OverlayPlanes[0], damageRect);
     }
     return true;
 }
@@ -1517,22 +1580,34 @@ void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         type, &newSurface, &presentation);
     const bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
 
-    if (!overlayEnabled || (overlayUpdated && newSurface == nullptr)) {
-        SDL_FreeSurface(newSurface);
-
-        // Turn the overlay plane off when disabling or explicitly clearing it.
-        if (m_OverlayRects[type].w || m_OverlayRects[type].h) {
-            if (m_OverlayCompositionSurface) {
-                if (!blitOverlayToCompositionSurface(type, nullptr, nullptr)) {
-                    return;
-                }
-            }
-            else if (m_OverlayPlanes[type].isValid()) {
-                m_PropSetter.disablePlane(m_OverlayPlanes[type]);
-            }
-            memset(&m_OverlayRects[type], 0, sizeof(m_OverlayRects[type]));
+    const auto clearOverlay = [this, type]() {
+        if (m_OverlayCompositor == nullptr) {
+            return false;
         }
 
+        if (m_OverlayCompositionSurface) {
+            if (!blitOverlayToCompositionSurface(type, nullptr, nullptr)) {
+                return false;
+            }
+        }
+        else {
+            if (!m_OverlayCompositor->updateLayer(
+                    type, nullptr, SDL_Rect {}, nullptr, nullptr)) {
+                return false;
+            }
+            if ((m_OverlayRects[type].w || m_OverlayRects[type].h) &&
+                    m_OverlayPlanes[type].isValid()) {
+                m_PropSetter.disablePlane(m_OverlayPlanes[type]);
+            }
+        }
+
+        SDL_zero(m_OverlayRects[type]);
+        return true;
+    };
+
+    if (!overlayEnabled || (overlayUpdated && newSurface == nullptr)) {
+        SDL_FreeSurface(newSurface);
+        clearOverlay();
         return;
     }
 
@@ -1558,17 +1633,7 @@ void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 
         if (overlayRect.w <= 0 || overlayRect.h <= 0) {
             SDL_FreeSurface(newSurface);
-            if (m_OverlayRects[type].w || m_OverlayRects[type].h) {
-                if (m_OverlayCompositionSurface) {
-                    if (!blitOverlayToCompositionSurface(type, nullptr, nullptr)) {
-                        return;
-                    }
-                }
-                else if (m_OverlayPlanes[type].isValid()) {
-                    m_PropSetter.disablePlane(m_OverlayPlanes[type]);
-                }
-                SDL_zero(m_OverlayRects[type]);
-            }
+            clearOverlay();
             return;
         }
 
@@ -1597,53 +1662,106 @@ void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
             newSurface = scaledSurface;
         }
 
+        SDL_Surface* retainedSurface = createRetainedOverlaySurface(newSurface);
+        if (retainedSurface == nullptr) {
+            SDL_FreeSurface(newSurface);
+            return;
+        }
+
+        // A previous attempt to enter composition mode may have failed during
+        // allocation. Retry before indexing an unavailable per-type plane.
+        if (!m_OverlayCompositionSurface &&
+                !m_OverlayPlanes[type].isValid() &&
+                !enterOverlayCompositionMode()) {
+            SDL_FreeSurface(retainedSurface);
+            SDL_FreeSurface(newSurface);
+            return;
+        }
+
         // Try to let the display controller composite for us
         if (!m_OverlayCompositionSurface) {
             if (!uploadSurfaceToFb(newSurface, &dumbBuffer, &fbId)) {
+                SDL_FreeSurface(retainedSurface);
                 SDL_FreeSurface(newSurface);
                 return;
             }
 
             // If we changed our overlay rect, we need to reconfigure the plane
+            bool configureOverlayPlane = false;
             if (memcmp(&m_OverlayRects[type], &overlayRect, sizeof(overlayRect)) != 0) {
                 if (m_PropSetter.testPlane(m_OverlayPlanes[type], m_Crtc.objectId(), fbId,
                                            overlayRect.x, overlayRect.y, overlayRect.w, overlayRect.h,
                                            0, 0,
                                            newSurface->w << 16,
                                            newSurface->h << 16)) {
-                    m_PropSetter.configurePlane(m_OverlayPlanes[type], m_Crtc.objectId(),
-                                                overlayRect.x, overlayRect.y, overlayRect.w, overlayRect.h,
-                                                0, 0,
-                                                newSurface->w << 16,
-                                                newSurface->h << 16);
+                    configureOverlayPlane = true;
                 }
                 else {
                     SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                                 "Switching to overlay composition mode after commit failure");
-                    enterOverlayCompositionMode();
+                    const bool enteredComposition = enterOverlayCompositionMode();
 
                     // Free the original uploaded FB and dumb buffer
                     drmModeRmFB(m_DrmFd, fbId);
                     struct drm_mode_destroy_dumb destroyBuf = {};
                     destroyBuf.handle = dumbBuffer;
                     drmIoctl(m_DrmFd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroyBuf);
+
+                    if (!enteredComposition) {
+                        SDL_FreeSurface(retainedSurface);
+                        SDL_FreeSurface(newSurface);
+                        return;
+                    }
+                }
+            }
+
+            if (!m_OverlayCompositionSurface) {
+                if (!m_OverlayCompositor->updateLayer(
+                        type,
+                        retainedSurface,
+                        overlayRect,
+                        nullptr,
+                        nullptr)) {
+                    drmModeRmFB(m_DrmFd, fbId);
+                    struct drm_mode_destroy_dumb destroyBuf = {};
+                    destroyBuf.handle = dumbBuffer;
+                    drmIoctl(m_DrmFd, DRM_IOCTL_MODE_DESTROY_DUMB,
+                             &destroyBuf);
+                    SDL_FreeSurface(newSurface);
+                    return;
+                }
+                retainedSurface = nullptr;
+
+                if (configureOverlayPlane) {
+                    m_PropSetter.configurePlane(
+                        m_OverlayPlanes[type],
+                        m_Crtc.objectId(),
+                        overlayRect.x,
+                        overlayRect.y,
+                        overlayRect.w,
+                        overlayRect.h,
+                        0,
+                        0,
+                        newSurface->w << 16,
+                        newSurface->h << 16);
                 }
             }
         }
 
         // If we're in overlay composition mode, blit this overlay into the composition surface
         if (m_OverlayCompositionSurface) {
-            if (!blitOverlayToCompositionSurface(type, newSurface, &overlayRect)) {
+            if (!blitOverlayToCompositionSurface(
+                    type, retainedSurface, &overlayRect)) {
                 SDL_FreeSurface(newSurface);
                 return;
             }
+            retainedSurface = nullptr;
         }
         else {
             // Otherwise queue the plane flip with the new FB
             //
             // NB: This takes ownership of the FB and dumb buffer, even on failure
-            m_PropSetter.flipPlane(m_OverlayCompositionSurface ? m_OverlayPlanes[0] : m_OverlayPlanes[type],
-                                   fbId, dumbBuffer);
+            m_PropSetter.flipPlane(m_OverlayPlanes[type], fbId, dumbBuffer);
         }
 
         memcpy(&m_OverlayRects[type], &overlayRect, sizeof(overlayRect));

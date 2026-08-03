@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
+#include <cstring>
 #include <mutex>
 #include <thread>
 
@@ -13,6 +15,25 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+static pid_t waitpidRetryingEintr(pid_t child, int* status, int options)
+{
+    pid_t result;
+    do {
+        result = waitpid(child, status, options);
+    } while (result < 0 && errno == EINTR);
+    return result;
+}
+
+static void terminateAndReapChild(pid_t child, int* status)
+{
+    int killResult;
+    do {
+        killResult = kill(child, SIGKILL);
+    } while (killResult < 0 && errno == EINTR);
+
+    waitpidRetryingEintr(child, status, 0);
+}
 #endif
 
 class RecordingOverlayRenderer final : public Overlay::IOverlayRenderer
@@ -93,6 +114,32 @@ private:
     QVector<int> m_ConsumedMargins;
 };
 
+static SDL_Surface* createSolidArgbSurface(int width,
+                                           int height,
+                                           quint8 red,
+                                           quint8 green,
+                                           quint8 blue)
+{
+    SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(
+        0, width, height, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (surface != nullptr) {
+        SDL_FillRect(
+            surface,
+            nullptr,
+            SDL_MapRGBA(surface->format, red, green, blue, 0xFF));
+    }
+    return surface;
+}
+
+static quint32 argbPixelAt(const SDL_Surface* surface, int x, int y)
+{
+    const auto* row = static_cast<const quint8*>(surface->pixels) +
+        y * surface->pitch;
+    quint32 pixel;
+    memcpy(&pixel, row + x * surface->format->BytesPerPixel, sizeof(pixel));
+    return pixel;
+}
+
 class OverlayLayoutTest : public QObject
 {
     Q_OBJECT
@@ -107,6 +154,9 @@ private slots:
     void serializesNotificationsPerOverlayType();
     void rendererDetachWaitsForInFlightCallback();
     void composesWideToNarrowOverlayWithinHalfOpenBounds();
+    void clearingTopLayerRestoresOverlappingBottomLayer();
+    void movingTopLayerRestoresBottomAndDrawsNewRect();
+    void rejectsOutOfBoundsLayerWithoutChangingDestination();
     void replacesPendingSurfaceAndPresentation();
     void representsNullSurfaceAsAConsumableClear();
     void consumedSurfaceOutlivesManager();
@@ -388,21 +438,29 @@ void OverlayLayoutTest::permitsSurfaceDeleterToReenterPublication()
 
     int status = 0;
     bool exited = false;
+    int waitError = 0;
     QElapsedTimer timer;
     timer.start();
     while (timer.elapsed() < 1000) {
-        const pid_t result = waitpid(child, &status, WNOHANG);
+        const pid_t result = waitpidRetryingEintr(child, &status, WNOHANG);
         if (result == child) {
             exited = true;
             break;
         }
-        QVERIFY2(result >= 0, "waitpid() failed");
+        if (result < 0) {
+            waitError = errno;
+            break;
+        }
         QTest::qWait(10);
     }
 
     if (!exited) {
-        kill(child, SIGKILL);
-        waitpid(child, &status, 0);
+        terminateAndReapChild(child, &status);
+    }
+
+    if (waitError != 0) {
+        QFAIL(qPrintable(QStringLiteral("waitpid() failed: %1")
+                             .arg(QString::fromLocal8Bit(strerror(waitError)))));
     }
 
     QVERIFY2(exited, "surface deleter deadlocked while re-entering same-type publication");
@@ -635,6 +693,142 @@ void OverlayLayoutTest::composesWideToNarrowOverlayWithinHalfOpenBounds()
     }
 
     SDL_FreeSurface(source);
+    SDL_FreeSurface(destination);
+}
+
+void OverlayLayoutTest::clearingTopLayerRestoresOverlappingBottomLayer()
+{
+    QVector<SDL_Surface*> deleted;
+    const Overlay::OverlaySurfaceDeleter deleter =
+        [&deleted](SDL_Surface* surface) {
+            deleted.push_back(surface);
+            SDL_FreeSurface(surface);
+        };
+
+    SDL_Surface* bottom = createSolidArgbSurface(8, 4, 0x80, 0x10, 0x10);
+    SDL_Surface* top = createSolidArgbSurface(4, 2, 0x10, 0x80, 0x10);
+    SDL_Surface* destination = createSolidArgbSurface(8, 4, 0, 0, 0);
+    QVERIFY(bottom != nullptr);
+    QVERIFY(top != nullptr);
+    QVERIFY(destination != nullptr);
+    const quint32 bottomPixel = argbPixelAt(bottom, 0, 0);
+    const quint32 topPixel = argbPixelAt(top, 0, 0);
+
+    {
+        Overlay::OverlayLayerCompositor compositor(8, 4, deleter);
+        SDL_Rect damage {};
+        QVERIFY(compositor.updateLayer(
+            Overlay::OverlayDebug, bottom, {0, 0, 8, 4}, nullptr, nullptr));
+        QVERIFY(compositor.updateLayer(
+            Overlay::OverlayDeck, top, {2, 1, 4, 2}, nullptr, nullptr));
+        QVERIFY(compositor.composeAll(destination, &damage));
+        QCOMPARE(damage.x, 0);
+        QCOMPARE(damage.y, 0);
+        QCOMPARE(damage.w, 8);
+        QCOMPARE(damage.h, 4);
+        QCOMPARE(argbPixelAt(destination, 3, 1), topPixel);
+
+        QVERIFY(compositor.updateLayer(
+            Overlay::OverlayDeck, nullptr, {}, destination, &damage));
+        QCOMPARE(damage.x, 2);
+        QCOMPARE(damage.y, 1);
+        QCOMPARE(damage.w, 4);
+        QCOMPARE(damage.h, 2);
+        for (int y = 0; y < destination->h; y++) {
+            for (int x = 0; x < destination->w; x++) {
+                QCOMPARE(argbPixelAt(destination, x, y), bottomPixel);
+            }
+        }
+        QCOMPARE(deleted.count(top), 1);
+        QCOMPARE(deleted.count(bottom), 0);
+    }
+
+    QCOMPARE(deleted.count(bottom), 1);
+    QCOMPARE(deleted.count(top), 1);
+    SDL_FreeSurface(destination);
+}
+
+void OverlayLayoutTest::movingTopLayerRestoresBottomAndDrawsNewRect()
+{
+    SDL_Surface* bottom = createSolidArgbSurface(8, 4, 0x70, 0x20, 0x20);
+    SDL_Surface* oldTop = createSolidArgbSurface(3, 2, 0x20, 0x70, 0x20);
+    SDL_Surface* newTop = createSolidArgbSurface(2, 2, 0x20, 0x20, 0x70);
+    SDL_Surface* destination = createSolidArgbSurface(8, 4, 0, 0, 0);
+    QVERIFY(bottom != nullptr);
+    QVERIFY(oldTop != nullptr);
+    QVERIFY(newTop != nullptr);
+    QVERIFY(destination != nullptr);
+    const quint32 bottomPixel = argbPixelAt(bottom, 0, 0);
+    const quint32 newTopPixel = argbPixelAt(newTop, 0, 0);
+
+    {
+        Overlay::OverlayLayerCompositor compositor(8, 4);
+        SDL_Rect damage {};
+        QVERIFY(compositor.updateLayer(
+            Overlay::OverlayDebug, bottom, {0, 0, 8, 4}, destination, &damage));
+        QVERIFY(compositor.updateLayer(
+            Overlay::OverlayDeck, oldTop, {1, 1, 3, 2}, destination, &damage));
+        QVERIFY(compositor.updateLayer(
+            Overlay::OverlayDeck, newTop, {5, 0, 2, 2}, destination, &damage));
+
+        QCOMPARE(damage.x, 1);
+        QCOMPARE(damage.y, 0);
+        QCOMPARE(damage.w, 6);
+        QCOMPARE(damage.h, 3);
+        for (int y = 0; y < destination->h; y++) {
+            for (int x = 0; x < destination->w; x++) {
+                const bool inNewTop = x >= 5 && x < 7 && y >= 0 && y < 2;
+                QCOMPARE(argbPixelAt(destination, x, y),
+                         inNewTop ? newTopPixel : bottomPixel);
+            }
+        }
+    }
+
+    SDL_FreeSurface(destination);
+}
+
+void OverlayLayoutTest::rejectsOutOfBoundsLayerWithoutChangingDestination()
+{
+    constexpr int width = 8;
+    constexpr int height = 4;
+    constexpr int guardWidth = 2;
+    constexpr quint32 sentinel = 0xA5A5A5A5;
+    QVector<quint32> destinationPixels(
+        (width + guardWidth) * height, sentinel);
+    const QVector<quint32> originalPixels = destinationPixels;
+    SDL_Surface* destination = SDL_CreateRGBSurfaceWithFormatFrom(
+        destinationPixels.data(),
+        width,
+        height,
+        32,
+        (width + guardWidth) * static_cast<int>(sizeof(quint32)),
+        SDL_PIXELFORMAT_ARGB8888);
+    SDL_Surface* invalidLayer = createSolidArgbSurface(2, 2, 0x60, 0x60, 0x60);
+    QVERIFY(destination != nullptr);
+    QVERIFY(invalidLayer != nullptr);
+
+    int deleteCount = 0;
+    Overlay::OverlayLayerCompositor compositor(
+        width,
+        height,
+        [&deleteCount](SDL_Surface* surface) {
+            deleteCount++;
+            SDL_FreeSurface(surface);
+        });
+    SDL_Rect damage {9, 9, 9, 9};
+    QVERIFY(!compositor.updateLayer(
+        Overlay::OverlayDeck,
+        invalidLayer,
+        {7, 1, 2, 2},
+        destination,
+        &damage));
+
+    QCOMPARE(deleteCount, 1);
+    QCOMPARE(destinationPixels, originalPixels);
+    QCOMPARE(damage.x, 9);
+    QCOMPARE(damage.y, 9);
+    QCOMPARE(damage.w, 9);
+    QCOMPARE(damage.h, 9);
     SDL_FreeSurface(destination);
 }
 

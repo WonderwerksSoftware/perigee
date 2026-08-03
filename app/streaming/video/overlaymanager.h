@@ -44,6 +44,45 @@ bool composeOverlaySurfacePatch(SDL_Surface* destination,
                                 const SDL_Rect& newRect,
                                 SDL_Rect* damagedRect);
 
+class OverlayLayerCompositor
+{
+public:
+    OverlayLayerCompositor(
+        int canvasWidth,
+        int canvasHeight,
+        OverlaySurfaceDeleter surfaceDeleter = SDL_FreeSurface);
+    ~OverlayLayerCompositor();
+
+    OverlayLayerCompositor(const OverlayLayerCompositor&) = delete;
+    OverlayLayerCompositor& operator=(const OverlayLayerCompositor&) = delete;
+
+    // Takes ownership on success and failure. Input surfaces must be ARGB8888
+    // with premultiplied alpha; enum order defines bottom-to-top layer order.
+    bool updateLayer(OverlayType type,
+                     SDL_Surface* ownedPremultipliedSurface,
+                     SDL_Rect rect,
+                     SDL_Surface* destination,
+                     SDL_Rect* damagedRect);
+    bool composeAll(SDL_Surface* destination, SDL_Rect* damagedRect) const;
+
+private:
+    struct Layer {
+        SDL_Surface* surface = nullptr;
+        SDL_Rect rect = {};
+    };
+
+    bool validateLayer(const Layer& layer) const;
+    bool composeDamage(SDL_Surface* destination,
+                       const Layer layers[OverlayMax],
+                       SDL_Rect damageRect) const;
+    void freeSurface(SDL_Surface* surface) const;
+
+    int m_CanvasWidth;
+    int m_CanvasHeight;
+    Layer m_Layers[OverlayMax];
+    OverlaySurfaceDeleter m_SurfaceDeleter;
+};
+
 class OverlayLayoutState
 {
 public:
