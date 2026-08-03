@@ -15,18 +15,33 @@ bool isBodyOrHeaderLike(const QString& input)
     }
 
     const QString lower = trimmed.toLower();
-    return lower.contains(QStringLiteral("authorization:")) ||
-           lower.contains(QStringLiteral("certificate:")) ||
-           lower.contains(QStringLiteral("clipboard:")) ||
-           lower.contains(QStringLiteral("command:")) ||
-           lower.contains(QStringLiteral("cookie:")) ||
-           lower.contains(QStringLiteral("key:")) ||
-           lower.contains(QStringLiteral("session:")) ||
-           lower.contains(QStringLiteral("set-cookie:")) ||
-           lower.contains(QStringLiteral("token:")) ||
-           lower.contains(QStringLiteral("private-key")) ||
-           lower.contains(QStringLiteral("private key")) ||
-           lower.contains(QStringLiteral("begin certificate"));
+    if (lower.contains(QStringLiteral("private-key")) ||
+            lower.contains(QStringLiteral("private key")) ||
+            lower.contains(QStringLiteral("begin certificate"))) {
+        return true;
+    }
+
+    const int colon = trimmed.indexOf(QLatin1Char(':'));
+    if (colon < 0) {
+        return false;
+    }
+    const QString headerName = trimmed.left(colon).simplified().toLower();
+    static const QStringList sensitiveHeaderTerms = {
+        QStringLiteral("authorization"),
+        QStringLiteral("certificate"),
+        QStringLiteral("clipboard"),
+        QStringLiteral("command"),
+        QStringLiteral("cookie"),
+        QStringLiteral("key"),
+        QStringLiteral("session"),
+        QStringLiteral("token"),
+    };
+    for (const QString& term : sensitiveHeaderTerms) {
+        if (headerName.contains(term)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool hasControlCharacters(const QString& input)
@@ -39,6 +54,27 @@ bool hasControlCharacters(const QString& input)
         }
     }
     return false;
+}
+
+bool isSafeQueryName(const QString& name)
+{
+    if (name.isEmpty()) {
+        return false;
+    }
+    for (const QChar character : name) {
+        const ushort code = character.unicode();
+        const bool alphaNumeric =
+            (code >= 'a' && code <= 'z') ||
+            (code >= 'A' && code <= 'Z') ||
+            (code >= '0' && code <= '9');
+        if (!alphaNumeric && character != QLatin1Char('-') &&
+                character != QLatin1Char('_') &&
+                character != QLatin1Char('.') &&
+                character != QLatin1Char('~')) {
+            return false;
+        }
+    }
+    return true;
 }
 }
 
@@ -61,6 +97,18 @@ QString PerigeeRedaction::pathForLog(const QString& input)
     const int queryIndex = withoutFragment.indexOf(QLatin1Char('?'));
     const QString rawPath = queryIndex < 0
         ? withoutFragment : withoutFragment.left(queryIndex);
+    if (!rawPath.startsWith(QLatin1Char('/')) ||
+            rawPath.contains(QLatin1Char('%')) ||
+            rawPath.contains(QLatin1Char('\\')) ||
+            rawPath.contains(QStringLiteral("//")) ||
+            parsed.path(QUrl::FullyEncoded) != rawPath) {
+        return QStringLiteral("<redacted>");
+    }
+    const QStringList rawSegments = rawPath.split(QLatin1Char('/'));
+    if (rawSegments.contains(QStringLiteral(".")) ||
+            rawSegments.contains(QStringLiteral(".."))) {
+        return QStringLiteral("<redacted>");
+    }
     QStringList segments = rawPath.split(QLatin1Char('/'));
     static const QSet<QString> sensitiveSegments = {
         QStringLiteral("authorization"),
@@ -96,7 +144,9 @@ QString PerigeeRedaction::pathForLog(const QString& input)
         redactedPairs.reserve(pairs.size());
         for (const QString& pair : pairs) {
             const int equals = pair.indexOf(QLatin1Char('='));
-            const QString name = equals < 0 ? pair : pair.left(equals);
+            const QString rawName = equals < 0 ? pair : pair.left(equals);
+            const QString name = isSafeQueryName(rawName)
+                ? rawName : QStringLiteral("<redacted>");
             redactedPairs.append(name + QStringLiteral("=<redacted>"));
         }
         result += QLatin1Char('?') + redactedPairs.join(QLatin1Char('&'));

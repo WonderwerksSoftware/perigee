@@ -116,3 +116,72 @@ used. Task 20 must verify the paired client certificate, exact server leaf,
 advertised endpoints, timeout behavior, clipboard limit, and user-visible error
 mapping against the live Polaris version. A future environment with a complete
 ThreadSanitizer runtime should repeat the transport race and teardown suite.
+
+## Fix round 1: lifecycle, TLS classification, and redaction hardening
+
+Base commit: `b74a7b16d7b327ee85fd9a2136bb974306ecc1be`
+
+The review findings were reproduced before production changes:
+
+- Host-not-found and connection-refused replies that never emitted `encrypted`
+  were both classified as `tls_identity_mismatch`: 2 passed and 2 failed.
+  Ordinary pre-TLS transport errors are now `network_error`; an explicit SSL
+  handshake failure or a no-error finish without exact encrypted identity still
+  fails as `tls_identity_mismatch`.
+- Duplicate path separators were accepted for both tested positions: 21 passed
+  and 2 failed. Canonical `/polaris/v1/` remains accepted, while interior empty
+  segments are rejected.
+- A GET carrying `CANARY_GET_BODY` reached the fake backend and completed
+  successfully: 2 passed and 1 failed. Nonempty GET bodies now fail locally as
+  `endpoint_policy_rejected`; the backend and captured log remain canary-free.
+- Cancellation returned true after both a locally queued policy result and a
+  worker-queued result: each isolated case was 2 passed and 1 failed. It also
+  returned true for already-selected callback B: 2 passed and 1 failed.
+- A recursive drain from callback A returned 1 and delivered queued C ahead of
+  already-selected B: 2 passed and 1 failed.
+- The callback-deletion behavior test was already 3 passed and 0 failed because
+  destructor cleanup happened to clear callback B, but source tracing showed
+  the outer drain still dereferenced the destroyed private object. The test is
+  retained as a behavioral guard; the implementation now removes that undefined
+  access structurally.
+- The constructor completed while another thread held `NvComputer::lock` for
+  writing: 2 passed and 1 failed. The active address, HTTPS port, and paired leaf
+  are now copied under one read lock, which is released before identity lookup,
+  backend creation, or thread startup.
+- Encoded header/path material escaped unchanged: 2 passed and 1 failed.
+  Encoded and unsafe query names also remained visible: 2 passed and 1 failed.
+  Path logging now requires a canonical origin-relative shape, rejects encoded
+  path material before vocabulary scanning, recognizes whitespace around header
+  colons, sanitizes unsafe query names, and still replaces every query value.
+
+The lifecycle rewrite uses one shared mutex for the terminal FIFO and every
+request record. A request is submitted, cancellation-requested, or
+terminal-queued under that authority. Cancellation can win exactly once only
+from submitted state. The worker and caller compete for the same terminal
+transition; a cancellation-first completion becomes one cancelled result and
+aborts the reply, while a completion-first result makes cancellation return
+false.
+
+Drain removes selected records and callbacks under the shared mutex before
+invocation, then calls user code without the mutex. A shared drain guard rejects
+recursive drains, selected callbacks are no longer cancellable, and the method
+retains only shared state before invoking callback A. If A destroys the client,
+destruction marks that state non-accepting and remaining selected callbacks are
+discarded without touching the destroyed private object.
+
+Final local results for this fix round:
+
+- Debug application and test compile/link: exit 0.
+- `PolarisApiClientTest`: 53 passed, 0 failed, 0 skipped.
+- `RedactionTest`: 8 passed, 0 failed, 0 skipped.
+- Fresh-process lifecycle/transport stress: 20 of 20 runs exited 0, for 1,060
+  test cases. No deadlock, duplicate callback, worker-thread, cross-thread, or
+  teardown warning was observed.
+- Canonical headless run: 324 passed, 11 failed, 0 skipped. The failures remain
+  exactly eight `DeckQmlTest` and three `DeckSurfaceRendererTest` instances of
+  the established `Deck OpenGL context creation failed` environment gate.
+- ThreadSanitizer remains unavailable for the documented missing
+  `/usr/lib64/libtsan.so.2.0.0` runtime. No TSan pass is claimed and no package
+  was installed.
+- No live network, Xvfb, Polaris, Sunshine, ww-DevBox, 10G, push, merge, or
+  release operation was used.

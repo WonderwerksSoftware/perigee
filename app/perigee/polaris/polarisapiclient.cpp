@@ -12,7 +12,7 @@
 #include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QQueue>
-#include <QSet>
+#include <QReadLocker>
 #include <QThread>
 #include <QTimer>
 
@@ -30,12 +30,62 @@ struct CompletionEntry
     PolarisResponse response;
 };
 
-struct SharedCompletions
+enum class RequestPhase
+{
+    Submitted,
+    CancelRequested,
+    TerminalQueued,
+};
+
+struct RequestRecord
+{
+    PolarisApiClient::Completion callback;
+    RequestPhase phase = RequestPhase::Submitted;
+};
+
+struct SharedRequestState
 {
     mutable QMutex mutex;
     QQueue<CompletionEntry> queue;
-    std::atomic_bool accepting = true;
+    QHash<PolarisApiClient::RequestId, RequestRecord> requests;
+    bool accepting = true;
+    bool draining = false;
 };
+
+enum class TerminalClaim
+{
+    Rejected,
+    Original,
+    Cancelled,
+};
+
+QString userMessageForError(const QString& errorCode);
+
+TerminalClaim queueTerminal(
+    const std::shared_ptr<SharedRequestState>& state,
+    PolarisApiClient::RequestId requestId,
+    PolarisResponse& response)
+{
+    QMutexLocker locker(&state->mutex);
+    auto iterator = state->requests.find(requestId);
+    if (!state->accepting || iterator == state->requests.end() ||
+            iterator->phase == RequestPhase::TerminalQueued) {
+        return TerminalClaim::Rejected;
+    }
+
+    TerminalClaim claim = TerminalClaim::Original;
+    if (iterator->phase == RequestPhase::CancelRequested) {
+        PolarisResponse cancelled;
+        cancelled.authenticated = response.authenticated;
+        cancelled.errorCode = QStringLiteral("cancelled");
+        cancelled.userMessage = userMessageForError(cancelled.errorCode);
+        response = std::move(cancelled);
+        claim = TerminalClaim::Cancelled;
+    }
+    iterator->phase = RequestPhase::TerminalQueued;
+    state->queue.enqueue(CompletionEntry{requestId, response});
+    return claim;
+}
 
 struct WorkerRequest
 {
@@ -144,11 +194,11 @@ public:
     PolarisNetworkWorker(
         QSslCertificate expectedLeaf, QSslConfiguration identity,
         std::unique_ptr<PolarisNetworkBackend> backend,
-        std::shared_ptr<SharedCompletions> completions)
+        std::shared_ptr<SharedRequestState> state)
         : m_ExpectedLeaf(std::move(expectedLeaf))
         , m_Identity(std::move(identity))
         , m_Backend(std::move(backend))
-        , m_Completions(std::move(completions))
+        , m_State(std::move(state))
     {
     }
 
@@ -163,17 +213,38 @@ public:
     void startRequest(WorkerRequest request)
     {
         Q_ASSERT(QThread::currentThread() == thread());
-        if (m_ShuttingDown ||
-                !m_Completions->accepting.load(std::memory_order_acquire)) {
+        RequestPhase phase = RequestPhase::TerminalQueued;
+        {
+            QMutexLocker locker(&m_State->mutex);
+            const auto iterator = m_State->requests.constFind(
+                request.requestId);
+            if (!m_State->accepting ||
+                    iterator == m_State->requests.constEnd()) {
+                return;
+            }
+            phase = iterator->phase;
+        }
+        if (m_ShuttingDown || phase == RequestPhase::TerminalQueued) {
+            return;
+        }
+        if (phase == RequestPhase::CancelRequested) {
+            PolarisResponse response;
+            response.errorCode = QStringLiteral("cancelled");
+            response.userMessage = userMessageForError(response.errorCode);
+            if (queueTerminal(m_State, request.requestId, response) !=
+                    TerminalClaim::Rejected) {
+                logCompletion(request, 0, response.errorCode, 0);
+            }
             return;
         }
         if (m_ExpectedLeaf.isNull()) {
             PolarisResponse response;
             response.errorCode = QStringLiteral("tls_identity_mismatch");
             response.userMessage = userMessageForError(response.errorCode);
-            enqueueCompletion(request.requestId, std::move(response));
-            logCompletion(request, 0,
-                          QStringLiteral("tls_identity_mismatch"), 0);
+            if (queueTerminal(m_State, request.requestId, response) !=
+                    TerminalClaim::Rejected) {
+                logCompletion(request, 0, response.errorCode, 0);
+            }
             return;
         }
 
@@ -355,10 +426,17 @@ private:
             QNetworkRequest::HttpStatusCodeAttribute).toInt();
         response.body = active->body;
         response.authenticated = active->authenticated;
-        if (!active->authenticated) {
+        const QNetworkReply::NetworkError replyError =
+            active->reply->error();
+        if (!active->authenticated &&
+                replyError != QNetworkReply::NoError &&
+                replyError != QNetworkReply::SslHandshakeFailedError) {
+            response.errorCode = QStringLiteral("network_error");
+        }
+        else if (!active->authenticated) {
             response.errorCode = QStringLiteral("tls_identity_mismatch");
         }
-        else if (active->reply->error() != QNetworkReply::NoError) {
+        else if (replyError != QNetworkReply::NoError) {
             response.errorCode = QStringLiteral("network_error");
         }
         else if (response.httpStatus < 200 || response.httpStatus >= 300) {
@@ -397,6 +475,11 @@ private:
         if (iterator == m_Active.end()) {
             return;
         }
+        const TerminalClaim claim = queueTerminal(
+            m_State, requestId, response);
+        if (claim == TerminalClaim::Cancelled) {
+            abortReply = true;
+        }
         std::unique_ptr<ActiveRequest> active = std::move(iterator->second);
         m_Active.erase(iterator);
         active->totalTimer->stop();
@@ -410,21 +493,9 @@ private:
         active->reply->deleteLater();
         delete active->totalTimer;
         delete active->idleTimer;
-        logCompletion(request, response.httpStatus,
-                      response.errorCode, elapsedMs);
-        enqueueCompletion(requestId, std::move(response));
-    }
-
-    void enqueueCompletion(PolarisApiClient::RequestId requestId,
-                           PolarisResponse response)
-    {
-        if (!m_Completions->accepting.load(std::memory_order_acquire)) {
-            return;
-        }
-        QMutexLocker locker(&m_Completions->mutex);
-        if (m_Completions->accepting.load(std::memory_order_relaxed)) {
-            m_Completions->queue.enqueue(
-                CompletionEntry{requestId, std::move(response)});
+        if (claim != TerminalClaim::Rejected) {
+            logCompletion(request, response.httpStatus,
+                          response.errorCode, elapsedMs);
         }
     }
 
@@ -444,7 +515,7 @@ private:
     QSslCertificate m_ExpectedLeaf;
     QSslConfiguration m_Identity;
     std::unique_ptr<PolarisNetworkBackend> m_Backend;
-    std::shared_ptr<SharedCompletions> m_Completions;
+    std::shared_ptr<SharedRequestState> m_State;
     QNetworkAccessManager* m_Manager = nullptr;
     std::unordered_map<PolarisApiClient::RequestId,
                        std::unique_ptr<ActiveRequest>> m_Active;
@@ -455,13 +526,10 @@ private:
 struct PolarisApiClient::Private
 {
     QUrl origin;
-    std::shared_ptr<SharedCompletions> completions =
-        std::make_shared<SharedCompletions>();
+    std::shared_ptr<SharedRequestState> state =
+        std::make_shared<SharedRequestState>();
     QThread thread;
     PolarisNetworkWorker* worker = nullptr;
-    mutable QMutex callbacksMutex;
-    QHash<RequestId, Completion> callbacks;
-    QSet<RequestId> cancelRequested;
     std::atomic<RequestId> nextRequestId = 1;
 };
 
@@ -470,15 +538,23 @@ PolarisApiClient::PolarisApiClient(
     std::unique_ptr<PolarisNetworkBackend> backend)
     : d(std::make_unique<Private>())
 {
-    d->origin = pairedOrigin(computer.activeAddress,
-                             computer.activeHttpsPort);
+    NvAddress activeAddress;
+    quint16 activeHttpsPort = 0;
+    QSslCertificate serverCert;
+    {
+        QReadLocker locker(&computer.lock);
+        activeAddress = computer.activeAddress;
+        activeHttpsPort = computer.activeHttpsPort;
+        serverCert = computer.serverCert;
+    }
+    d->origin = pairedOrigin(activeAddress, activeHttpsPort);
     QSslConfiguration identity = IdentityManager::get()->getSslConfig();
     if (!backend) {
         backend = std::make_unique<QtPolarisNetworkBackend>();
     }
     d->worker = new PolarisNetworkWorker(
-        computer.serverCert, std::move(identity),
-        std::move(backend), d->completions);
+        std::move(serverCert), std::move(identity),
+        std::move(backend), d->state);
     d->worker->moveToThread(&d->thread);
     d->thread.setObjectName(QStringLiteral("PolarisApiClientNetwork"));
     d->thread.start();
@@ -489,15 +565,12 @@ PolarisApiClient::PolarisApiClient(
 
 PolarisApiClient::~PolarisApiClient()
 {
-    d->completions->accepting.store(false, std::memory_order_release);
+    const std::shared_ptr<SharedRequestState> state = d->state;
     {
-        QMutexLocker locker(&d->callbacksMutex);
-        d->callbacks.clear();
-        d->cancelRequested.clear();
-    }
-    {
-        QMutexLocker locker(&d->completions->mutex);
-        d->completions->queue.clear();
+        QMutexLocker locker(&state->mutex);
+        state->accepting = false;
+        state->queue.clear();
+        state->requests.clear();
     }
     if (d->worker != nullptr && d->thread.isRunning()) {
         PolarisNetworkWorker* worker = d->worker;
@@ -527,10 +600,6 @@ PolarisApiClient::RequestId PolarisApiClient::request(
 {
     const RequestId requestId =
         d->nextRequestId.fetch_add(1, std::memory_order_relaxed);
-    {
-        QMutexLocker locker(&d->callbacksMutex);
-        d->callbacks.insert(requestId, std::move(completion));
-    }
 
     const QByteArray normalizedMethod = method.toUpper();
     QString errorCode;
@@ -539,19 +608,37 @@ PolarisApiClient::RequestId PolarisApiClient::request(
             normalizedMethod != QByteArrayLiteral("POST")) {
         errorCode = QStringLiteral("endpoint_policy_rejected");
     }
+    else if (normalizedMethod == QByteArrayLiteral("GET") &&
+            !body.isEmpty()) {
+        errorCode = QStringLiteral("endpoint_policy_rejected");
+    }
     else {
         url = resolveAdvertisedEndpoint(d->origin, endpoint, &errorCode);
     }
+    const std::shared_ptr<SharedRequestState> state = d->state;
     if (url.isEmpty()) {
         PolarisResponse response;
         response.errorCode = errorCode;
         response.userMessage = userMessageForError(errorCode);
-        QMutexLocker locker(&d->completions->mutex);
-        d->completions->queue.enqueue(
-            CompletionEntry{requestId, std::move(response)});
+        QMutexLocker locker(&state->mutex);
+        if (state->accepting) {
+            state->requests.insert(requestId,
+                RequestRecord{std::move(completion),
+                              RequestPhase::TerminalQueued});
+            state->queue.enqueue(
+                CompletionEntry{requestId, std::move(response)});
+        }
         return requestId;
     }
 
+    {
+        QMutexLocker locker(&state->mutex);
+        if (!state->accepting) {
+            return requestId;
+        }
+        state->requests.insert(requestId,
+            RequestRecord{std::move(completion), RequestPhase::Submitted});
+    }
     options.maxBodyBytes = std::clamp<qint64>(
         options.maxBodyBytes, 0, kAbsoluteBodyLimit);
     WorkerRequest workerRequest{requestId, normalizedMethod, url,
@@ -573,20 +660,30 @@ PolarisApiClient::RequestId PolarisApiClient::fetchClipboard(
 
     const RequestId requestId =
         d->nextRequestId.fetch_add(1, std::memory_order_relaxed);
-    {
-        QMutexLocker locker(&d->callbacksMutex);
-        d->callbacks.insert(requestId, std::move(completion));
-    }
+    const std::shared_ptr<SharedRequestState> state = d->state;
     if (d->origin.isEmpty()) {
         PolarisResponse response;
         response.errorCode = QStringLiteral("endpoint_policy_rejected");
         response.userMessage = userMessageForError(response.errorCode);
-        QMutexLocker locker(&d->completions->mutex);
-        d->completions->queue.enqueue(
-            CompletionEntry{requestId, std::move(response)});
+        QMutexLocker locker(&state->mutex);
+        if (state->accepting) {
+            state->requests.insert(requestId,
+                RequestRecord{std::move(completion),
+                              RequestPhase::TerminalQueued});
+            state->queue.enqueue(
+                CompletionEntry{requestId, std::move(response)});
+        }
         return requestId;
     }
 
+    {
+        QMutexLocker locker(&state->mutex);
+        if (!state->accepting) {
+            return requestId;
+        }
+        state->requests.insert(requestId,
+            RequestRecord{std::move(completion), RequestPhase::Submitted});
+    }
     QUrl url = d->origin;
     url.setPath(QStringLiteral("/actions/clipboard"));
     WorkerRequest workerRequest{
@@ -601,13 +698,15 @@ PolarisApiClient::RequestId PolarisApiClient::fetchClipboard(
 
 bool PolarisApiClient::cancel(RequestId requestId)
 {
+    const std::shared_ptr<SharedRequestState> state = d->state;
     {
-        QMutexLocker locker(&d->callbacksMutex);
-        if (!d->callbacks.contains(requestId) ||
-                d->cancelRequested.contains(requestId)) {
+        QMutexLocker locker(&state->mutex);
+        auto iterator = state->requests.find(requestId);
+        if (!state->accepting || iterator == state->requests.end() ||
+                iterator->phase != RequestPhase::Submitted) {
             return false;
         }
-        d->cancelRequested.insert(requestId);
+        iterator->phase = RequestPhase::CancelRequested;
     }
     QMetaObject::invokeMethod(d->worker,
         [worker = d->worker, requestId] { worker->cancel(requestId); },
@@ -620,35 +719,66 @@ int PolarisApiClient::drainCompletions(int maximum)
     if (maximum <= 0) {
         return 0;
     }
-    QList<CompletionEntry> ready;
+    struct DispatchEntry
     {
-        QMutexLocker locker(&d->completions->mutex);
+        CompletionEntry completion;
+        Completion callback;
+    };
+    const std::shared_ptr<SharedRequestState> state = d->state;
+    QList<DispatchEntry> ready;
+    {
+        QMutexLocker locker(&state->mutex);
+        if (!state->accepting || state->draining) {
+            return 0;
+        }
+        state->draining = true;
         const int count = std::min(
-            maximum, static_cast<int>(d->completions->queue.size()));
+            maximum, static_cast<int>(state->queue.size()));
         ready.reserve(count);
         for (int i = 0; i < count; ++i) {
-            ready.append(d->completions->queue.dequeue());
+            CompletionEntry completion = state->queue.dequeue();
+            auto iterator = state->requests.find(completion.requestId);
+            if (iterator == state->requests.end() ||
+                    iterator->phase != RequestPhase::TerminalQueued) {
+                continue;
+            }
+            Completion callback = std::move(iterator->callback);
+            state->requests.erase(iterator);
+            ready.append(DispatchEntry{
+                std::move(completion), std::move(callback)});
         }
     }
 
-    for (const CompletionEntry& entry : ready) {
-        Completion callback;
+    struct DrainGuard
+    {
+        std::shared_ptr<SharedRequestState> state;
+        ~DrainGuard()
         {
-            QMutexLocker locker(&d->callbacksMutex);
-            callback = d->callbacks.take(entry.requestId);
-            d->cancelRequested.remove(entry.requestId);
+            QMutexLocker locker(&state->mutex);
+            state->draining = false;
         }
-        if (callback) {
-            callback(entry.requestId, entry.response);
+    } guard{state};
+    const int drained = ready.size();
+    for (const DispatchEntry& entry : ready) {
+        {
+            QMutexLocker locker(&state->mutex);
+            if (!state->accepting) {
+                break;
+            }
+        }
+        if (entry.callback) {
+            entry.callback(entry.completion.requestId,
+                           entry.completion.response);
         }
     }
-    return ready.size();
+    return drained;
 }
 
 qsizetype PolarisApiClient::pendingCompletionCount() const
 {
-    QMutexLocker locker(&d->completions->mutex);
-    return d->completions->queue.size();
+    const std::shared_ptr<SharedRequestState> state = d->state;
+    QMutexLocker locker(&state->mutex);
+    return state->queue.size();
 }
 
 QUrl PolarisApiClient::pairedOrigin(const NvAddress& address,
@@ -687,7 +817,8 @@ QUrl PolarisApiClient::resolveAdvertisedEndpoint(const QUrl& pairedOrigin,
     const int queryIndex = endpoint.indexOf(QLatin1Char('?'));
     const QString rawPath = queryIndex < 0
         ? endpoint : endpoint.left(queryIndex);
-    if (rawPath.contains(QLatin1Char('%'))) {
+    if (rawPath.contains(QLatin1Char('%')) ||
+            rawPath.contains(QStringLiteral("//"))) {
         return rejectEndpoint(errorCode);
     }
     const QStringList pathSegments = rawPath.split(QLatin1Char('/'));

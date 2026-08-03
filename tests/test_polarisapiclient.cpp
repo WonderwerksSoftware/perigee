@@ -9,12 +9,14 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QQueue>
+#include <QSemaphore>
 #include <QThread>
 #include <QTimer>
 #include <QtTest>
 
 #include <atomic>
 #include <memory>
+#include <thread>
 
 namespace
 {
@@ -37,6 +39,7 @@ struct ReplyScript
     int delayMs = 0;
     bool emitEncrypted = true;
     bool neverFinish = false;
+    bool controlled = false;
 };
 
 struct FakeNetworkState
@@ -52,6 +55,9 @@ struct FakeNetworkState
     std::atomic_int abortCount = 0;
     std::atomic_llong bytesExposedBeforeAbort = -1;
     std::atomic_llong bytesReadByClient = 0;
+    QSemaphore replyCreated;
+    QList<QNetworkReply*> controlledReplies;
+    QNetworkAccessManager* manager = nullptr;
 };
 
 QMutex capturedMessagesMutex;
@@ -79,7 +85,12 @@ public:
         setAttribute(QNetworkRequest::HttpStatusCodeAttribute,
                      m_Script.httpStatus);
         open(QIODevice::ReadOnly | QIODevice::Unbuffered);
-        if (!m_Script.neverFinish) {
+        if (m_Script.controlled) {
+            QMutexLocker locker(&m_State->mutex);
+            m_State->controlledReplies.append(this);
+            m_State->replyCreated.release();
+        }
+        else if (!m_Script.neverFinish) {
             QTimer::singleShot(m_Script.delayMs, this,
                                [this] { beginScript(); });
         }
@@ -87,10 +98,14 @@ public:
 
     ~FakeReply() override
     {
+        QMutexLocker locker(&m_State->mutex);
+        m_State->controlledReplies.removeAll(this);
         m_State->liveReplies.fetch_sub(1);
     }
 
     QSslCertificate peerCertificate() const { return m_Script.peerCertificate; }
+
+    void finishControlled() { beginScript(); }
 
     void abort() override
     {
@@ -188,10 +203,14 @@ public:
         : QNetworkAccessManager(parent), m_State(std::move(state))
     {
         m_State->liveManagers.fetch_add(1);
+        QMutexLocker locker(&m_State->mutex);
+        m_State->manager = this;
     }
 
     ~FakeNetworkAccessManager() override
     {
+        QMutexLocker locker(&m_State->mutex);
+        m_State->manager = nullptr;
         m_State->liveManagers.fetch_sub(1);
     }
 
@@ -300,6 +319,8 @@ private slots:
     void usesIdentitySslAndDedicatedNetworkThread();
     void acceptsOnlyExactCertificateSslErrors();
     void failsClosedForMissingMismatchedAndMixedIdentity();
+    void classifiesPreTlsNetworkErrors_data();
+    void classifiesPreTlsNetworkErrors();
     void retainsStatusBodyAndClassifiesJsonAndNetworkFailures();
     void classifiesEmptyExpectedJsonAsMalformed();
     void distinguishesTimeoutCancellationAndPolicyFailure();
@@ -310,8 +331,16 @@ private slots:
     void boundsGenericResponseWithoutReadingPastFirstExcessByte();
     void postsJsonBodiesWithPairedIdentity();
     void rejectsUnsafeHttpMethodsBeforeNetworkUse();
+    void rejectsGetBodiesBeforeNetworkUse();
     void deliversExactlyOnceOnlyWhenPolled();
     void preservesStableIdsAndPolledCompletionFifo();
+    void rejectsCancellationAfterLocalTerminalQueueing();
+    void rejectsCancellationAfterWorkerTerminalQueueing();
+    void cancellationWinsBeforeControlledReplyCompletion();
+    void selectedCallbacksCannotBeCancelledOrOvertaken();
+    void recursiveDrainDoesNotOvertakeSelectedCallbacks();
+    void callbackDeletionDiscardsRemainingSelectedCallbacks();
+    void snapshotsComputerTupleUnderItsReadLock();
     void logsOnlyRedactedRequestMetadata();
     void teardownStopsWorkerAndDiscardsCallbacks();
     void teardownDiscardsQueuedCompletion();
@@ -350,6 +379,12 @@ void PolarisApiClientTest::acceptsCanonicalAdvertisedEndpoints()
              QUrl(QStringLiteral(
                  "https://[fd00::1234]:47984/polaris/v1/session/status?label=Desk%20One&token=a%2Fb")));
     QVERIFY(errorCode.isEmpty());
+
+    QCOMPARE(PolarisApiClient::resolveAdvertisedEndpoint(
+                 origin, QStringLiteral("/polaris/v1/"), &errorCode),
+             QUrl(QStringLiteral(
+                 "https://[fd00::1234]:47984/polaris/v1/")));
+    QVERIFY(errorCode.isEmpty());
 }
 
 void PolarisApiClientTest::rejectsEndpointOriginAndPathEscapes_data()
@@ -373,6 +408,8 @@ void PolarisApiClientTest::rejectsEndpointOriginAndPathEscapes_data()
         QStringLiteral("/polaris/v1/a\\b"),
         QStringLiteral("/polaris/v1/%ZZ"),
         QStringLiteral("/polaris/v1/status?value=%ZZ"),
+        QStringLiteral("/polaris/v1//session/status"),
+        QStringLiteral("/polaris/v1/session//status"),
         QStringLiteral("/polaris/v1"),
         QStringLiteral("/POLARIS/v1/status"),
         QStringLiteral("/actions/clipboard"),
@@ -478,6 +515,10 @@ void PolarisApiClientTest::failsClosedForMissingMismatchedAndMixedIdentity()
     ReplyScript missingEncrypted{200, {}, expected};
     missingEncrypted.emitEncrypted = false;
     enqueue(state, missingEncrypted);
+    ReplyScript handshakeFailure{0, {}, expected};
+    handshakeFailure.emitEncrypted = false;
+    handshakeFailure.networkError = QNetworkReply::SslHandshakeFailedError;
+    enqueue(state, handshakeFailure);
 
     PolarisApiClient nullExpected(pairedComputer(QSslCertificate()),
         std::make_unique<FakeNetworkBackend>(state));
@@ -489,18 +530,51 @@ void PolarisApiClientTest::failsClosedForMissingMismatchedAndMixedIdentity()
 
     PolarisApiClient client(pairedComputer(expected),
         std::make_unique<FakeNetworkBackend>(state));
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 5; ++i) {
         client.get(QStringLiteral("/polaris/v1/status"), false,
             [&](auto, const PolarisResponse& response) { responses << response; });
     }
-    QTRY_VERIFY_WITH_TIMEOUT(client.pendingCompletionCount() == 4, 1000);
+    QTRY_VERIFY_WITH_TIMEOUT(client.pendingCompletionCount() == 5, 1000);
     client.drainCompletions();
 
-    QCOMPARE(responses.size(), 5);
+    QCOMPARE(responses.size(), 6);
     for (const PolarisResponse& response : responses) {
         QCOMPARE(response.errorCode, QStringLiteral("tls_identity_mismatch"));
         QVERIFY(!response.authenticated);
     }
+}
+
+void PolarisApiClientTest::classifiesPreTlsNetworkErrors_data()
+{
+    QTest::addColumn<int>("networkError");
+    QTest::newRow("host-not-found")
+        << static_cast<int>(QNetworkReply::HostNotFoundError);
+    QTest::newRow("connection-refused")
+        << static_cast<int>(QNetworkReply::ConnectionRefusedError);
+}
+
+void PolarisApiClientTest::classifiesPreTlsNetworkErrors()
+{
+    QFETCH(int, networkError);
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto state = std::make_shared<FakeNetworkState>();
+    ReplyScript script{0, {}, expected};
+    script.emitEncrypted = false;
+    script.networkError =
+        static_cast<QNetworkReply::NetworkError>(networkError);
+    enqueue(state, script);
+    PolarisApiClient client(pairedComputer(expected),
+        std::make_unique<FakeNetworkBackend>(state));
+    PolarisResponse response;
+
+    client.get(QStringLiteral("/polaris/v1/status"), false,
+        [&](auto, const PolarisResponse& value) { response = value; });
+    QVERIFY(waitForCompletion(client));
+    client.drainCompletions();
+
+    QCOMPARE(response.errorCode, QStringLiteral("network_error"));
+    QVERIFY(!response.authenticated);
 }
 
 void PolarisApiClientTest::retainsStatusBodyAndClassifiesJsonAndNetworkFailures()
@@ -759,18 +833,63 @@ void PolarisApiClientTest::rejectsUnsafeHttpMethodsBeforeNetworkUse()
     enqueue(state, ReplyScript(200, {}, expected));
     PolarisApiClient client(pairedComputer(expected),
         std::make_unique<FakeNetworkBackend>(state));
-    PolarisResponse response;
+    QList<PolarisResponse> responses;
+    const QList<QByteArray> unsafeMethods = {
+        QByteArrayLiteral("GET\nCANARY_METHOD_INJECTION"),
+        QByteArrayLiteral(" GET"),
+        QByteArrayLiteral("GET "),
+        QByteArrayLiteral("G\tET"),
+    };
+    for (const QByteArray& method : unsafeMethods) {
+        client.request(method, QStringLiteral("/polaris/v1/status"), {}, false,
+            [&](auto, const PolarisResponse& value) {
+                responses.append(value);
+            });
+    }
+    QCOMPARE(client.pendingCompletionCount(), unsafeMethods.size());
+    QCOMPARE(client.drainCompletions(), unsafeMethods.size());
 
-    client.request(QByteArrayLiteral("GET\nCANARY_METHOD_INJECTION"),
-        QStringLiteral("/polaris/v1/status"), {}, false,
+    QCOMPARE(responses.size(), unsafeMethods.size());
+    for (const PolarisResponse& response : responses) {
+        QCOMPARE(response.errorCode,
+                 QStringLiteral("endpoint_policy_rejected"));
+    }
+    QMutexLocker locker(&state->mutex);
+    QVERIFY(state->requests.isEmpty());
+}
+
+void PolarisApiClientTest::rejectsGetBodiesBeforeNetworkUse()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto state = std::make_shared<FakeNetworkState>();
+    enqueue(state, ReplyScript(200, {}, expected));
+    PolarisApiClient client(pairedComputer(expected),
+        std::make_unique<FakeNetworkBackend>(state));
+    PolarisResponse response;
+    const QByteArray body = QByteArrayLiteral("CANARY_GET_BODY");
+    {
+        QMutexLocker locker(&capturedMessagesMutex);
+        capturedMessages.clear();
+    }
+    const QtMessageHandler previous = qInstallMessageHandler(captureMessage);
+
+    const auto id = client.request(QByteArrayLiteral("get"),
+        QStringLiteral("/polaris/v1/status"), body, false,
         [&](auto, const PolarisResponse& value) { response = value; });
     QVERIFY(waitForCompletion(client));
     client.drainCompletions();
+    qInstallMessageHandler(previous);
 
     QCOMPARE(response.errorCode,
              QStringLiteral("endpoint_policy_rejected"));
-    QMutexLocker locker(&state->mutex);
+    QVERIFY(!client.cancel(id));
+    QMutexLocker stateLocker(&state->mutex);
     QVERIFY(state->requests.isEmpty());
+    stateLocker.unlock();
+    QMutexLocker messageLocker(&capturedMessagesMutex);
+    QVERIFY(!capturedMessages.join(QLatin1Char('\n')).contains(
+        QString::fromLatin1(body)));
 }
 
 void PolarisApiClientTest::deliversExactlyOnceOnlyWhenPolled()
@@ -826,6 +945,240 @@ void PolarisApiClientTest::preservesStableIdsAndPolledCompletionFifo()
     QCOMPARE(client.pendingCompletionCount(), 1);
     QCOMPARE(client.drainCompletions(2), 1);
     QCOMPARE(callbackIds, requestIds);
+}
+
+void PolarisApiClientTest::rejectsCancellationAfterLocalTerminalQueueing()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto state = std::make_shared<FakeNetworkState>();
+    PolarisApiClient client(pairedComputer(expected),
+        std::make_unique<FakeNetworkBackend>(state));
+    PolarisResponse response;
+
+    const auto localId = client.get(
+        QStringLiteral("https://evil.invalid/polaris/v1/status"), false,
+        [&](auto, const PolarisResponse& value) {
+            response = value;
+        });
+    QVERIFY(!client.cancel(localId));
+    QCOMPARE(client.drainCompletions(), 1);
+    QCOMPARE(response.errorCode,
+             QStringLiteral("endpoint_policy_rejected"));
+}
+
+void PolarisApiClientTest::rejectsCancellationAfterWorkerTerminalQueueing()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto state = std::make_shared<FakeNetworkState>();
+    ReplyScript controlled{200, {}, expected};
+    controlled.controlled = true;
+    enqueue(state, controlled);
+    PolarisApiClient client(pairedComputer(expected),
+        std::make_unique<FakeNetworkBackend>(state));
+    PolarisResponse response;
+
+    const auto workerId = client.get(QStringLiteral("/polaris/v1/status"), false,
+        [&](auto, const PolarisResponse& value) {
+            response = value;
+        });
+    QVERIFY(state->replyCreated.tryAcquire(1, 1000));
+    FakeReply* reply = nullptr;
+    {
+        QMutexLocker locker(&state->mutex);
+        reply = static_cast<FakeReply*>(state->controlledReplies.constFirst());
+    }
+    QVERIFY(QMetaObject::invokeMethod(reply,
+        [reply] { reply->finishControlled(); },
+        Qt::BlockingQueuedConnection));
+    QCOMPARE(client.pendingCompletionCount(), 1);
+    QVERIFY(!client.cancel(workerId));
+    QCOMPARE(client.drainCompletions(), 1);
+    QVERIFY(response.errorCode.isEmpty());
+}
+
+void PolarisApiClientTest::cancellationWinsBeforeControlledReplyCompletion()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto state = std::make_shared<FakeNetworkState>();
+    ReplyScript controlled{200, {QByteArrayLiteral("late")}, expected};
+    controlled.controlled = true;
+    enqueue(state, controlled);
+    PolarisApiClient client(pairedComputer(expected),
+        std::make_unique<FakeNetworkBackend>(state));
+    QList<PolarisResponse> responses;
+
+    const auto id = client.get(QStringLiteral("/polaris/v1/status"), false,
+        [&](auto, const PolarisResponse& response) {
+            responses.append(response);
+        });
+    QVERIFY(state->replyCreated.tryAcquire(1, 1000));
+    QVERIFY(client.cancel(id));
+    QVERIFY(!client.cancel(id));
+    QNetworkAccessManager* manager = nullptr;
+    {
+        QMutexLocker locker(&state->mutex);
+        manager = state->manager;
+    }
+    QVERIFY(QMetaObject::invokeMethod(manager, [] {},
+                                     Qt::BlockingQueuedConnection));
+
+    QCOMPARE(client.pendingCompletionCount(), 1);
+    QCOMPARE(client.drainCompletions(), 1);
+    QCOMPARE(responses.size(), 1);
+    QCOMPARE(responses.first().errorCode, QStringLiteral("cancelled"));
+    QCOMPARE(state->abortCount.load(), 1);
+    QCOMPARE(client.drainCompletions(), 0);
+}
+
+void PolarisApiClientTest::selectedCallbacksCannotBeCancelledOrOvertaken()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto state = std::make_shared<FakeNetworkState>();
+    for (int i = 0; i < 2; ++i) {
+        ReplyScript controlled{200, {}, expected};
+        controlled.controlled = true;
+        enqueue(state, controlled);
+    }
+    PolarisApiClient client(pairedComputer(expected),
+        std::make_unique<FakeNetworkBackend>(state));
+    QList<QString> order;
+    bool selectedCancelResult = true;
+    int recursiveDrainResult = -1;
+    PolarisApiClient::RequestId secondId = 0;
+    client.get(QStringLiteral("/polaris/v1/first"), false,
+        [&](auto, const PolarisResponse&) {
+            order.append(QStringLiteral("A"));
+            selectedCancelResult = client.cancel(secondId);
+            recursiveDrainResult = client.drainCompletions();
+        });
+    secondId = client.get(QStringLiteral("/polaris/v1/second"), false,
+        [&](auto, const PolarisResponse&) { order.append(QStringLiteral("B")); });
+
+    QVERIFY(state->replyCreated.tryAcquire(2, 1000));
+    QList<FakeReply*> replies;
+    {
+        QMutexLocker locker(&state->mutex);
+        for (QNetworkReply* reply : state->controlledReplies) {
+            replies.append(static_cast<FakeReply*>(reply));
+        }
+    }
+    QCOMPARE(replies.size(), 2);
+    for (FakeReply* reply : replies) {
+        QVERIFY(QMetaObject::invokeMethod(reply,
+            [reply] { reply->finishControlled(); },
+            Qt::BlockingQueuedConnection));
+    }
+    client.get(QStringLiteral("https://evil.invalid/polaris/v1/third"), false,
+        [&](auto, const PolarisResponse&) { order.append(QStringLiteral("C")); });
+    QCOMPARE(client.pendingCompletionCount(), 3);
+
+    QCOMPARE(client.drainCompletions(2), 2);
+    QVERIFY(!selectedCancelResult);
+    QCOMPARE(recursiveDrainResult, 0);
+    QCOMPARE(order, QList<QString>({QStringLiteral("A"),
+                                   QStringLiteral("B")}));
+    QCOMPARE(client.pendingCompletionCount(), 1);
+    QCOMPARE(client.drainCompletions(), 1);
+    QCOMPARE(order, QList<QString>({QStringLiteral("A"),
+                                   QStringLiteral("B"),
+                                   QStringLiteral("C")}));
+}
+
+void PolarisApiClientTest::recursiveDrainDoesNotOvertakeSelectedCallbacks()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto state = std::make_shared<FakeNetworkState>();
+    PolarisApiClient client(pairedComputer(expected),
+        std::make_unique<FakeNetworkBackend>(state));
+    QList<QString> order;
+    int recursiveDrainResult = -1;
+    client.get(QStringLiteral("https://evil.invalid/polaris/v1/first"), false,
+        [&](auto, const PolarisResponse&) {
+            order.append(QStringLiteral("A"));
+            recursiveDrainResult = client.drainCompletions();
+        });
+    client.get(QStringLiteral("https://evil.invalid/polaris/v1/second"), false,
+        [&](auto, const PolarisResponse&) { order.append(QStringLiteral("B")); });
+    client.get(QStringLiteral("https://evil.invalid/polaris/v1/third"), false,
+        [&](auto, const PolarisResponse&) { order.append(QStringLiteral("C")); });
+
+    QCOMPARE(client.drainCompletions(2), 2);
+    QCOMPARE(recursiveDrainResult, 0);
+    QCOMPARE(order, QList<QString>({QStringLiteral("A"),
+                                   QStringLiteral("B")}));
+    QCOMPARE(client.pendingCompletionCount(), 1);
+    QCOMPARE(client.drainCompletions(), 1);
+    QCOMPARE(order, QList<QString>({QStringLiteral("A"),
+                                   QStringLiteral("B"),
+                                   QStringLiteral("C")}));
+}
+
+void PolarisApiClientTest::callbackDeletionDiscardsRemainingSelectedCallbacks()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto state = std::make_shared<FakeNetworkState>();
+    int firstCallbacks = 0;
+    int secondCallbacks = 0;
+    auto* client = new PolarisApiClient(pairedComputer(expected),
+        std::make_unique<FakeNetworkBackend>(state));
+    PolarisApiClient* ownedClient = client;
+    client->get(QStringLiteral("https://evil.invalid/polaris/v1/first"), false,
+        [&, ownedClient](auto, const PolarisResponse&) {
+            ++firstCallbacks;
+            delete ownedClient;
+            client = nullptr;
+        });
+    client->get(QStringLiteral("https://evil.invalid/polaris/v1/second"), false,
+        [&](auto, const PolarisResponse&) { ++secondCallbacks; });
+
+    QCOMPARE(client->pendingCompletionCount(), 2);
+    client->drainCompletions(2);
+
+    QCOMPARE(client, nullptr);
+    QCOMPARE(firstCallbacks, 1);
+    QCOMPARE(secondCallbacks, 0);
+    QCOMPARE(state->liveManagers.load(), 0);
+}
+
+void PolarisApiClientTest::snapshotsComputerTupleUnderItsReadLock()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    NvComputer computer = pairedComputer(expected);
+    auto state = std::make_shared<FakeNetworkState>();
+    QSemaphore ready;
+    QSemaphore start;
+    QSemaphore finished;
+    std::thread constructorThread([&] {
+        ready.release();
+        start.acquire();
+        {
+            PolarisApiClient client(computer,
+                std::make_unique<FakeNetworkBackend>(state));
+        }
+        finished.release();
+    });
+
+    const bool readyObserved = ready.tryAcquire(1, 1000);
+    computer.lock.lockForWrite();
+    start.release();
+    const bool finishedWhileWriteLocked = finished.tryAcquire(1, 250);
+    computer.lock.unlock();
+    bool finishedAfterUnlock = true;
+    if (!finishedWhileWriteLocked) {
+        finishedAfterUnlock = finished.tryAcquire(1, 1000);
+    }
+    constructorThread.join();
+
+    QVERIFY(readyObserved);
+    QVERIFY(finishedAfterUnlock);
+    QVERIFY(!finishedWhileWriteLocked);
 }
 
 void PolarisApiClientTest::logsOnlyRedactedRequestMetadata()

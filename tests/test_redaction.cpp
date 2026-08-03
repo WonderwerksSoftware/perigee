@@ -11,6 +11,8 @@ private slots:
     void redactsAllQueryValuesAndDropsFragments();
     void redactsSensitivePathValuesAndRejectsBodyLikeInput();
     void redactsSessionValuesAndSensitiveHeaderLikeInput();
+    void failsClosedForEncodedPathAndHeaderMaterial();
+    void sanitizesUnsafeQueryNamesAndRedactsEncodedValues();
     void removesControlCharactersAndLogInjection();
 };
 
@@ -64,6 +66,40 @@ void RedactionTest::redactsSessionValuesAndSensitiveHeaderLikeInput()
     QCOMPARE(PerigeeRedaction::pathForLog(
                  QStringLiteral("Token: CANARY_TOKEN_HEADER")),
              QStringLiteral("<redacted>"));
+}
+
+void RedactionTest::failsClosedForEncodedPathAndHeaderMaterial()
+{
+    QCOMPARE(PerigeeRedaction::pathForLog(
+                 QStringLiteral("Authorization%3A%20Bearer%20CANARY_HEADER")),
+             QStringLiteral("<redacted>"));
+    QCOMPARE(PerigeeRedaction::pathForLog(
+                 QStringLiteral("/polaris/v1/comm%61nds/CANARY_COMMAND")),
+             QStringLiteral("<redacted>"));
+    QCOMPARE(PerigeeRedaction::pathForLog(
+                 QStringLiteral("Authorization   : Bearer CANARY_HEADER")),
+             QStringLiteral("<redacted>"));
+    QCOMPARE(PerigeeRedaction::pathForLog(
+                 QStringLiteral("polaris/v1/status?token=CANARY_TOKEN")),
+             QStringLiteral("<redacted>"));
+}
+
+void RedactionTest::sanitizesUnsafeQueryNamesAndRedactsEncodedValues()
+{
+    QCOMPARE(PerigeeRedaction::pathForLog(
+                 QStringLiteral("/polaris/v1/status?label=Desk%20One")),
+             QStringLiteral(
+                 "/polaris/v1/status?label=<redacted>"));
+
+    const QString redacted = PerigeeRedaction::pathForLog(
+        QStringLiteral("/polaris/v1/status?to%6ben=CANARY_TOKEN&"
+                       "bad/name=CANARY_NAME"));
+    QCOMPARE(redacted,
+             QStringLiteral("/polaris/v1/status?"
+                            "<redacted>=<redacted>&"
+                            "<redacted>=<redacted>"));
+    QVERIFY(!redacted.contains(QStringLiteral("CANARY")));
+    QVERIFY(!redacted.contains(QLatin1Char('%')));
 }
 
 void RedactionTest::removesControlCharactersAndLogInjection()
