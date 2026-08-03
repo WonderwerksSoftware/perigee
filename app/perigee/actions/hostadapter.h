@@ -7,6 +7,7 @@
 #include <QVariantMap>
 
 #include <functional>
+#include <optional>
 #include <utility>
 
 class ActionRegistry;
@@ -18,6 +19,10 @@ public:
         : m_Parameters(std::move(parameters))
     {
     }
+    ActionInvocation(const ActionInvocation&) = delete;
+    ActionInvocation& operator=(const ActionInvocation&) = delete;
+    ActionInvocation(ActionInvocation&&) = default;
+    ActionInvocation& operator=(ActionInvocation&&) = default;
 
     const QVariantMap& parameters() const { return m_Parameters; }
     bool confirmationGrantedFor(const QString& actionId) const
@@ -28,14 +33,18 @@ public:
 private:
     friend class ActionRegistry;
 
-    ActionInvocation(QVariantMap parameters, QString confirmedActionId)
+    ActionInvocation(QVariantMap parameters,
+                     QString confirmedActionId,
+                     ActionState confirmedState)
         : m_Parameters(std::move(parameters))
         , m_ConfirmedActionId(std::move(confirmedActionId))
+        , m_ConfirmedState(std::move(confirmedState))
     {
     }
 
     QVariantMap m_Parameters;
     QString m_ConfirmedActionId;
+    std::optional<ActionState> m_ConfirmedState;
 };
 
 struct HostSnapshot {
@@ -52,8 +61,12 @@ public:
     virtual ~HostAdapter() = default;
 
     virtual HostSnapshot snapshot() = 0;
-    virtual void execute(const QString& actionId,
-                         const ActionInvocation& invocation,
-                         Completion completion) = 0;
     virtual void cancel(const QString& resourceKey) = 0;
+
+private:
+    friend class ActionRegistry;
+
+    virtual void execute(const QString& actionId,
+                         QVariantMap parameters,
+                         Completion completion) = 0;
 };

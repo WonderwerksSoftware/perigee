@@ -202,6 +202,69 @@ Final build and stability results:
 - No Xvfb, ww-DevBox, live network, Polaris, Sunshine, or 10G path was used in
   this fix round.
 
+## Fix round 2: confirmation state and truthful evidence
+
+Base commit: `8eb8c069aa384225d35749ac5ac0dacf9e7f6792`
+
+The review findings were reproduced before each production fix:
+
+- A direct caller could pass a safe risk value for an action that the adapter
+  reported as disruptive. The RED run was 2 passed and 1 failed because the
+  action executed without confirmation. `WhenDisruptive` now reads risk only
+  from the current authoritative `ActionState`; the public confirmation API no
+  longer accepts a caller-supplied risk flag.
+- A failed `beginConfirmation()` left a prior grant usable. The three RED data
+  rows for a non-confirming, unknown, and disabled action each retained the old
+  grant. Every begin attempt now clears pending authority before validation,
+  while a successful begin replaces the prior action.
+- `ActionInvocation` and the adapter dispatch surface allowed confirmation
+  authority to be copied or retained. Compile-time RED assertions showed that
+  the invocation was copyable and both adapter execute methods were public.
+  The invocation is now move-only, confirmed construction remains private to
+  `ActionRegistry`, and adapters receive only owned parameters through a
+  private friend dispatch method.
+- Terminal success and failure evidence stayed visible after authoritative
+  state changed. The RED adapter run was 22 passed and 4 failed, and a compile
+  assertion failed because `ActionResult` had no structured observation. The
+  result now carries an optional machine-readable `ActionState` baseline.
+  Terminal evidence is invalidated when visible, enabled, disruptive, value,
+  disabled code, or disabled reason changes. Working and resource-busy state
+  are not invalidated by this rule.
+- Availability drift received a separate mutation proof: with availability
+  fields removed from the comparison, the focused test was 2 passed and 1
+  failed with stale `Succeeded` evidence. Restoring the full authoritative
+  comparison produced 3 passed and 0 failed.
+
+The public registry boundary preserves structured failure codes:
+`session_unavailable`, `action_unavailable`, `capability_unavailable`,
+`permission_denied`, and `state_changed` for a consumed confirmation whose
+authoritative fingerprint changed.
+
+Final focused results:
+
+- `GameStreamAdapterTest`: 26 passed, 0 failed.
+- `SessionExitIntentTest`: 10 passed, 0 failed.
+- `InputIntegrationTest`: 34 passed, 0 failed.
+- `ActionRegistryTest`: 30 passed, 0 failed.
+- `DeckControllerTest`: 18 passed, 0 failed.
+- `DeckInputRouterTest`: 35 passed, 0 failed.
+- `DeckQmlTest::actionRowRendersSucceededEvidence`: 3 passed, 0 failed.
+
+Final build and stability results:
+
+- Debug application compile and link: exit 0.
+- Debug test compile and link: exit 0.
+- QML lint: exit 0 with the established unqualified-access warnings only.
+- Fresh-process stress: 20 of 20 adapter runs and 10 of 10 input-integration
+  runs exited 0.
+- Monolithic dummy-SDL/offscreen run: 242 passed and the exact 11 established
+  environment-only OpenGL context failures: eight in `DeckQmlTest` and three
+  in `DeckSurfaceRendererTest`. All non-renderer classes passed.
+- The writable build cache was `/tmp/perigee-ccache`; the default home cache
+  is read-only in this sandbox.
+- No Xvfb, ww-DevBox, live network, Polaris, Sunshine, or 10G path was used in
+  this fix round.
+
 ## Live-smoke status and residual concerns
 
 No ww-DevBox, homelab key, Polaris endpoint, Sunshine host, or 10G interface

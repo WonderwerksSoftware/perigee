@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace {
@@ -61,6 +62,7 @@ ActionState evaluateSnapshotState(const ActionDescriptor& descriptor,
     if (!descriptor.requiredCapability.isEmpty()
             && !snapshot.advertisedCapabilities.contains(descriptor.requiredCapability)) {
         current.enabled = false;
+        current.disabledCode = QStringLiteral("capability_unavailable");
         current.disabledReason = QStringLiteral(
                 "The connected host does not advertise this capability.");
         return current;
@@ -69,9 +71,34 @@ ActionState evaluateSnapshotState(const ActionDescriptor& descriptor,
     if ((snapshot.grantedPermissions & descriptor.requiredPermissions)
             != descriptor.requiredPermissions) {
         current.enabled = false;
+        current.disabledCode = QStringLiteral("permission_denied");
         current.disabledReason = QStringLiteral("This paired client lacks permission.");
     }
     return current;
+}
+
+bool confirmationRequired(const ActionDescriptor& descriptor,
+                          const ActionState& state)
+{
+    switch (descriptor.confirmation) {
+    case ConfirmationPolicy::Never:
+        return false;
+    case ConfirmationPolicy::Always:
+        return true;
+    case ConfirmationPolicy::WhenDisruptive:
+        return state.disruptive;
+    }
+    return false;
+}
+
+bool sameAuthoritativeState(const ActionState& left, const ActionState& right)
+{
+    return left.visible == right.visible &&
+            left.enabled == right.enabled &&
+            left.disruptive == right.disruptive &&
+            left.value == right.value &&
+            left.disabledCode == right.disabledCode &&
+            left.disabledReason == right.disabledReason;
 }
 
 }
@@ -80,12 +107,18 @@ struct ActionRegistry::RuntimeState {
     struct Progress {
         ActionPhase phase = ActionPhase::Idle;
         QString message;
+        std::optional<ActionState> observedState;
+    };
+
+    struct PendingConfirmation {
+        QString actionId;
+        ActionState state;
     };
 
     QMutex mutex;
     QHash<QString, Progress> progressByAction;
     QHash<QString, QString> actionByResource;
-    QString pendingConfirmationActionId;
+    std::optional<PendingConfirmation> pendingConfirmation;
 };
 
 ActionRegistry::ActionRegistry(QVector<ActionDescriptor> descriptors, HostAdapter& adapter)
@@ -150,10 +183,21 @@ ActionState ActionRegistry::state(const QString& actionId)
 
     ActionState current = evaluateSnapshotState(*descriptorIt, m_Adapter.snapshot());
     QMutexLocker locker(&m_RuntimeState->mutex);
-    const auto progressIt = m_RuntimeState->progressByAction.constFind(actionId);
-    if (progressIt != m_RuntimeState->progressByAction.cend()) {
-        current.phase = progressIt->phase;
-        current.message = progressIt->message;
+    auto progressIt = m_RuntimeState->progressByAction.find(actionId);
+    if (progressIt != m_RuntimeState->progressByAction.end()) {
+        const bool terminal = progressIt->phase == ActionPhase::Succeeded ||
+                progressIt->phase == ActionPhase::Failed;
+        if (terminal && progressIt->observedState.has_value() &&
+                !sameAuthoritativeState(current, *progressIt->observedState)) {
+            m_RuntimeState->progressByAction.erase(progressIt);
+        }
+        else {
+            if (terminal && !progressIt->observedState.has_value()) {
+                progressIt->observedState = current;
+            }
+            current.phase = progressIt->phase;
+            current.message = progressIt->message;
+        }
     }
     if (!descriptorIt->resourceKey.isEmpty()
             && m_RuntimeState->actionByResource.contains(descriptorIt->resourceKey)) {
@@ -168,7 +212,7 @@ ActionState ActionRegistry::state(const QString& actionId)
     return current;
 }
 
-bool ActionRegistry::requiresConfirmation(const QString& actionId, bool disruptive) const
+bool ActionRegistry::requiresConfirmation(const QString& actionId) const
 {
     const auto descriptorIt = std::find_if(m_Descriptors.cbegin(), m_Descriptors.cend(),
                                            [&actionId](const ActionDescriptor& descriptor) {
@@ -178,54 +222,52 @@ bool ActionRegistry::requiresConfirmation(const QString& actionId, bool disrupti
         return false;
     }
 
-    switch (descriptorIt->confirmation) {
-    case ConfirmationPolicy::Never:
-        return false;
-    case ConfirmationPolicy::Always:
-        return true;
-    case ConfirmationPolicy::WhenDisruptive:
-        return disruptive;
-    }
-    return false;
+    const ActionState current = evaluateSnapshotState(
+        *descriptorIt, m_Adapter.snapshot());
+    return confirmationRequired(*descriptorIt, current);
 }
 
-bool ActionRegistry::beginConfirmation(const QString& actionId, bool disruptive)
+bool ActionRegistry::beginConfirmation(const QString& actionId)
 {
-    if (!requiresConfirmation(actionId, disruptive)) {
-        return false;
-    }
+    cancelConfirmation();
 
     const auto descriptorIt = std::find_if(m_Descriptors.cbegin(), m_Descriptors.cend(),
                                            [&actionId](const ActionDescriptor& descriptor) {
         return descriptor.id == actionId;
     });
-    if (descriptorIt == m_Descriptors.cend() ||
-            !evaluateSnapshotState(*descriptorIt, m_Adapter.snapshot()).enabled) {
+    if (descriptorIt == m_Descriptors.cend()) {
+        return false;
+    }
+    const ActionState current = evaluateSnapshotState(
+        *descriptorIt, m_Adapter.snapshot());
+    if (!current.enabled || !confirmationRequired(*descriptorIt, current)) {
         return false;
     }
 
     QMutexLocker locker(&m_RuntimeState->mutex);
-    m_RuntimeState->pendingConfirmationActionId = actionId;
+    m_RuntimeState->pendingConfirmation =
+        RuntimeState::PendingConfirmation {actionId, current};
     return true;
 }
 
 void ActionRegistry::cancelConfirmation()
 {
     QMutexLocker locker(&m_RuntimeState->mutex);
-    m_RuntimeState->pendingConfirmationActionId.clear();
+    m_RuntimeState->pendingConfirmation.reset();
 }
 
 void ActionRegistry::acceptConfirmation(const QString& actionId,
                                         const QVariantMap& parameters,
                                         HostAdapter::Completion completion)
 {
-    bool confirmationMatches = false;
+    std::optional<RuntimeState::PendingConfirmation> pendingConfirmation;
     {
         QMutexLocker locker(&m_RuntimeState->mutex);
-        confirmationMatches = m_RuntimeState->pendingConfirmationActionId == actionId;
-        m_RuntimeState->pendingConfirmationActionId.clear();
+        pendingConfirmation = std::move(m_RuntimeState->pendingConfirmation);
+        m_RuntimeState->pendingConfirmation.reset();
     }
-    if (!confirmationMatches) {
+    if (!pendingConfirmation.has_value() ||
+            pendingConfirmation->actionId != actionId) {
         if (completion) {
             completion({false, {}, QStringLiteral("confirmation_required"),
                         QStringLiteral("Confirm this action before continuing.")});
@@ -234,7 +276,8 @@ void ActionRegistry::acceptConfirmation(const QString& actionId,
     }
 
     executeInvocation(actionId,
-                      ActionInvocation(parameters, actionId),
+                      ActionInvocation(parameters, actionId,
+                                       std::move(pendingConfirmation->state)),
                       std::move(completion));
 }
 
@@ -259,7 +302,7 @@ void ActionRegistry::executeInvocation(const QString& actionId,
         const ActionResult result {
             false,
             {},
-            QStringLiteral("state_changed"),
+            QStringLiteral("action_unavailable"),
             QStringLiteral("Action is unavailable."),
         };
         if (completion) {
@@ -268,7 +311,18 @@ void ActionRegistry::executeInvocation(const QString& actionId,
         return;
     }
 
-    if (requiresConfirmation(actionId, false) &&
+    const ActionState current = evaluateSnapshotState(*descriptorIt, m_Adapter.snapshot());
+    if (invocation.confirmationGrantedFor(actionId) &&
+            (!invocation.m_ConfirmedState.has_value() ||
+             !sameAuthoritativeState(current, *invocation.m_ConfirmedState))) {
+        if (completion) {
+            completion({false, {}, QStringLiteral("state_changed"),
+                        QStringLiteral("Action state changed after confirmation.")});
+        }
+        return;
+    }
+
+    if (confirmationRequired(*descriptorIt, current) &&
             !invocation.confirmationGrantedFor(actionId)) {
         if (completion) {
             completion({false, {}, QStringLiteral("confirmation_required"),
@@ -277,12 +331,13 @@ void ActionRegistry::executeInvocation(const QString& actionId,
         return;
     }
 
-    const ActionState current = evaluateSnapshotState(*descriptorIt, m_Adapter.snapshot());
     if (!current.enabled) {
         const ActionResult result {
             false,
             {},
-            QStringLiteral("state_changed"),
+            current.disabledCode.isEmpty()
+                ? QStringLiteral("state_changed")
+                : current.disabledCode,
             current.disabledReason,
         };
         if (completion) {
@@ -316,7 +371,7 @@ void ActionRegistry::executeInvocation(const QString& actionId,
             m_RuntimeState->actionByResource.insert(descriptorIt->resourceKey, actionId);
         }
         m_RuntimeState->progressByAction.insert(
-                actionId, { ActionPhase::Working, {} });
+                actionId, { ActionPhase::Working, {}, std::nullopt });
     }
 
     const QString resourceKey = descriptorIt->resourceKey;
@@ -324,7 +379,7 @@ void ActionRegistry::executeInvocation(const QString& actionId,
     const auto callbackUsed = std::make_shared<std::atomic_bool>(false);
     m_Adapter.execute(
             actionId,
-            invocation,
+            std::move(invocation.m_Parameters),
             [weakRuntimeState, callbackUsed, actionId, resourceKey,
              completion = std::move(completion)](const ActionResult& result) mutable {
         if (callbackUsed->exchange(true)) {
@@ -343,7 +398,8 @@ void ActionRegistry::executeInvocation(const QString& actionId,
             runtimeState->progressByAction.insert(
                     actionId,
                     { result.ok ? ActionPhase::Succeeded : ActionPhase::Failed,
-                      result.ok ? result.evidence : result.userMessage });
+                      result.ok ? result.evidence : result.userMessage,
+                      result.observedState });
         }
         if (completion) {
             completion(result);

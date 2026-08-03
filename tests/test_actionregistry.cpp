@@ -13,6 +13,12 @@ static_assert(!std::is_copy_constructible_v<ActionRegistry>);
 static_assert(!std::is_copy_assignable_v<ActionRegistry>);
 static_assert(!std::is_move_constructible_v<ActionRegistry>);
 static_assert(!std::is_move_assignable_v<ActionRegistry>);
+static_assert(!std::is_copy_constructible_v<ActionInvocation>);
+static_assert(!std::is_copy_assignable_v<ActionInvocation>);
+static_assert(std::is_move_constructible_v<ActionInvocation>);
+static_assert(std::is_move_assignable_v<ActionInvocation>);
+static_assert(std::is_same_v<decltype(ActionResult {}.observedState),
+                             std::optional<ActionState>>);
 
 namespace {
 
@@ -38,11 +44,12 @@ QStringList idsOf(const QVector<ActionDescriptor>& descriptors)
     return ids;
 }
 
-ActionState availableState(const QVariant& value = {})
+ActionState availableState(const QVariant& value = {}, bool disruptive = false)
 {
     ActionState state;
     state.enabled = true;
     state.value = value;
+    state.disruptive = disruptive;
     return state;
 }
 
@@ -64,12 +71,12 @@ public:
     }
 
     void execute(const QString& actionId,
-                 const ActionInvocation& invocation,
+                 QVariantMap parameters,
                  Completion completion) override
     {
         ++executeCallCount;
         executedActionIds.push_back(actionId);
-        executedParameters.push_back(invocation.parameters());
+        executedParameters.push_back(std::move(parameters));
         if (synchronousResult.has_value()) {
             completion(*synchronousResult);
             return;
@@ -103,10 +110,16 @@ private slots:
     void enablesActionWhenAllRequiredPermissionsAreGranted();
     void preservesAdapterDisabledReason();
     void resolvesConfirmationPolicyForInvocationRisk();
+    void directExecuteCannotBypassKnownDisruptiveAction();
+    void riskChangeAfterBeginConsumesConfirmation();
     void directCallerCannotForgeConfirmationWithParameters();
     void confirmationGrantIsActionBoundOneUseAndStateChecked();
+    void failedBeginInvalidatesPendingConfirmation_data();
+    void failedBeginInvalidatesPendingConfirmation();
+    void successfulBeginReplacesPendingConfirmation();
     void executingAnotherActionInvalidatesPendingConfirmation();
     void rechecksPreconditionsAtExecutionTime();
+    void terminalEvidenceClearsWhenAvailabilityChanges();
     void limitsInFlightActionsPerResourceAndTracksCompletion();
     void allowsConcurrentActionsWithoutAResourceKey();
     void ignoresAdapterCompletionAfterRegistryDestruction();
@@ -262,6 +275,12 @@ void ActionRegistryTest::preservesAdapterDisabledReason()
 void ActionRegistryTest::resolvesConfirmationPolicyForInvocationRisk()
 {
     FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("stats.toggle"), availableState({}, true));
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("session.end"), availableState());
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("command.run"), availableState());
     ActionRegistry registry({
         descriptor(QStringLiteral("stats.toggle"), QStringLiteral("Toggle statistics"),
                    ActionCategory::Stats, {}, {}, {}, 0, ConfirmationPolicy::Never),
@@ -271,10 +290,68 @@ void ActionRegistryTest::resolvesConfirmationPolicyForInvocationRisk()
                    ActionCategory::Session, {}, {}, {}, 0, ConfirmationPolicy::WhenDisruptive),
     }, adapter);
 
-    QVERIFY(!registry.requiresConfirmation(QStringLiteral("stats.toggle"), true));
-    QVERIFY(registry.requiresConfirmation(QStringLiteral("session.end"), false));
-    QVERIFY(!registry.requiresConfirmation(QStringLiteral("command.run"), false));
-    QVERIFY(registry.requiresConfirmation(QStringLiteral("command.run"), true));
+    QVERIFY(!registry.requiresConfirmation(QStringLiteral("stats.toggle")));
+    QVERIFY(registry.requiresConfirmation(QStringLiteral("session.end")));
+    QVERIFY(!registry.requiresConfirmation(QStringLiteral("command.run")));
+    adapter.currentSnapshot.actionStates[QStringLiteral("command.run")].disruptive = true;
+    QVERIFY(registry.requiresConfirmation(QStringLiteral("command.run")));
+}
+
+void ActionRegistryTest::directExecuteCannotBypassKnownDisruptiveAction()
+{
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("command.run"), availableState({}, true));
+    adapter.synchronousResult = ActionResult {
+        true, QStringLiteral("command accepted"), {}, {}
+    };
+    ActionRegistry registry({
+        descriptor(QStringLiteral("command.run"), QStringLiteral("Run command"),
+                   ActionCategory::Session, {}, {}, {}, 0,
+                   ConfirmationPolicy::WhenDisruptive),
+    }, adapter);
+    ActionResult result;
+
+    QVERIFY(registry.requiresConfirmation(QStringLiteral("command.run")));
+    registry.execute(
+        QStringLiteral("command.run"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+
+    QVERIFY(!result.ok);
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QVERIFY(adapter.executedActionIds.isEmpty());
+}
+
+void ActionRegistryTest::riskChangeAfterBeginConsumesConfirmation()
+{
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("command.run"), availableState(QStringLiteral("safe"), true));
+    adapter.synchronousResult = ActionResult {
+        true, QStringLiteral("command accepted"), {}, {}
+    };
+    ActionRegistry registry({
+        descriptor(QStringLiteral("command.run"), QStringLiteral("Run command"),
+                   ActionCategory::Session, {}, {}, {}, 0,
+                   ConfirmationPolicy::WhenDisruptive),
+    }, adapter);
+    ActionResult result;
+
+    QVERIFY(registry.beginConfirmation(QStringLiteral("command.run")));
+    adapter.currentSnapshot.actionStates[QStringLiteral("command.run")].disruptive = false;
+    registry.acceptConfirmation(
+        QStringLiteral("command.run"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+
+    QVERIFY(!result.ok);
+    QCOMPARE(result.errorCode, QStringLiteral("state_changed"));
+    QVERIFY(adapter.executedActionIds.isEmpty());
+
+    registry.acceptConfirmation(
+        QStringLiteral("command.run"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QVERIFY(adapter.executedActionIds.isEmpty());
 }
 
 void ActionRegistryTest::directCallerCannotForgeConfirmationWithParameters()
@@ -325,7 +402,7 @@ void ActionRegistryTest::confirmationGrantIsActionBoundOneUseAndStateChecked()
     }, adapter);
     ActionResult result;
 
-    QVERIFY(registry.beginConfirmation(QStringLiteral("session.disconnect"), true));
+    QVERIFY(registry.beginConfirmation(QStringLiteral("session.disconnect")));
     registry.acceptConfirmation(
         QStringLiteral("session.quit"), {},
         [&result](const ActionResult& completed) { result = completed; });
@@ -338,7 +415,7 @@ void ActionRegistryTest::confirmationGrantIsActionBoundOneUseAndStateChecked()
     QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
     QVERIFY(adapter.executedActionIds.isEmpty());
 
-    QVERIFY(registry.beginConfirmation(QStringLiteral("session.disconnect"), true));
+    QVERIFY(registry.beginConfirmation(QStringLiteral("session.disconnect")));
     registry.acceptConfirmation(
         QStringLiteral("session.disconnect"), {},
         [&result](const ActionResult& completed) { result = completed; });
@@ -352,7 +429,7 @@ void ActionRegistryTest::confirmationGrantIsActionBoundOneUseAndStateChecked()
     QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
     QCOMPARE(adapter.executedActionIds.size(), 1);
 
-    QVERIFY(registry.beginConfirmation(QStringLiteral("session.quit"), true));
+    QVERIFY(registry.beginConfirmation(QStringLiteral("session.quit")));
     ActionState disabled;
     disabled.disabledReason = QStringLiteral("Session is no longer available.");
     adapter.currentSnapshot.actionStates[QStringLiteral("session.quit")] = disabled;
@@ -366,13 +443,97 @@ void ActionRegistryTest::confirmationGrantIsActionBoundOneUseAndStateChecked()
         [&result](const ActionResult& completed) { result = completed; });
     QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
 
-    QVERIFY(!registry.beginConfirmation(QStringLiteral("display.change"), false));
-    QVERIFY(registry.beginConfirmation(QStringLiteral("display.change"), true));
+    QVERIFY(!registry.beginConfirmation(QStringLiteral("display.change")));
+    adapter.currentSnapshot.actionStates[QStringLiteral("display.change")].disruptive = true;
+    QVERIFY(registry.beginConfirmation(QStringLiteral("display.change")));
     registry.acceptConfirmation(
         QStringLiteral("display.change"), {},
         [&result](const ActionResult& completed) { result = completed; });
     QVERIFY(result.ok);
     QCOMPARE(adapter.executedActionIds.last(), QStringLiteral("display.change"));
+}
+
+void ActionRegistryTest::failedBeginInvalidatesPendingConfirmation_data()
+{
+    QTest::addColumn<QString>("failedActionId");
+
+    QTest::newRow("non-confirming") << QStringLiteral("stats.toggle");
+    QTest::newRow("unknown") << QStringLiteral("missing.action");
+    QTest::newRow("disabled") << QStringLiteral("session.disabled");
+}
+
+void ActionRegistryTest::failedBeginInvalidatesPendingConfirmation()
+{
+    QFETCH(QString, failedActionId);
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("session.first"), availableState());
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("stats.toggle"), availableState());
+    ActionState disabled;
+    disabled.disabledReason = QStringLiteral("Session is unavailable.");
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("session.disabled"), disabled);
+    adapter.synchronousResult = ActionResult {
+        true, QStringLiteral("accepted"), {}, {}
+    };
+    ActionRegistry registry({
+        descriptor(QStringLiteral("session.first"), QStringLiteral("First"),
+                   ActionCategory::Session, {}, {}, {}, 0,
+                   ConfirmationPolicy::Always),
+        descriptor(QStringLiteral("stats.toggle"), QStringLiteral("Statistics"),
+                   ActionCategory::Stats),
+        descriptor(QStringLiteral("session.disabled"), QStringLiteral("Disabled"),
+                   ActionCategory::Session, {}, {}, {}, 0,
+                   ConfirmationPolicy::Always),
+    }, adapter);
+    ActionResult result;
+
+    QVERIFY(registry.beginConfirmation(QStringLiteral("session.first")));
+    QVERIFY(!registry.beginConfirmation(failedActionId));
+    registry.acceptConfirmation(
+        QStringLiteral("session.first"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QVERIFY(adapter.executedActionIds.isEmpty());
+}
+
+void ActionRegistryTest::successfulBeginReplacesPendingConfirmation()
+{
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("session.first"), availableState());
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("session.second"), availableState());
+    adapter.synchronousResult = ActionResult {
+        true, QStringLiteral("accepted"), {}, {}
+    };
+    ActionRegistry registry({
+        descriptor(QStringLiteral("session.first"), QStringLiteral("First"),
+                   ActionCategory::Session, {}, {}, {}, 0,
+                   ConfirmationPolicy::Always),
+        descriptor(QStringLiteral("session.second"), QStringLiteral("Second"),
+                   ActionCategory::Session, {}, {}, {}, 0,
+                   ConfirmationPolicy::Always),
+    }, adapter);
+    ActionResult result;
+
+    QVERIFY(registry.beginConfirmation(QStringLiteral("session.first")));
+    QVERIFY(registry.beginConfirmation(QStringLiteral("session.second")));
+    registry.acceptConfirmation(
+        QStringLiteral("session.second"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+
+    QVERIFY(result.ok);
+    QCOMPARE(adapter.executedActionIds,
+             QStringList({QStringLiteral("session.second")}));
+
+    registry.acceptConfirmation(
+        QStringLiteral("session.first"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+    QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QCOMPARE(adapter.executedActionIds.size(), 1);
 }
 
 void ActionRegistryTest::executingAnotherActionInvalidatesPendingConfirmation()
@@ -394,7 +555,7 @@ void ActionRegistryTest::executingAnotherActionInvalidatesPendingConfirmation()
     }, adapter);
     ActionResult result;
 
-    QVERIFY(registry.beginConfirmation(QStringLiteral("session.disconnect"), true));
+    QVERIFY(registry.beginConfirmation(QStringLiteral("session.disconnect")));
     registry.execute(
         QStringLiteral("stats.toggle"), {},
         [&result](const ActionResult& completed) { result = completed; });
@@ -430,9 +591,37 @@ void ActionRegistryTest::rechecksPreconditionsAtExecutionTime()
     QCOMPARE(adapter.executeCallCount, 0);
     QVERIFY(completedResult.has_value());
     QVERIFY(!completedResult->ok);
-    QCOMPARE(completedResult->errorCode, QStringLiteral("state_changed"));
+    QCOMPARE(completedResult->errorCode, QStringLiteral("capability_unavailable"));
     QCOMPARE(completedResult->userMessage,
              QStringLiteral("The connected host does not advertise this capability."));
+}
+
+void ActionRegistryTest::terminalEvidenceClearsWhenAvailabilityChanges()
+{
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.advertisedCapabilities.insert(
+        QStringLiteral("display.select"));
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.select"), availableState(QStringLiteral("desk")));
+    adapter.synchronousResult = ActionResult {
+        true, QStringLiteral("Display selected"), {}, {}
+    };
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.select"), QStringLiteral("Select display"),
+                   ActionCategory::Display, {}, {}, QStringLiteral("display.select")),
+    }, adapter);
+
+    registry.execute(QStringLiteral("display.select"), {}, [](const ActionResult&) {});
+    const ActionState completed = registry.state(QStringLiteral("display.select"));
+    QCOMPARE(completed.phase, ActionPhase::Succeeded);
+    QCOMPARE(completed.message, QStringLiteral("Display selected"));
+
+    adapter.currentSnapshot.advertisedCapabilities.clear();
+    const ActionState unavailable = registry.state(QStringLiteral("display.select"));
+    QVERIFY(!unavailable.enabled);
+    QCOMPARE(unavailable.disabledCode, QStringLiteral("capability_unavailable"));
+    QCOMPARE(unavailable.phase, ActionPhase::Idle);
+    QVERIFY(unavailable.message.isEmpty());
 }
 
 void ActionRegistryTest::limitsInFlightActionsPerResourceAndTracksCompletion()

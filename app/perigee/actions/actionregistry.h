@@ -19,8 +19,8 @@ public:
     QVector<ActionDescriptor> actions(ActionCategory category) const;
     QVector<ActionDescriptor> search(const QString& query) const;
     ActionState state(const QString& actionId);
-    bool requiresConfirmation(const QString& actionId, bool disruptive) const;
-    bool beginConfirmation(const QString& actionId, bool disruptive);
+    bool requiresConfirmation(const QString& actionId) const;
+    bool beginConfirmation(const QString& actionId);
     void cancelConfirmation();
     void acceptConfirmation(const QString& actionId,
                             const QVariantMap& parameters,

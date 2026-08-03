@@ -5,6 +5,9 @@
 #include <QVariant>
 #include <QtGlobal>
 
+#include <optional>
+#include <utility>
+
 enum class ActionCategory { Display, Input, Clipboard, Stats, Window, Session };
 enum class ActionPhase { Idle, AwaitingConfirmation, Working, Succeeded, Failed };
 enum class ConfirmationPolicy { Never, Always, WhenDisruptive };
@@ -24,7 +27,9 @@ struct ActionDescriptor {
 struct ActionState {
     bool visible = true;
     bool enabled = false;
+    bool disruptive = false;
     QVariant value;
+    QString disabledCode;
     QString disabledReason;
     ActionPhase phase = ActionPhase::Idle;
     QString message;
@@ -35,4 +40,20 @@ struct ActionResult {
     QString evidence;
     QString errorCode;
     QString userMessage;
+    std::optional<ActionState> observedState;
+
+    ActionResult() = default;
+
+    ActionResult(bool ok,
+                 QString evidence,
+                 QString errorCode,
+                 QString userMessage,
+                 std::optional<ActionState> observedState = std::nullopt)
+        : ok(ok)
+        , evidence(std::move(evidence))
+        , errorCode(std::move(errorCode))
+        , userMessage(std::move(userMessage))
+        , observedState(std::move(observedState))
+    {
+    }
 };

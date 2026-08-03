@@ -36,7 +36,7 @@ public:
         return currentSnapshot;
     }
 
-    void execute(const QString& actionId, const ActionInvocation&, Completion) override
+    void execute(const QString& actionId, QVariantMap, Completion) override
     {
         executedActionIds.push_back(actionId);
     }

@@ -23,11 +23,12 @@ ActionDescriptor descriptor(const QString& id,
              confirmationMessage };
 }
 
-ActionState availableState(const QString& value = {})
+ActionState availableState(const QString& value = {}, bool disruptive = false)
 {
     ActionState state;
     state.enabled = true;
     state.value = value;
+    state.disruptive = disruptive;
     return state;
 }
 
@@ -46,11 +47,11 @@ public:
     }
 
     void execute(const QString& actionId,
-                 const ActionInvocation& invocation,
+                 QVariantMap parameters,
                  Completion completion) override
     {
         executedActionIds.push_back(actionId);
-        executedParameters.push_back(invocation.parameters());
+        executedParameters.push_back(std::move(parameters));
         if (synchronousResult.has_value()) {
             completion(*synchronousResult);
         }
@@ -100,6 +101,7 @@ private slots:
     void refreshPreservesFocusedActionAndUpdatesItsState();
     void backUnwindsConfirmationActionsSearchAndDeck();
     void confirmationCanBeCancelledOrAccepted();
+    void whenDisruptiveUsesAuthoritativeRiskInDeck();
     void refreshAndStateChangeInvalidateConfirmation();
     void disabledFocusedActionFallsBackToAnEnabledPeer();
     void controllerOpenSkipsEmptyDisplayCategory();
@@ -270,6 +272,37 @@ void DeckControllerTest::confirmationCanBeCancelledOrAccepted()
     QCOMPARE(adapter.executedParameters, QVector<QVariantMap>({{}}));
     QVERIFY(!controller.confirmationVisible());
     QCOMPARE(valueForAction(controller, QStringLiteral("session.end")), QString());
+}
+
+void DeckControllerTest::whenDisruptiveUsesAuthoritativeRiskInDeck()
+{
+    MutableHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("command.run"), availableState(QStringLiteral("safe")));
+    adapter.synchronousResult = ActionResult {
+        true, QStringLiteral("Command accepted"), {}, {}
+    };
+    ActionRegistry registry({
+        descriptor(QStringLiteral("command.run"), QStringLiteral("Run command"),
+                   ActionCategory::Session, ConfirmationPolicy::WhenDisruptive),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromKeyboard();
+    controller.setSearchText(QStringLiteral("command"));
+    controller.focusActions();
+
+    controller.activateFocusedAction();
+    QVERIFY(!controller.confirmationVisible());
+    QCOMPARE(adapter.executedActionIds,
+             QStringList({QStringLiteral("command.run")}));
+
+    adapter.currentSnapshot.actionStates[QStringLiteral("command.run")]
+        = availableState(QStringLiteral("dangerous"), true);
+    controller.refresh();
+    controller.activateFocusedAction();
+
+    QVERIFY(controller.confirmationVisible());
+    QCOMPARE(adapter.executedActionIds.size(), 1);
 }
 
 void DeckControllerTest::refreshAndStateChangeInvalidateConfirmation()

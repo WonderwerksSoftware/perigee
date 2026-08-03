@@ -12,6 +12,17 @@
 
 namespace {
 
+template<typename T, typename = void>
+struct HasPublicExecute : std::false_type {
+};
+
+template<typename T>
+struct HasPublicExecute<T, std::void_t<decltype(&T::execute)>> : std::true_type {
+};
+
+static_assert(!HasPublicExecute<HostAdapter>::value);
+static_assert(!HasPublicExecute<GameStreamAdapter>::value);
+
 class FakeSession final : public SessionFacade
 {
 public:
@@ -81,9 +92,10 @@ ActionResult execute(GameStreamAdapter& adapter,
                      const QString& id,
                      const QVariantMap& parameters = {})
 {
+    ActionRegistry registry(GameStreamAdapter::descriptors(), adapter);
     ActionResult result;
     int completionCount = 0;
-    adapter.execute(id, ActionInvocation(parameters), [&](const ActionResult& completed) {
+    registry.execute(id, parameters, [&](const ActionResult& completed) {
         result = completed;
         ++completionCount;
     });
@@ -112,7 +124,7 @@ ActionResult executeConfirmed(GameStreamAdapter& adapter, const QString& id)
     ActionRegistry registry(GameStreamAdapter::descriptors(), adapter);
     ActionResult result;
     int completionCount = 0;
-    if (!registry.beginConfirmation(id, true)) {
+    if (!registry.beginConfirmation(id)) {
         return {false, {}, QStringLiteral("confirmation_not_started"), {}};
     }
     registry.acceptConfirmation(id, {}, [&](const ActionResult& completed) {
@@ -146,6 +158,10 @@ private slots:
     void forgedConfirmationParameterIsRejected();
     void rejectedDisconnectRequestIsReportedTruthfully();
     void rejectedQuitRequestIsReportedTruthfully();
+    void terminalEvidenceTracksAuthoritativeToggleState_data();
+    void terminalEvidenceTracksAuthoritativeToggleState();
+    void failureEvidenceClearsWhenAuthoritativeStateChanges();
+    void subsequentExecutionReplacesTerminalBaseline();
     void destructiveConfirmationCopyIsDistinct();
     void absentSessionFailsClosed();
     void facadeIdentityIsQObjectEnforced();
@@ -388,6 +404,93 @@ void GameStreamAdapterTest::rejectedQuitRequestIsReportedTruthfully()
     QCOMPARE(result.errorCode, QStringLiteral("request_rejected"));
     QCOMPARE(result.evidence, QString());
     QCOMPARE(session.quitCount, 1);
+}
+
+void GameStreamAdapterTest::terminalEvidenceTracksAuthoritativeToggleState_data()
+{
+    QTest::addColumn<QString>("actionId");
+
+    QTest::newRow("statistics") << QStringLiteral("stats.overlay");
+    QTest::newRow("fullscreen") << QStringLiteral("window.fullscreen");
+}
+
+void GameStreamAdapterTest::terminalEvidenceTracksAuthoritativeToggleState()
+{
+    QFETCH(QString, actionId);
+    FakeSession session;
+    GameStreamAdapter adapter(&session);
+    ActionRegistry registry(GameStreamAdapter::descriptors(), adapter);
+    ActionResult result;
+
+    registry.execute(
+        actionId, enabled(true),
+        [&result](const ActionResult& completed) { result = completed; });
+    QVERIFY(result.ok);
+
+    const ActionState firstRead = registry.state(actionId);
+    QCOMPARE(firstRead.phase, ActionPhase::Succeeded);
+    QVERIFY(!firstRead.message.isEmpty());
+    const ActionState unchangedRead = registry.state(actionId);
+    QCOMPARE(unchangedRead.phase, ActionPhase::Succeeded);
+    QCOMPARE(unchangedRead.message, firstRead.message);
+
+    if (actionId == QStringLiteral("stats.overlay")) {
+        session.stats = false;
+    }
+    else {
+        session.fullscreen = false;
+    }
+
+    const ActionState changed = registry.state(actionId);
+    QCOMPARE(changed.value.toBool(), false);
+    QCOMPARE(changed.phase, ActionPhase::Idle);
+    QVERIFY(changed.message.isEmpty());
+}
+
+void GameStreamAdapterTest::failureEvidenceClearsWhenAuthoritativeStateChanges()
+{
+    FakeSession session;
+    session.ignoreStatsRequest = true;
+    GameStreamAdapter adapter(&session);
+    ActionRegistry registry(GameStreamAdapter::descriptors(), adapter);
+    ActionResult result;
+
+    registry.execute(
+        QStringLiteral("stats.overlay"), enabled(true),
+        [&result](const ActionResult& completed) { result = completed; });
+    QVERIFY(!result.ok);
+    QCOMPARE(registry.state(QStringLiteral("stats.overlay")).phase,
+             ActionPhase::Failed);
+
+    session.stats = true;
+    const ActionState changed = registry.state(QStringLiteral("stats.overlay"));
+    QCOMPARE(changed.value.toBool(), true);
+    QCOMPARE(changed.phase, ActionPhase::Idle);
+    QVERIFY(changed.message.isEmpty());
+}
+
+void GameStreamAdapterTest::subsequentExecutionReplacesTerminalBaseline()
+{
+    FakeSession session;
+    GameStreamAdapter adapter(&session);
+    ActionRegistry registry(GameStreamAdapter::descriptors(), adapter);
+
+    registry.execute(QStringLiteral("stats.overlay"), enabled(true),
+                     [](const ActionResult&) {});
+    QCOMPARE(registry.state(QStringLiteral("stats.overlay")).phase,
+             ActionPhase::Succeeded);
+
+    registry.execute(QStringLiteral("stats.overlay"), enabled(false),
+                     [](const ActionResult&) {});
+    const ActionState disabled = registry.state(QStringLiteral("stats.overlay"));
+    QCOMPARE(disabled.phase, ActionPhase::Succeeded);
+    QCOMPARE(disabled.message, QStringLiteral("Statistics overlay: off"));
+    QCOMPARE(disabled.value.toBool(), false);
+
+    session.stats = true;
+    const ActionState changed = registry.state(QStringLiteral("stats.overlay"));
+    QCOMPARE(changed.phase, ActionPhase::Idle);
+    QVERIFY(changed.message.isEmpty());
 }
 
 void GameStreamAdapterTest::destructiveConfirmationCopyIsDistinct()

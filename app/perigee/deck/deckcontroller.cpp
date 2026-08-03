@@ -231,7 +231,7 @@ void DeckController::activateFocusedAction()
     if (m_ActionModel.focusedActionRequiresConfirmation()) {
         if (m_Registry == nullptr ||
                 !m_Registry->beginConfirmation(
-                    m_ActionModel.focusedActionId(), true)) {
+                    m_ActionModel.focusedActionId())) {
             refresh();
             return;
         }

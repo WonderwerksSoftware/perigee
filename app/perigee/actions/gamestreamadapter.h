@@ -14,12 +14,12 @@ public:
     static QVector<ActionDescriptor> descriptors();
 
     HostSnapshot snapshot() override;
-    void execute(const QString& actionId,
-                 const ActionInvocation& invocation,
-                 Completion completion) override;
     void cancel(const QString& resourceKey) override;
 
 private:
+    void execute(const QString& actionId,
+                 QVariantMap parameters,
+                 Completion completion) override;
     SessionFacade* session() const;
 
     QPointer<SessionFacade> m_Session;

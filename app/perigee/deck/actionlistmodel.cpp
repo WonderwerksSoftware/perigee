@@ -125,7 +125,7 @@ void ActionListModel::refresh()
             rows.push_back({
                 descriptor,
                 state,
-                m_Registry->requiresConfirmation(descriptor.id, true),
+                m_Registry->requiresConfirmation(descriptor.id),
             });
         }
     }

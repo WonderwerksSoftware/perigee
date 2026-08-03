@@ -46,6 +46,7 @@ ActionState availableState(const QVariant& value = {})
 ActionState unavailableState()
 {
     ActionState state;
+    state.disabledCode = QStringLiteral("session_unavailable");
     state.disabledReason = QStringLiteral("The streaming session is unavailable.");
     return state;
 }
@@ -70,13 +71,16 @@ ActionResult requestRejectedResult(const QString& operation)
     };
 }
 
-ActionResult mismatchResult(const QString& setting)
+ActionResult mismatchResult(
+    const QString& setting,
+    std::optional<ActionState> observedState = std::nullopt)
 {
     return {
         false,
         {},
         QStringLiteral("state_mismatch"),
         QStringLiteral("%1 did not reach the requested state.").arg(setting),
+        std::move(observedState),
     };
 }
 
@@ -86,10 +90,12 @@ ActionResult stateResult(bool observed,
                          const QString& disabledEvidence,
                          const QString& setting)
 {
+    ActionState observedState = availableState(observed);
     if (observed != requested) {
-        return mismatchResult(setting);
+        return mismatchResult(setting, std::move(observedState));
     }
-    return {true, observed ? enabledEvidence : disabledEvidence, {}, {}};
+    return {true, observed ? enabledEvidence : disabledEvidence, {}, {},
+            std::move(observedState)};
 }
 
 bool requestedState(const QVariantMap& parameters, bool current)
@@ -177,7 +183,7 @@ HostSnapshot GameStreamAdapter::snapshot()
 }
 
 void GameStreamAdapter::execute(const QString& actionId,
-                                const ActionInvocation& invocation,
+                                QVariantMap parameters,
                                 Completion completion)
 {
     SessionFacade* authority = session();
@@ -185,8 +191,6 @@ void GameStreamAdapter::execute(const QString& actionId,
         complete(completion, unavailableResult());
         return;
     }
-
-    const QVariantMap& parameters = invocation.parameters();
 
     if (actionId == QString::fromLatin1(StatsOverlayId)) {
         const bool requested = requestedState(parameters,
@@ -224,14 +228,19 @@ void GameStreamAdapter::execute(const QString& actionId,
     if (actionId == QString::fromLatin1(ReleaseCapturedId)) {
         authority->setMouseCaptureEnabled(false);
         authority->setKeyboardCaptureEnabled(false);
-        if (authority->mouseCaptureEnabled() || authority->keyboardCaptureEnabled()) {
-            complete(completion, mismatchResult(QStringLiteral("Captured input")));
+        const bool released = !authority->mouseCaptureEnabled() &&
+                !authority->keyboardCaptureEnabled();
+        ActionState observedState = availableState(released);
+        if (!released) {
+            complete(completion,
+                     mismatchResult(QStringLiteral("Captured input"),
+                                    std::move(observedState)));
         }
         else {
             complete(completion,
                      {true,
                       QStringLiteral("Mouse and keyboard capture: released"),
-                      {}, {}});
+                      {}, {}, std::move(observedState)});
         }
         return;
     }
@@ -247,12 +256,6 @@ void GameStreamAdapter::execute(const QString& actionId,
         return;
     }
     if (actionId == QString::fromLatin1(DisconnectClientId)) {
-        if (!invocation.confirmationGrantedFor(actionId)) {
-            complete(completion,
-                     {false, {}, QStringLiteral("confirmation_required"),
-                      QStringLiteral("Confirm the client disconnect before continuing.")});
-            return;
-        }
         if (authority->requestClientDisconnect()) {
             complete(completion,
                      {true, QStringLiteral("Client disconnect requested"), {}, {}});
@@ -264,12 +267,6 @@ void GameStreamAdapter::execute(const QString& actionId,
         return;
     }
     if (actionId == QString::fromLatin1(QuitPerigeeId)) {
-        if (!invocation.confirmationGrantedFor(actionId)) {
-            complete(completion,
-                     {false, {}, QStringLiteral("confirmation_required"),
-                      QStringLiteral("Confirm quitting Perigee before continuing.")});
-            return;
-        }
         if (authority->requestPerigeeQuit()) {
             complete(completion,
                      {true, QStringLiteral("Perigee quit requested"), {}, {}});
