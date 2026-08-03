@@ -6,6 +6,9 @@
 **/.vs/
 .vscode/
 build/
+/build*/
+*.AppImage
+/acceptance-logs/
 libs/
 config.tests/*/.qmake.stash
 config.tests/*/Makefile
