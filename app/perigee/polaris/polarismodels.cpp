@@ -11,6 +11,9 @@
 
 namespace {
 
+constexpr double InclusiveQint64Lower = -0x1p63;
+constexpr double ExclusiveQint64Upper = 0x1p63;
+
 QString responseError(const PolarisResponse& response)
 {
     if (response.errorCode == QStringLiteral("network_error") ||
@@ -46,10 +49,16 @@ AdvertisedPolarisEndpoint parseEndpoint(const QUrl& origin,
         endpoint.errorCode = QStringLiteral("endpoint_missing");
         return endpoint;
     }
-    endpoint.advertised = value.toString();
+    const QString advertised = value.toString();
     endpoint.url = PolarisApiClient::resolveAdvertisedEndpoint(
-        origin, endpoint.advertised, &endpoint.errorCode);
+        origin, advertised, &endpoint.errorCode);
     endpoint.usable = endpoint.url.isValid();
+    if (endpoint.usable) {
+        endpoint.advertised = advertised;
+    }
+    else {
+        endpoint.url = QUrl();
+    }
     return endpoint;
 }
 
@@ -67,12 +76,26 @@ bool strictInteger(const QJsonValue& value, qint64* result)
     }
     const double number = value.toDouble();
     if (!std::isfinite(number) || std::floor(number) != number ||
-            number < double(std::numeric_limits<qint64>::min()) ||
-            number > double(std::numeric_limits<qint64>::max())) {
+            number < InclusiveQint64Lower ||
+            number >= ExclusiveQint64Upper) {
         return false;
     }
     *result = static_cast<qint64>(number);
     return true;
+}
+
+bool safeCommandIdentifier(const QString& value)
+{
+    if (value.isEmpty() || value.size() > 128) {
+        return false;
+    }
+    return std::all_of(value.cbegin(), value.cend(), [](QChar character) {
+        const ushort code = character.unicode();
+        return (code >= 'a' && code <= 'z') ||
+            (code >= 'A' && code <= 'Z') ||
+            (code >= '0' && code <= '9') || code == '-' || code == '_' ||
+            code == '.' || code == ':';
+    });
 }
 
 bool isTransitionState(const QString& state)
@@ -151,11 +174,9 @@ bool operationPermissionGranted(const PolarisDiscoverySnapshot& snapshot,
 {
     switch (operation) {
     case PolarisOperation::ClipboardRead:
-        return snapshot.capabilities.clipboardReadAdvertised &&
-            snapshot.session.controls.clipboardReadAllowed;
+        return snapshot.session.controls.clipboardReadAllowed;
     case PolarisOperation::ClipboardWrite:
-        return snapshot.capabilities.clipboardWriteAdvertised &&
-            snapshot.session.controls.clipboardWriteAllowed;
+        return snapshot.session.controls.clipboardWriteAllowed;
     case PolarisOperation::NamedCommand:
         return snapshot.session.controls.commandsAllowed;
     case PolarisOperation::StopSession:
@@ -167,6 +188,13 @@ bool operationPermissionGranted(const PolarisDiscoverySnapshot& snapshot,
 }
 
 bool requiresControlOwnership(PolarisOperation operation)
+{
+    return operation == PolarisOperation::NamedCommand ||
+        operation == PolarisOperation::StopSession ||
+        operation == PolarisOperation::DisplaySwitch;
+}
+
+bool requiresSessionToken(PolarisOperation operation)
 {
     return operation == PolarisOperation::NamedCommand ||
         operation == PolarisOperation::StopSession ||
@@ -236,10 +264,6 @@ PolarisCapabilities PolarisModels::parseCapabilities(
         pairedOrigin, namedCommands.value(QStringLiteral("endpoint")));
 
     const QJsonObject clipboard = root.value(QStringLiteral("clipboard")).toObject();
-    result.clipboardReadAdvertised = strictBool(
-        clipboard, QStringLiteral("read"));
-    result.clipboardWriteAdvertised = strictBool(
-        clipboard, QStringLiteral("write"));
     if (clipboard.contains(QStringLiteral("max_text_bytes"))) {
         qint64 maximum = 0;
         if (!strictInteger(clipboard.value(QStringLiteral("max_text_bytes")),
@@ -252,7 +276,27 @@ PolarisCapabilities PolarisModels::parseCapabilities(
         }
     }
 
-    const QJsonArray commands = namedCommands.value(
+    return result;
+}
+
+PolarisCommandCatalog PolarisModels::parseCommands(
+    const PolarisResponse& response,
+    const AdvertisedPolarisEndpoint& validatedEndpoint)
+{
+    PolarisCommandCatalog result;
+    result.errorCode = responseError(response);
+    if (!result.errorCode.isEmpty()) {
+        return result;
+    }
+    if (!validatedEndpoint.usable || !response.json.isObject() ||
+            !response.json.object().value(
+                QStringLiteral("commands")).isArray()) {
+        result.errorCode = QStringLiteral("malformed_response");
+        return result;
+    }
+
+    result.valid = true;
+    const QJsonArray commands = response.json.object().value(
         QStringLiteral("commands")).toArray();
     QSet<int> seenIndexes;
     for (const QJsonValue& value : commands) {
@@ -266,18 +310,18 @@ PolarisCapabilities PolarisModels::parseCapabilities(
                 seenIndexes.contains(static_cast<int>(index)) ||
                 !command.value(QStringLiteral("name")).isString() ||
                 command.value(QStringLiteral("name")).toString().trimmed().isEmpty() ||
-                !command.value(QStringLiteral("risk")).isString() ||
-                !result.commandsEndpoint.usable) {
+                !command.value(QStringLiteral("risk")).isString()) {
             continue;
         }
         NamedCommandMetadata metadata;
         metadata.index = static_cast<int>(index);
-        metadata.identifier = command.value(QStringLiteral("id")).isString()
-            ? command.value(QStringLiteral("id")).toString()
-            : QString::number(index);
+        const QString advertisedId = command.value(
+            QStringLiteral("id")).toString();
+        metadata.identifier = safeCommandIdentifier(advertisedId)
+            ? advertisedId : QString::number(index);
         metadata.displayName = command.value(QStringLiteral("name")).toString();
         metadata.risk = command.value(QStringLiteral("risk")).toString();
-        metadata.endpoint = result.commandsEndpoint;
+        metadata.endpoint = validatedEndpoint;
         result.commands.push_back(std::move(metadata));
         seenIndexes.insert(static_cast<int>(index));
     }
@@ -490,6 +534,14 @@ PolarisAvailability PolarisModels::availability(
                         QStringLiteral(
                             "This Polaris version does not advertise this feature"));
     }
+    if (operation == PolarisOperation::NamedCommand &&
+            !snapshot.capabilities.commandCatalogValid) {
+        const QString errorCode =
+            snapshot.capabilities.commandCatalogErrorCode.isEmpty()
+            ? QStringLiteral("malformed_response")
+            : snapshot.capabilities.commandCatalogErrorCode;
+        return *dependencyFailure(errorCode);
+    }
     if (operation == PolarisOperation::DisplaySwitch &&
             !snapshot.settings.valid) {
         const QString errorCode = snapshot.settings.errorCode.isEmpty()
@@ -513,6 +565,12 @@ PolarisAvailability PolarisModels::availability(
         return disabled(PolarisAvailabilityCode::Transitioning,
                         QStringLiteral("session_transitioning"),
                         QStringLiteral("The session is transitioning"));
+    }
+    if (requiresSessionToken(operation) && !snapshot.session.tokenValid) {
+        return disabled(PolarisAvailabilityCode::SessionTokenUnavailable,
+                        QStringLiteral("session_token_unavailable"),
+                        QStringLiteral(
+                            "Current session token is unavailable"));
     }
     if (operation == PolarisOperation::DisplaySwitch &&
             !hasAlternateDisplay(snapshot)) {

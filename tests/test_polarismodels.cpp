@@ -8,6 +8,7 @@
 #include <QtTest>
 
 #include <algorithm>
+#include <limits>
 
 namespace {
 
@@ -56,8 +57,12 @@ private slots:
     void rejectsUnsafeAdvertisedEndpoints();
     void appliesClipboardLimitRules_data();
     void appliesClipboardLimitRules();
+    void strictIntegerGuardsExclusiveUpperBoundBeforeCast();
+    void exactTask13ClipboardContractUsesSessionDirectionPermissions();
     void parsesOwnerViewerTransitionAndUnknownRoles();
     void malformedStatusFailsDependentFieldsOnly();
+    void tokenDependentMutationsFailClosedWithoutDisablingClipboard_data();
+    void tokenDependentMutationsFailClosedWithoutDisablingClipboard();
     void normalizesModesAndOutputsWithStableCrossKindIdentity();
     void parsesCurrentUpstreamClientSettingsEnvelope();
     void conflictingCurrentTargetsFailClosed();
@@ -82,12 +87,7 @@ void PolarisModelsTest::parsesCurrentCapabilitiesCompositionally()
              QStringLiteral("/polaris/v1/session/status"));
     QCOMPARE(model.maxClipboardTextBytes, qint64(262144));
     QVERIFY(model.clipboardLimitValid);
-    QCOMPARE(model.commands.size(), 2);
-    QCOMPARE(model.commands.at(0).index, 0);
-    QCOMPARE(model.commands.at(0).identifier, QStringLiteral("restart-shell"));
-    QCOMPARE(model.commands.at(0).displayName, QStringLiteral("Restart shell"));
-    QCOMPARE(model.commands.at(0).risk, QStringLiteral("disruptive"));
-    QVERIFY(!model.commands.at(0).retainsRawCommand);
+    QVERIFY(model.commands.isEmpty());
 }
 
 void PolarisModelsTest::oldCapabilitiesDisableOnlyMissingFeatures()
@@ -112,9 +112,10 @@ void PolarisModelsTest::rejectsUnsafeAdvertisedEndpoints_data()
     QTest::newRow("canonical") << QStringLiteral("/polaris/v1/commands") << true;
     QTest::newRow("query") << QStringLiteral("/polaris/v1/commands?view=short") << true;
     QTest::newRow("absolute") << QStringLiteral("https://127.0.0.1:47984/polaris/v1/commands") << false;
-    QTest::newRow("cross-origin") << QStringLiteral("https://evil.invalid/polaris/v1/commands") << false;
-    QTest::newRow("encoded") << QStringLiteral("/polaris/v1/%63ommands") << false;
-    QTest::newRow("traversal") << QStringLiteral("/polaris/v1/../commands") << false;
+    QTest::newRow("cross-origin-canary") << QStringLiteral("https://DO_NOT_RETAIN_CROSS_ORIGIN.invalid/polaris/v1/commands") << false;
+    QTest::newRow("encoded-canary") << QStringLiteral("/polaris/v1/%63ommands/DO_NOT_RETAIN_ENCODED") << false;
+    QTest::newRow("traversal-canary") << QStringLiteral("/polaris/v1/../DO_NOT_RETAIN_TRAVERSAL") << false;
+    QTest::newRow("query-secret-canary") << QStringLiteral("/polaris/v1/commands?token=DO_NOT_RETAIN_QUERY_SECRET%ZZ") << false;
     QTest::newRow("duplicate-separator") << QStringLiteral("/polaris/v1//commands") << false;
 }
 
@@ -133,6 +134,21 @@ void PolarisModelsTest::rejectsUnsafeAdvertisedEndpoints()
     QCOMPARE(model.commandsEndpoint.usable, usable);
     QVERIFY(model.clientSettingsEndpoint.usable);
     QCOMPARE(model.clipboardLimitValid, true);
+    if (usable) {
+        QCOMPARE(model.commandsEndpoint.advertised, endpoint);
+        QVERIFY(!model.commandsEndpoint.url.isEmpty());
+    }
+    else {
+        QVERIFY(model.commandsEndpoint.advertised.isEmpty());
+        QVERIFY(model.commandsEndpoint.url.isEmpty());
+        QVERIFY(!model.commandsEndpoint.errorCode.contains(
+            QStringLiteral("DO_NOT_RETAIN")));
+        const QString published = model.commandsEndpoint.advertised +
+            model.commandsEndpoint.url.toString(QUrl::FullyEncoded) +
+            model.commandsEndpoint.errorCode;
+        QVERIFY2(!published.contains(QStringLiteral("DO_NOT_RETAIN")),
+                 qPrintable(published));
+    }
 }
 
 void PolarisModelsTest::appliesClipboardLimitRules_data()
@@ -152,6 +168,29 @@ void PolarisModelsTest::appliesClipboardLimitRules_data()
                               << PolarisModels::AbsoluteClipboardTextCeiling;
     QTest::newRow("wrong-type") << QVariant(QStringLiteral("4096")) << true << false
                                 << PolarisModels::AbsoluteClipboardTextCeiling;
+    QTest::newRow("exclusive-qint64-upper")
+        << QVariant(9223372036854775808.0) << true << false
+        << PolarisModels::AbsoluteClipboardTextCeiling;
+    QTest::newRow("near-qint64-upper")
+        << QVariant(9223372036854773760.0) << true << true
+        << PolarisModels::AbsoluteClipboardTextCeiling;
+    QTest::newRow("qint64-lower")
+        << QVariant(-9223372036854775808.0) << true << false
+        << PolarisModels::AbsoluteClipboardTextCeiling;
+    QTest::newRow("near-qint64-lower")
+        << QVariant(-9223372036854773760.0) << true << false
+        << PolarisModels::AbsoluteClipboardTextCeiling;
+    QTest::newRow("huge-finite") << QVariant(1.0e300) << true << false
+                                  << PolarisModels::AbsoluteClipboardTextCeiling;
+    QTest::newRow("positive-infinity")
+        << QVariant(std::numeric_limits<double>::infinity()) << true << false
+        << PolarisModels::AbsoluteClipboardTextCeiling;
+    QTest::newRow("negative-infinity")
+        << QVariant(-std::numeric_limits<double>::infinity()) << true << false
+        << PolarisModels::AbsoluteClipboardTextCeiling;
+    QTest::newRow("nan")
+        << QVariant(std::numeric_limits<double>::quiet_NaN()) << true << false
+        << PolarisModels::AbsoluteClipboardTextCeiling;
 }
 
 void PolarisModelsTest::appliesClipboardLimitRules()
@@ -175,6 +214,57 @@ void PolarisModelsTest::appliesClipboardLimitRules()
 
     QCOMPARE(model.clipboardLimitValid, valid);
     QCOMPARE(model.maxClipboardTextBytes, expected);
+}
+
+void PolarisModelsTest::strictIntegerGuardsExclusiveUpperBoundBeforeCast()
+{
+    const QString sourcePath = QFileInfo(QString::fromUtf8(__FILE__)).dir()
+        .filePath(QStringLiteral(
+            "../app/perigee/polaris/polarismodels.cpp"));
+    QFile source(sourcePath);
+    QVERIFY2(source.open(QIODevice::ReadOnly), qPrintable(sourcePath));
+    const QString implementation = QString::fromUtf8(source.readAll());
+    const qsizetype upperGuard = implementation.indexOf(
+        QStringLiteral("number >= ExclusiveQint64Upper"));
+    const qsizetype cast = implementation.indexOf(
+        QStringLiteral("*result = static_cast<qint64>(number)"));
+
+    QVERIFY2(upperGuard >= 0,
+             "strictInteger must reject 2^63 before conversion");
+    QVERIFY2(cast >= 0 && upperGuard < cast,
+             "the exclusive upper-bound guard must precede the cast");
+}
+
+void PolarisModelsTest::exactTask13ClipboardContractUsesSessionDirectionPermissions()
+{
+    PolarisDiscoverySnapshot snapshot;
+    snapshot.complete = true;
+    snapshot.capabilities = PolarisModels::parseCapabilities(
+        fixture("capabilities-current.json"), origin());
+    snapshot.capabilities.commandCatalogValid = true;
+    snapshot.session = PolarisModels::parseSessionStatus(
+        fixture("status-owner.json"), origin());
+    snapshot.settings = PolarisModels::parseClientSettings(
+        fixture("client-settings-current.json"));
+
+    QVERIFY(PolarisModels::availability(
+        snapshot, PolarisOperation::ClipboardRead).enabled);
+    QVERIFY(PolarisModels::availability(
+        snapshot, PolarisOperation::ClipboardWrite).enabled);
+
+    snapshot.session.controls.clipboardWriteAllowed = false;
+    QCOMPARE(PolarisModels::availability(
+        snapshot, PolarisOperation::ClipboardWrite).errorCode,
+        QStringLiteral("permission_denied"));
+    snapshot.capabilities.features.remove(QStringLiteral("clipboard_limits_v1"));
+    QCOMPARE(PolarisModels::availability(
+        snapshot, PolarisOperation::ClipboardRead).errorCode,
+        QStringLiteral("capability_not_advertised"));
+    snapshot.capabilities.features.insert(QStringLiteral("clipboard_limits_v1"));
+    snapshot.capabilities.clipboardLimitValid = false;
+    QCOMPARE(PolarisModels::availability(
+        snapshot, PolarisOperation::ClipboardRead).errorCode,
+        QStringLiteral("capability_not_advertised"));
 }
 
 void PolarisModelsTest::parsesOwnerViewerTransitionAndUnknownRoles()
@@ -220,6 +310,55 @@ void PolarisModelsTest::malformedStatusFailsDependentFieldsOnly()
     QVERIFY(!model.ownsSession);
     QVERIFY(!model.controls.stopAllowed);
     QVERIFY(!model.controls.stopEndpoint.usable);
+}
+
+void PolarisModelsTest::tokenDependentMutationsFailClosedWithoutDisablingClipboard_data()
+{
+    QTest::addColumn<QVariant>("token");
+    QTest::addColumn<bool>("present");
+
+    QTest::newRow("missing") << QVariant() << false;
+    QTest::newRow("wrong-type") << QVariant(22) << true;
+    QTest::newRow("empty") << QVariant(QString()) << true;
+}
+
+void PolarisModelsTest::tokenDependentMutationsFailClosedWithoutDisablingClipboard()
+{
+    QFETCH(QVariant, token);
+    QFETCH(bool, present);
+    QJsonObject status = fixture("status-owner.json").json.object();
+    if (present) {
+        status.insert(QStringLiteral("session_token"),
+                      QJsonValue::fromVariant(token));
+    }
+    else {
+        status.remove(QStringLiteral("session_token"));
+    }
+
+    PolarisDiscoverySnapshot snapshot;
+    snapshot.complete = true;
+    snapshot.capabilities = PolarisModels::parseCapabilities(
+        fixture("capabilities-current.json"), origin());
+    snapshot.capabilities.commandCatalogValid = true;
+    snapshot.session = PolarisModels::parseSessionStatus(
+        jsonResponse(status), origin());
+    snapshot.settings = PolarisModels::parseClientSettings(
+        fixture("client-settings-current.json"));
+
+    for (const PolarisOperation operation : {
+             PolarisOperation::NamedCommand,
+             PolarisOperation::StopSession,
+             PolarisOperation::DisplaySwitch}) {
+        const PolarisAvailability result = PolarisModels::availability(
+            snapshot, operation);
+        QVERIFY(!result.enabled);
+        QCOMPARE(result.errorCode,
+                 QStringLiteral("session_token_unavailable"));
+        QCOMPARE(result.reason,
+                 QStringLiteral("Current session token is unavailable"));
+    }
+    QVERIFY(PolarisModels::availability(
+        snapshot, PolarisOperation::ClipboardRead).enabled);
 }
 
 void PolarisModelsTest::normalizesModesAndOutputsWithStableCrossKindIdentity()
@@ -329,23 +468,10 @@ void PolarisModelsTest::responseTrustBoundaryDistinguishesFallbackAndFailures()
 
 void PolarisModelsTest::malformedEntriesDoNotEraseIndependentValidData()
 {
-    QJsonObject capabilities = fixture("capabilities-current.json").json.object();
-    QJsonObject namedCommands = capabilities.value(
-        QStringLiteral("named_commands")).toObject();
-    QJsonArray commands = namedCommands.value(QStringLiteral("commands")).toArray();
-    commands.append(QJsonObject{
-        {QStringLiteral("index"), -1},
-        {QStringLiteral("name"), QStringLiteral("Invalid")},
-        {QStringLiteral("risk"), QStringLiteral("safe")}});
-    commands.append(QJsonObject{
-        {QStringLiteral("index"), 3},
-        {QStringLiteral("name"), 9},
-        {QStringLiteral("risk"), QStringLiteral("safe")}});
-    namedCommands.insert(QStringLiteral("commands"), commands);
-    capabilities.insert(QStringLiteral("named_commands"), namedCommands);
     const PolarisCapabilities parsedCapabilities =
-        PolarisModels::parseCapabilities(jsonResponse(capabilities), origin());
-    QCOMPARE(parsedCapabilities.commands.size(), 2);
+        PolarisModels::parseCapabilities(
+            fixture("capabilities-current.json"), origin());
+    QVERIFY(parsedCapabilities.commands.isEmpty());
     QVERIFY(parsedCapabilities.clientSettingsEndpoint.usable);
     QCOMPARE(parsedCapabilities.maxClipboardTextBytes, qint64(262144));
 

@@ -27,6 +27,13 @@ struct NamedCommandMetadata
     bool retainsRawCommand = false;
 };
 
+struct PolarisCommandCatalog
+{
+    bool valid = false;
+    QString errorCode;
+    QVector<NamedCommandMetadata> commands;
+};
+
 struct PolarisCapabilities
 {
     bool valid = false;
@@ -37,10 +44,10 @@ struct PolarisCapabilities
     AdvertisedPolarisEndpoint sessionStatusEndpoint;
     AdvertisedPolarisEndpoint clientSettingsEndpoint;
     AdvertisedPolarisEndpoint commandsEndpoint;
-    bool clipboardReadAdvertised = false;
-    bool clipboardWriteAdvertised = false;
     bool clipboardLimitValid = true;
     qint64 maxClipboardTextBytes = 1024 * 1024;
+    bool commandCatalogValid = false;
+    QString commandCatalogErrorCode;
     QVector<NamedCommandMetadata> commands;
 };
 
@@ -130,6 +137,7 @@ enum class PolarisAvailabilityCode {
     PermissionDenied,
     NotControllingClient,
     Transitioning,
+    SessionTokenUnavailable,
     NoAlternateDisplay,
 };
 
@@ -147,6 +155,9 @@ inline constexpr qint64 AbsoluteClipboardTextCeiling = 1024 * 1024;
 
 PolarisCapabilities parseCapabilities(const PolarisResponse& response,
                                       const QUrl& pairedOrigin);
+PolarisCommandCatalog parseCommands(
+    const PolarisResponse& response,
+    const AdvertisedPolarisEndpoint& validatedEndpoint);
 PolarisSessionStatus parseSessionStatus(const PolarisResponse& response,
                                         const QUrl& pairedOrigin);
 PolarisClientSettings parseClientSettings(const PolarisResponse& response);

@@ -16,6 +16,7 @@ namespace {
 constexpr auto CapabilitiesRoute = "/polaris/v1/capabilities";
 constexpr auto StatusRoute = "/polaris/v1/session/status";
 constexpr auto SettingsRoute = "/polaris/v1/client-settings";
+constexpr auto CommandsRoute = "/polaris/v1/commands";
 
 PolarisResponse fixture(const char* name, int status = 200,
                         bool authenticated = true)
@@ -195,6 +196,23 @@ void queueCompleteGeneration(const std::shared_ptr<FakeTransportState>& state,
           occurrenceFromEnd);
 }
 
+void completeGeneration(
+    PolarisAdapter& adapter,
+    const std::shared_ptr<FakeTransportState>& state,
+    PolarisResponse capabilities = fixture("capabilities-current.json"),
+    PolarisResponse status = fixture("status-owner.json"),
+    PolarisResponse settings = fixture("client-settings-current.json"),
+    PolarisResponse commands = fixture("commands-current.json"))
+{
+    queueCompleteGeneration(state, std::move(capabilities), std::move(status),
+                            std::move(settings));
+    adapter.pumpCompletions(8);
+    if (requestId(state, QString::fromLatin1(CommandsRoute)) != 0) {
+        queue(state, QString::fromLatin1(CommandsRoute), std::move(commands));
+        adapter.pumpCompletions(8);
+    }
+}
+
 PolarisResponse replaceJson(PolarisResponse response, QJsonObject object)
 {
     response.json = QJsonDocument(std::move(object));
@@ -219,6 +237,11 @@ private slots:
     void staleAndDuplicateCompletionsCannotReplaceNewerGeneration();
     void duplicateCompletionForCurrentGenerationIsIgnored();
     void teardownCancelsOutstandingAndLateCallbacksAreHarmless();
+    void noCommandFollowupForFallbackOldOrRejectedEndpoint_data();
+    void noCommandFollowupForFallbackOldOrRejectedEndpoint();
+    void commandDependencyFailuresDisableOnlyNamedCommands_data();
+    void commandDependencyFailuresDisableOnlyNamedCommands();
+    void refreshAndTeardownOwnOutstandingCommandFollowup();
     void localGameStreamExecutionIsDelegatedUnchanged();
     void exactDisabledStatesCoverPermissionOwnershipTransitionAndDisplays();
     void partialMalformedDataDisablesOnlyItsDependentFeature();
@@ -248,7 +271,15 @@ void PolarisAdapterTest::initialDiscoveryUsesExactlyThreeRoutesAndBoundedPumping
     QCOMPARE(adapter->pumpCompletions(1), 1);
     QVERIFY(!adapter->discoverySnapshot().complete);
     QCOMPARE(adapter->pumpCompletions(1), 1);
+    QVERIFY(!adapter->discoverySnapshot().complete);
+    QCOMPARE(state->requests.size(), 4);
+    QCOMPARE(state->requests.at(3).endpoint,
+             QString::fromLatin1(CommandsRoute));
+    queue(state, QString::fromLatin1(CommandsRoute),
+          fixture("commands-current.json"));
+    QCOMPARE(adapter->pumpCompletions(1), 1);
     QVERIFY(adapter->discoverySnapshot().complete);
+    QCOMPARE(adapter->discoverySnapshot().capabilities.commands.size(), 2);
     QCOMPARE(state->maximumObservedDrain, 1);
 }
 
@@ -310,12 +341,39 @@ void PolarisAdapterTest::completionOrderPublishesOneCoherentGeneration()
             queue(state, endpoint, fixture("client-settings-current.json"));
         }
         QCOMPARE(adapter->pumpCompletions(1), 1);
+        if (endpoint == QString::fromLatin1(CapabilitiesRoute)) {
+            QCOMPARE(state->requests.size(), 4);
+            QCOMPARE(state->requests.at(3).endpoint,
+                     QString::fromLatin1(CommandsRoute));
+        }
     }
 
+    QVERIFY(!adapter->discoverySnapshot().complete);
+    queue(state, QString::fromLatin1(CommandsRoute),
+          fixture("commands-current.json"));
+    QCOMPARE(adapter->pumpCompletions(1), 1);
     const PolarisDiscoverySnapshot snapshot = adapter->discoverySnapshot();
     QVERIFY(snapshot.complete);
     QCOMPARE(snapshot.generation, quint64(1));
     QVERIFY(snapshot.capabilities.valid);
+    QCOMPARE(snapshot.capabilities.commands.size(), 2);
+    QCOMPARE(snapshot.capabilities.commands.at(0).identifier,
+             QStringLiteral("restart-shell"));
+    QCOMPARE(snapshot.capabilities.commands.at(1).identifier,
+             QStringLiteral("2"));
+    QVERIFY(!snapshot.capabilities.commands.at(0).retainsRawCommand);
+    QStringList publishedCommandStrings;
+    for (const NamedCommandMetadata& command :
+         snapshot.capabilities.commands) {
+        publishedCommandStrings << command.identifier << command.displayName
+                                << command.risk << command.endpoint.advertised
+                                << command.endpoint.url.toString(
+                                       QUrl::FullyEncoded)
+                                << command.endpoint.errorCode;
+        QVERIFY(!command.retainsRawCommand);
+    }
+    QVERIFY(!publishedCommandStrings.join(QLatin1Char('|')).contains(
+        QStringLiteral("DO_NOT_RETAIN_RAW_COMMAND_SECRET")));
     QVERIFY(snapshot.session.ownsSession);
     QCOMPARE(snapshot.settings.targets.size(), 6);
 }
@@ -380,8 +438,7 @@ void PolarisAdapterTest::failuresRemainDistinctAndLaterRefreshRecovers()
         QStringLiteral("stats.overlay")).enabled);
 
     QVERIFY(adapter->refresh());
-    queueCompleteGeneration(state);
-    adapter->pumpCompletions(8);
+    completeGeneration(*adapter, state);
     QVERIFY(adapter->discoverySnapshot().capabilities.valid);
     QCOMPARE(adapter->discoverySnapshot().generation, quint64(2));
 }
@@ -402,6 +459,12 @@ void PolarisAdapterTest::duplicateCompletionForCurrentGenerationIsIgnored()
           fixture("client-settings-current.json"));
 
     QCOMPARE(adapter->pumpCompletions(8), 4);
+    QVERIFY(!adapter->discoverySnapshot().complete);
+    queue(state, QString::fromLatin1(CommandsRoute),
+          fixture("commands-current.json"));
+    queue(state, QString::fromLatin1(CommandsRoute),
+          fixture("commands-current.json"));
+    QCOMPARE(adapter->pumpCompletions(8), 2);
 
     const PolarisDiscoverySnapshot snapshot = adapter->discoverySnapshot();
     QVERIFY(snapshot.complete);
@@ -426,6 +489,12 @@ void PolarisAdapterTest::staleAndDuplicateCompletionsCannotReplaceNewerGeneratio
     queue(state, QString::fromLatin1(CapabilitiesRoute),
           fixture("capabilities-old.json"), 1);
     adapter->pumpCompletions(32);
+    QVERIFY(!adapter->discoverySnapshot().complete);
+    QCOMPARE(state->maximumObservedDrain,
+             PolarisAdapter::CompletionPumpLimit);
+    queue(state, QString::fromLatin1(CommandsRoute),
+          fixture("commands-current.json"));
+    adapter->pumpCompletions(8);
 
     const PolarisDiscoverySnapshot snapshot = adapter->discoverySnapshot();
     QCOMPARE(snapshot.generation, quint64(2));
@@ -449,6 +518,171 @@ void PolarisAdapterTest::teardownCancelsOutstandingAndLateCallbacksAreHarmless()
     QCOMPARE(state->destroyed, 1);
     savedCompletion(savedId, fixture("capabilities-current.json"));
     QCOMPARE(state->destroyed, 1);
+}
+
+void PolarisAdapterTest::noCommandFollowupForFallbackOldOrRejectedEndpoint_data()
+{
+    QTest::addColumn<QString>("shape");
+
+    QTest::newRow("old") << QStringLiteral("old");
+    QTest::newRow("no-feature") << QStringLiteral("no-feature");
+    QTest::newRow("rejected-endpoint") << QStringLiteral("rejected-endpoint");
+}
+
+void PolarisAdapterTest::noCommandFollowupForFallbackOldOrRejectedEndpoint()
+{
+    QFETCH(QString, shape);
+    FakeSession session;
+    auto state = std::make_shared<FakeTransportState>();
+    std::unique_ptr<GameStreamAdapter> gameStream;
+    auto adapter = makeAdapter(session, state, &gameStream);
+    adapter->startDiscovery();
+
+    PolarisResponse capabilities = shape == QStringLiteral("old")
+        ? fixture("capabilities-old.json")
+        : fixture("capabilities-current.json");
+    if (shape != QStringLiteral("old")) {
+        QJsonObject root = capabilities.json.object();
+        if (shape == QStringLiteral("no-feature")) {
+            QJsonObject features = root.value(
+                QStringLiteral("features")).toObject();
+            features.remove(QStringLiteral("named_commands_v1"));
+            root.insert(QStringLiteral("features"), features);
+        }
+        else {
+            QJsonObject commands = root.value(
+                QStringLiteral("named_commands")).toObject();
+            commands.insert(QStringLiteral("endpoint"),
+                QStringLiteral("https://DO_NOT_RETAIN.invalid/polaris/v1/commands"));
+            root.insert(QStringLiteral("named_commands"), commands);
+        }
+        capabilities = replaceJson(std::move(capabilities), root);
+    }
+
+    queueCompleteGeneration(state, std::move(capabilities));
+    adapter->pumpCompletions(8);
+
+    QVERIFY(adapter->discoverySnapshot().complete);
+    QCOMPARE(state->requests.size(), 3);
+    QCOMPARE(requestId(state, QString::fromLatin1(CommandsRoute)), quint64(0));
+}
+
+void PolarisAdapterTest::commandDependencyFailuresDisableOnlyNamedCommands_data()
+{
+    QTest::addColumn<QString>("transportError");
+    QTest::addColumn<int>("httpStatus");
+    QTest::addColumn<bool>("authenticated");
+    QTest::addColumn<bool>("malformed");
+    QTest::addColumn<QString>("expectedCode");
+    QTest::addColumn<QString>("expectedReason");
+
+    QTest::newRow("network") << QStringLiteral("network_error") << 0 << false
+        << false << QStringLiteral("polaris_unreachable")
+        << QStringLiteral("Polaris is unreachable");
+    QTest::newRow("timeout") << QStringLiteral("timeout") << 0 << false
+        << false << QStringLiteral("polaris_unreachable")
+        << QStringLiteral("Polaris is unreachable");
+    QTest::newRow("tls") << QStringLiteral("tls_identity_mismatch") << 0 << false
+        << false << QStringLiteral("tls_identity_mismatch")
+        << QStringLiteral("Polaris identity verification failed");
+    QTest::newRow("authentication") << QStringLiteral("http_error") << 401 << true
+        << false << QStringLiteral("authentication_failed")
+        << QStringLiteral("Polaris authentication failed");
+    QTest::newRow("unauthenticated-spoof") << QString() << 200 << false
+        << false << QStringLiteral("authentication_failed")
+        << QStringLiteral("Polaris authentication failed");
+    QTest::newRow("permission") << QStringLiteral("http_error") << 403 << true
+        << false << QStringLiteral("permission_denied")
+        << QStringLiteral("This paired client lacks permission");
+    QTest::newRow("not-found") << QStringLiteral("http_error") << 404 << true
+        << false << QStringLiteral("http_error")
+        << QStringLiteral("Polaris returned invalid discovery data");
+    QTest::newRow("malformed") << QString() << 200 << true << true
+        << QStringLiteral("malformed_response")
+        << QStringLiteral("Polaris returned invalid discovery data");
+}
+
+void PolarisAdapterTest::commandDependencyFailuresDisableOnlyNamedCommands()
+{
+    QFETCH(QString, transportError);
+    QFETCH(int, httpStatus);
+    QFETCH(bool, authenticated);
+    QFETCH(bool, malformed);
+    QFETCH(QString, expectedCode);
+    QFETCH(QString, expectedReason);
+    FakeSession session;
+    auto state = std::make_shared<FakeTransportState>();
+    std::unique_ptr<GameStreamAdapter> gameStream;
+    auto adapter = makeAdapter(session, state, &gameStream);
+    adapter->startDiscovery();
+    queueCompleteGeneration(state);
+    adapter->pumpCompletions(8);
+
+    QCOMPARE(state->requests.size(), 4);
+    QVERIFY(!adapter->discoverySnapshot().complete);
+    PolarisResponse failed = failure(transportError);
+    failed.httpStatus = httpStatus;
+    failed.authenticated = authenticated;
+    if (malformed) {
+        failed.json = QJsonDocument(QJsonArray{1, 2});
+    }
+    queue(state, QString::fromLatin1(CommandsRoute), std::move(failed));
+    adapter->pumpCompletions(8);
+
+    QVERIFY(adapter->discoverySnapshot().complete);
+    const PolarisAvailability named = adapter->availability(
+        PolarisOperation::NamedCommand);
+    QCOMPARE(named.errorCode, expectedCode);
+    QCOMPARE(named.reason, expectedReason);
+    QVERIFY(adapter->availability(PolarisOperation::ClipboardRead).enabled);
+    QVERIFY(adapter->availability(PolarisOperation::StopSession).enabled);
+    QVERIFY(adapter->availability(PolarisOperation::DisplaySwitch).enabled);
+    QVERIFY(adapter->snapshot().actionStates.value(
+        QStringLiteral("stats.overlay")).enabled);
+}
+
+void PolarisAdapterTest::refreshAndTeardownOwnOutstandingCommandFollowup()
+{
+    FakeSession session;
+    auto state = std::make_shared<FakeTransportState>();
+    std::unique_ptr<GameStreamAdapter> gameStream;
+    auto adapter = makeAdapter(session, state, &gameStream);
+    adapter->startDiscovery();
+    queueCompleteGeneration(state);
+    adapter->pumpCompletions(8);
+    QCOMPARE(state->requests.size(), 4);
+    const auto staleCommand = state->requests.at(3).completion;
+    const auto staleId = state->requests.at(3).id;
+
+    QVERIFY(adapter->refresh());
+    QVERIFY(state->cancellations.contains(staleId));
+    staleCommand(staleId, fixture("commands-current.json"));
+    staleCommand(staleId, fixture("commands-current.json"));
+    queueCompleteGeneration(state);
+    adapter->pumpCompletions(8);
+    QCOMPARE(state->requests.size(), 8);
+    queue(state, QString::fromLatin1(CommandsRoute),
+          fixture("commands-current.json"));
+    queue(state, QString::fromLatin1(CommandsRoute),
+          fixture("commands-current.json"));
+    adapter->pumpCompletions(8);
+    QCOMPARE(adapter->discoverySnapshot().generation, quint64(2));
+    QCOMPARE(adapter->discoverySnapshot().capabilities.commands.size(), 2);
+
+    auto teardownState = std::make_shared<FakeTransportState>();
+    std::unique_ptr<GameStreamAdapter> teardownGameStream;
+    auto teardownAdapter = makeAdapter(
+        session, teardownState, &teardownGameStream);
+    teardownAdapter->startDiscovery();
+    queueCompleteGeneration(teardownState);
+    teardownAdapter->pumpCompletions(8);
+    QCOMPARE(teardownState->requests.size(), 4);
+    const auto lateCommand = teardownState->requests.at(3).completion;
+    const auto lateId = teardownState->requests.at(3).id;
+    teardownAdapter.reset();
+    QVERIFY(teardownState->cancellations.contains(lateId));
+    lateCommand(lateId, fixture("commands-current.json"));
+    QCOMPARE(teardownState->destroyed, 1);
 }
 
 void PolarisAdapterTest::localGameStreamExecutionIsDelegatedUnchanged()
@@ -476,10 +710,9 @@ void PolarisAdapterTest::exactDisabledStatesCoverPermissionOwnershipTransitionAn
     std::unique_ptr<GameStreamAdapter> gameStream;
     auto adapter = makeAdapter(session, state, &gameStream);
     adapter->startDiscovery();
-    queueCompleteGeneration(state, fixture("capabilities-current.json"),
-                            fixture("status-viewer.json"),
-                            fixture("client-settings-current.json"));
-    adapter->pumpCompletions(8);
+    completeGeneration(*adapter, state, fixture("capabilities-current.json"),
+                       fixture("status-viewer.json"),
+                       fixture("client-settings-current.json"));
 
     QCOMPARE(adapter->availability(PolarisOperation::NamedCommand).reason,
              QStringLiteral("This paired client lacks permission"));
@@ -491,20 +724,20 @@ void PolarisAdapterTest::exactDisabledStatesCoverPermissionOwnershipTransitionAn
     QJsonObject ownerWithoutOwnership = fixture("status-owner.json").json.object();
     ownerWithoutOwnership.insert(QStringLiteral("owned_by_client"), false);
     adapter->refresh();
-    queueCompleteGeneration(state, fixture("capabilities-current.json"),
+    completeGeneration(
+        *adapter, state, fixture("capabilities-current.json"),
         replaceJson(fixture("status-owner.json"), ownerWithoutOwnership),
         fixture("client-settings-current.json"));
-    adapter->pumpCompletions(8);
     QCOMPARE(adapter->availability(PolarisOperation::DisplaySwitch).reason,
              QStringLiteral("Only the controlling client can do this"));
 
     QJsonObject transitioning = fixture("status-owner.json").json.object();
     transitioning.insert(QStringLiteral("state"), QStringLiteral("stopping"));
     adapter->refresh();
-    queueCompleteGeneration(state, fixture("capabilities-current.json"),
+    completeGeneration(
+        *adapter, state, fixture("capabilities-current.json"),
         replaceJson(fixture("status-owner.json"), transitioning),
         fixture("client-settings-current.json"));
-    adapter->pumpCompletions(8);
     QCOMPARE(adapter->availability(PolarisOperation::DisplaySwitch).reason,
              QStringLiteral("The session is transitioning"));
 
@@ -521,17 +754,17 @@ void PolarisAdapterTest::exactDisabledStatesCoverPermissionOwnershipTransitionAn
                     {QStringLiteral("active"), true}}});
     noAlternate.insert(QStringLiteral("capabilities"), settingsCaps);
     adapter->refresh();
-    queueCompleteGeneration(state, fixture("capabilities-current.json"),
+    completeGeneration(
+        *adapter, state, fixture("capabilities-current.json"),
         fixture("status-owner.json"),
         replaceJson(fixture("client-settings-current.json"), noAlternate));
-    adapter->pumpCompletions(8);
     QCOMPARE(adapter->availability(PolarisOperation::DisplaySwitch).reason,
              QStringLiteral("No alternate display is available"));
 
     adapter->refresh();
-    queueCompleteGeneration(state, fixture("capabilities-old.json"),
-        fixture("status-owner.json"), fixture("client-settings-current.json"));
-    adapter->pumpCompletions(8);
+    completeGeneration(*adapter, state, fixture("capabilities-old.json"),
+                       fixture("status-owner.json"),
+                       fixture("client-settings-current.json"));
     QCOMPARE(adapter->availability(PolarisOperation::DisplaySwitch).reason,
              QStringLiteral("This Polaris version does not advertise this feature"));
 }
@@ -553,10 +786,9 @@ void PolarisAdapterTest::partialMalformedDataDisablesOnlyItsDependentFeature()
     malformedSettings.httpStatus = 200;
     malformedSettings.authenticated = true;
     malformedSettings.json = QJsonDocument(QJsonArray{1, 2});
-    queueCompleteGeneration(state,
+    completeGeneration(*adapter, state,
         replaceJson(fixture("capabilities-current.json"), capabilities),
         fixture("status-owner.json"), malformedSettings);
-    adapter->pumpCompletions(8);
 
     QVERIFY(adapter->availability(PolarisOperation::ClipboardRead).enabled);
     QCOMPARE(adapter->availability(PolarisOperation::NamedCommand).reason,
@@ -641,12 +873,11 @@ void PolarisAdapterTest::dependencyFailuresRemainExactAndCompositional()
     PolarisResponse failed = failure(transportError);
     failed.httpStatus = httpStatus;
     failed.authenticated = httpStatus != 0;
-    queueCompleteGeneration(
-        state,
+    completeGeneration(
+        *adapter, state,
         fixture("capabilities-current.json"),
         sessionFailure ? failed : fixture("status-owner.json"),
         sessionFailure ? fixture("client-settings-current.json") : failed);
-    adapter->pumpCompletions(8);
 
     const PolarisAvailability display = adapter->availability(
         PolarisOperation::DisplaySwitch);
@@ -674,26 +905,27 @@ void PolarisAdapterTest::refreshKeepsPreviousSnapshotUntilNewGenerationIsComplet
     std::unique_ptr<GameStreamAdapter> gameStream;
     auto adapter = makeAdapter(session, state, &gameStream);
     adapter->startDiscovery();
-    queueCompleteGeneration(state);
-    adapter->pumpCompletions(8);
+    completeGeneration(*adapter, state);
     const PolarisDiscoverySnapshot first = adapter->discoverySnapshot();
     QCOMPARE(first.generation, quint64(1));
 
     adapter->refresh();
-    queue(state, QString::fromLatin1(CapabilitiesRoute),
-          fixture("capabilities-old.json"));
-    adapter->pumpCompletions(1);
+    queueCompleteGeneration(state, fixture("capabilities-current.json"),
+                            fixture("status-viewer.json"),
+                            fixture("client-settings-current.json"));
+    adapter->pumpCompletions(8);
     QCOMPARE(adapter->discoverySnapshot().generation, quint64(1));
     QVERIFY(adapter->discoverySnapshot().capabilities.features.contains(
         QStringLiteral("named_commands_v1")));
 
-    queue(state, QString::fromLatin1(StatusRoute), fixture("status-viewer.json"));
-    queue(state, QString::fromLatin1(SettingsRoute),
-          fixture("client-settings-current.json"));
+    QCOMPARE(state->requests.last().endpoint,
+             QString::fromLatin1(CommandsRoute));
+    queue(state, QString::fromLatin1(CommandsRoute),
+          fixture("commands-current.json"));
     adapter->pumpCompletions(8);
     QCOMPARE(adapter->discoverySnapshot().generation, quint64(2));
-    QVERIFY(!adapter->discoverySnapshot().capabilities.features.contains(
-        QStringLiteral("named_commands_v1")));
+    QVERIFY(!adapter->discoverySnapshot().session.ownsSession);
+    QCOMPARE(adapter->discoverySnapshot().capabilities.commands.size(), 2);
 }
 
 REGISTER_PERIGEE_TEST(PolarisAdapterTest);

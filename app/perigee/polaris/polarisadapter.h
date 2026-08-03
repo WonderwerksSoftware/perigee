@@ -55,6 +55,13 @@ public:
     void cancel(const QString& resourceKey) override;
 
 private:
+    enum class DiscoveryPart {
+        Capabilities,
+        Session,
+        Settings,
+        Commands,
+    };
+
     void execute(const QString& actionId,
                  QVariantMap parameters,
                  Completion completion) override;
@@ -62,6 +69,13 @@ private:
     struct SharedState;
 
     bool beginGeneration(bool initialOnly);
+    void submitRequest(quint64 generation, const QString& endpoint,
+                       DiscoveryPart part);
+    static void handleDiscoveryCompletion(
+        const std::weak_ptr<SharedState>& weakState,
+        quint64 generation, DiscoveryPart part,
+        PolarisTransport::RequestId requestId,
+        const PolarisResponse& response);
     QVector<PolarisTransport::RequestId> outstandingRequestIds() const;
     static ActionState actionState(const PolarisAvailability& availability);
 

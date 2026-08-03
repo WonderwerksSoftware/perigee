@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "commands": [
+    {
+      "index": 0,
+      "id": "restart-shell",
+      "name": "Restart shell",
+      "risk": "disruptive",
+      "command": "DO_NOT_RETAIN_RAW_COMMAND_SECRET"
+    },
+    {
+      "index": 2,
+      "id": "",
+      "name": "Clear cache",
+      "risk": "safe",
+      "extra": "ignored"
+    },
+    {
+      "index": -1,
+      "name": "Invalid negative",
+      "risk": "safe"
+    },
+    {
+      "index": 3,
+      "name": 22,
+      "risk": "safe"
+    },
+    {
+      "index": 2,
+      "name": "Duplicate index",
+      "risk": "safe"
+    }
+  ],
+  "unknown": {
+    "future": true
+  }
+}

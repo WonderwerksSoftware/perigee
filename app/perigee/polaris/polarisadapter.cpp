@@ -16,12 +16,6 @@ constexpr auto CapabilitiesRoute = "/polaris/v1/capabilities";
 constexpr auto SessionStatusRoute = "/polaris/v1/session/status";
 constexpr auto ClientSettingsRoute = "/polaris/v1/client-settings";
 
-enum class DiscoveryPart {
-    Capabilities,
-    Session,
-    Settings,
-};
-
 class ApiClientTransport final : public PolarisTransport
 {
 public:
@@ -77,6 +71,9 @@ struct PolarisAdapter::SharedState
         std::optional<PolarisResponse> capabilities;
         std::optional<PolarisResponse> session;
         std::optional<PolarisResponse> settings;
+        std::optional<PolarisResponse> commands;
+        bool commandsRequired = false;
+        bool commandRequestScheduled = false;
         bool cancellationIssued = false;
         bool terminal = false;
     };
@@ -172,97 +169,130 @@ bool PolarisAdapter::beginGeneration(bool initialOnly)
         m_Transport->cancel(request);
     }
 
-    const auto submit = [this, generation](const QString& endpoint,
-                                           DiscoveryPart part) {
-        const std::weak_ptr<SharedState> weakState = m_State;
-        const PolarisTransport::RequestId request = m_Transport->get(
-            endpoint, true,
-            [weakState, generation, part](PolarisTransport::RequestId requestId,
-                                          const PolarisResponse& response) {
-                const std::shared_ptr<SharedState> state = weakState.lock();
-                if (!state) {
-                    return;
-                }
-                QMutexLocker locker(&state->mutex);
-                if (!state->alive || !state->active.has_value() ||
-                        state->active->id != generation ||
-                        state->active->terminal ||
-                        state->active->completedRequests.contains(requestId) ||
-                        !state->active->partByRequest.contains(requestId) ||
-                        state->active->partByRequest.value(requestId) != part) {
-                    return;
-                }
-                state->active->completedRequests.insert(requestId);
-                switch (part) {
-                case DiscoveryPart::Capabilities:
-                    state->active->capabilities = response;
-                    break;
-                case DiscoveryPart::Session:
-                    state->active->session = response;
-                    break;
-                case DiscoveryPart::Settings:
-                    state->active->settings = response;
-                    break;
-                }
-
-                if (state->active->capabilities.has_value()) {
-                    const PolarisCapabilities capabilities =
-                        PolarisModels::parseCapabilities(
-                            *state->active->capabilities, state->origin);
-                    if (capabilities.standardHost) {
-                        PolarisDiscoverySnapshot fallback;
-                        fallback.generation = generation;
-                        fallback.complete = true;
-                        fallback.standardHost = true;
-                        fallback.capabilities = capabilities;
-                        state->published = std::move(fallback);
-                        state->active->terminal = true;
-                        state->active->capabilities.reset();
-                        state->active->session.reset();
-                        state->active->settings.reset();
-                        return;
-                    }
-                }
-
-                if (!state->active->capabilities.has_value() ||
-                        !state->active->session.has_value() ||
-                        !state->active->settings.has_value()) {
-                    return;
-                }
-
-                PolarisDiscoverySnapshot completed;
-                completed.generation = generation;
-                completed.complete = true;
-                completed.capabilities = PolarisModels::parseCapabilities(
-                    *state->active->capabilities, state->origin);
-                completed.session = PolarisModels::parseSessionStatus(
-                    *state->active->session, state->origin);
-                completed.settings = PolarisModels::parseClientSettings(
-                    *state->active->settings);
-                completed.standardHost = completed.capabilities.standardHost;
-                completed.errorCode = firstDiscoveryError(
-                    completed.capabilities);
-                state->published = std::move(completed);
-                state->active->terminal = true;
-                state->active->capabilities.reset();
-                state->active->session.reset();
-                state->active->settings.reset();
-            });
-        QMutexLocker locker(&m_State->mutex);
-        if (m_State->alive && m_State->active.has_value() &&
-                m_State->active->id == generation) {
-            m_State->active->partByRequest.insert(request, part);
-        }
-        else {
-            locker.unlock();
-            m_Transport->cancel(request);
-        }
-    };
-
-    submit(QString::fromLatin1(CapabilitiesRoute), DiscoveryPart::Capabilities);
-    submit(QString::fromLatin1(SessionStatusRoute), DiscoveryPart::Session);
-    submit(QString::fromLatin1(ClientSettingsRoute), DiscoveryPart::Settings);
+    submitRequest(generation, QString::fromLatin1(CapabilitiesRoute),
+                  DiscoveryPart::Capabilities);
+    submitRequest(generation, QString::fromLatin1(SessionStatusRoute),
+                  DiscoveryPart::Session);
+    submitRequest(generation, QString::fromLatin1(ClientSettingsRoute),
+                  DiscoveryPart::Settings);
     return true;
+}
+
+void PolarisAdapter::submitRequest(quint64 generation,
+                                   const QString& endpoint,
+                                   DiscoveryPart part)
+{
+    const std::weak_ptr<SharedState> weakState = m_State;
+    const PolarisTransport::RequestId request = m_Transport->get(
+        endpoint, true,
+        [weakState, generation, part](PolarisTransport::RequestId requestId,
+                                      const PolarisResponse& response) {
+            handleDiscoveryCompletion(weakState, generation, part,
+                                      requestId, response);
+        });
+    QMutexLocker locker(&m_State->mutex);
+    if (m_State->alive && m_State->active.has_value() &&
+            m_State->active->id == generation &&
+            !m_State->active->terminal) {
+        m_State->active->partByRequest.insert(request, part);
+    }
+    else {
+        locker.unlock();
+        m_Transport->cancel(request);
+    }
+}
+
+void PolarisAdapter::handleDiscoveryCompletion(
+    const std::weak_ptr<SharedState>& weakState,
+    quint64 generation, DiscoveryPart part,
+    PolarisTransport::RequestId requestId,
+    const PolarisResponse& response)
+{
+    const std::shared_ptr<SharedState> state = weakState.lock();
+    if (!state) {
+        return;
+    }
+    QMutexLocker locker(&state->mutex);
+    if (!state->alive || !state->active.has_value() ||
+            state->active->id != generation ||
+            state->active->terminal ||
+            state->active->completedRequests.contains(requestId) ||
+            !state->active->partByRequest.contains(requestId) ||
+            state->active->partByRequest.value(requestId) != part) {
+        return;
+    }
+    state->active->completedRequests.insert(requestId);
+    switch (part) {
+    case DiscoveryPart::Capabilities:
+        state->active->capabilities = response;
+        break;
+    case DiscoveryPart::Session:
+        state->active->session = response;
+        break;
+    case DiscoveryPart::Settings:
+        state->active->settings = response;
+        break;
+    case DiscoveryPart::Commands:
+        state->active->commands = response;
+        break;
+    }
+
+    PolarisCapabilities capabilities;
+    if (state->active->capabilities.has_value()) {
+        capabilities = PolarisModels::parseCapabilities(
+            *state->active->capabilities, state->origin);
+        if (capabilities.standardHost) {
+            PolarisDiscoverySnapshot fallback;
+            fallback.generation = generation;
+            fallback.complete = true;
+            fallback.standardHost = true;
+            fallback.capabilities = capabilities;
+            state->published = std::move(fallback);
+            state->active->terminal = true;
+            state->active->capabilities.reset();
+            state->active->session.reset();
+            state->active->settings.reset();
+            state->active->commands.reset();
+            return;
+        }
+        state->active->commandsRequired = capabilities.valid &&
+            capabilities.features.contains(
+                QStringLiteral("named_commands_v1")) &&
+            capabilities.commandsEndpoint.usable;
+    }
+
+    if (!state->active->capabilities.has_value() ||
+            !state->active->session.has_value() ||
+            !state->active->settings.has_value() ||
+            (state->active->commandsRequired &&
+             !state->active->commands.has_value())) {
+        return;
+    }
+
+    PolarisDiscoverySnapshot completed;
+    completed.generation = generation;
+    completed.complete = true;
+    completed.capabilities = std::move(capabilities);
+    if (state->active->commandsRequired) {
+        const PolarisCommandCatalog catalog = PolarisModels::parseCommands(
+            *state->active->commands,
+            completed.capabilities.commandsEndpoint);
+        completed.capabilities.commandCatalogValid = catalog.valid;
+        completed.capabilities.commandCatalogErrorCode = catalog.errorCode;
+        completed.capabilities.commands = catalog.commands;
+    }
+    completed.session = PolarisModels::parseSessionStatus(
+        *state->active->session, state->origin);
+    completed.settings = PolarisModels::parseClientSettings(
+        *state->active->settings);
+    completed.standardHost = completed.capabilities.standardHost;
+    completed.errorCode = firstDiscoveryError(completed.capabilities);
+    state->published = std::move(completed);
+    state->active->terminal = true;
+    state->active->capabilities.reset();
+    state->active->session.reset();
+    state->active->settings.reset();
+    state->active->commands.reset();
 }
 
 int PolarisAdapter::pumpCompletions(int maximum)
@@ -272,6 +302,30 @@ int PolarisAdapter::pumpCompletions(int maximum)
     }
     const int delivered = m_Transport->drainCompletions(
         std::min(maximum, CompletionPumpLimit));
+
+    quint64 commandGeneration = 0;
+    QString commandEndpoint;
+    {
+        QMutexLocker locker(&m_State->mutex);
+        if (m_State->active.has_value() &&
+                !m_State->active->terminal &&
+                m_State->active->commandsRequired &&
+                !m_State->active->commandRequestScheduled &&
+                m_State->active->capabilities.has_value()) {
+            const PolarisCapabilities capabilities =
+                PolarisModels::parseCapabilities(
+                    *m_State->active->capabilities, m_State->origin);
+            if (capabilities.commandsEndpoint.usable) {
+                m_State->active->commandRequestScheduled = true;
+                commandGeneration = m_State->active->id;
+                commandEndpoint = capabilities.commandsEndpoint.advertised;
+            }
+        }
+    }
+    if (!commandEndpoint.isEmpty()) {
+        submitRequest(commandGeneration, commandEndpoint,
+                      DiscoveryPart::Commands);
+    }
 
     QVector<PolarisTransport::RequestId> cancellations;
     {
