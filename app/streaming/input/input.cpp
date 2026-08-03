@@ -273,6 +273,7 @@ void SdlInputHandler::setWindow(SDL_Window *window)
 
 void SdlInputHandler::raiseAllKeys()
 {
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
     const QVector<short> keys = m_RemoteInputState.takeKeyReleases();
     if (keys.isEmpty()) {
         return;
@@ -293,8 +294,8 @@ CaptureSnapshot SdlInputHandler::beginLocalOverlayInput()
         isCaptureActive(),
         isSystemKeyCaptureActive(),
     };
+    m_DeferredCaptureActive.reset();
     m_LocalOverlayInputActive.store(true, std::memory_order_release);
-    sendNeutralRemoteInput();
 
     // Touch gestures can finish from SDL timer threads after their last event.
     // Stop those callbacks at the ownership boundary so they cannot recreate
@@ -313,7 +314,10 @@ CaptureSnapshot SdlInputHandler::beginLocalOverlayInput()
     SDL_zero(m_LastTouchUpEvent);
     SDL_zero(m_TouchDownEvent);
 
-    setCaptureActive(false);
+    // Timer removal prevents callbacks that have not started. The synchronized
+    // neutral send waits for any callback already inside a remote-send section.
+    sendNeutralRemoteInput();
+    applyCaptureActive(false);
     return snapshot;
 }
 
@@ -321,7 +325,9 @@ void SdlInputHandler::endLocalOverlayInput(CaptureSnapshot snapshot,
                                            bool keepReleased)
 {
     sendNeutralRemoteInput();
-    setCaptureActive(!keepReleased && snapshot.mouseCaptured);
+    const bool restoreCapture = m_DeferredCaptureActive.value_or(snapshot.mouseCaptured);
+    m_DeferredCaptureActive.reset();
+    applyCaptureActive(!keepReleased && restoreCapture);
     if (!keepReleased && snapshot.keyboardCaptured &&
             !m_KeyboardCaptureActive) {
         updateKeyboardGrabState();
@@ -331,7 +337,16 @@ void SdlInputHandler::endLocalOverlayInput(CaptureSnapshot snapshot,
 
 void SdlInputHandler::sendNeutralRemoteInput()
 {
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
     const NeutralRemoteInput neutral = m_RemoteInputState.takeNeutralInput();
+    if (neutral.cancelAllTouches) {
+        LiSendTouchEvent(LI_TOUCH_EVENT_CANCEL_ALL, 0, 0, 0, 0,
+                         0, 0, LI_ROT_UNKNOWN);
+    }
+    if (neutral.cancelPen) {
+        LiSendPenEvent(LI_TOUCH_EVENT_CANCEL, LI_TOOL_TYPE_PEN, 0,
+                       0, 0, 0, 0, 0, LI_ROT_UNKNOWN, LI_TILT_UNKNOWN);
+    }
     for (short keyCode : neutral.keyReleases) {
         LiSendKeyboardEvent(keyCode, KEY_ACTION_UP, 0);
     }
@@ -355,14 +370,75 @@ void SdlInputHandler::sendNeutralRemoteInput()
     }
 }
 
+bool SdlInputHandler::sendNeutralControllerInput(SDL_JoystickID id)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    GamepadState* state = findStateForGamepad(id);
+    if (state == nullptr) {
+        return false;
+    }
+
+    state->buttons = 0;
+    state->lsX = state->lsY = 0;
+    state->rsX = state->rsY = 0;
+    state->lt = state->rt = 0;
+    state->emulatedClickpadButtonDown = false;
+    if (m_MultiController) {
+        LiSendMultiControllerEvent(state->index, m_GamepadMask,
+                                   0, 0, 0, 0, 0, 0, 0);
+    }
+    else {
+        sendGamepadState(state);
+    }
+    return true;
+}
+
 void SdlInputHandler::sendTrackedMouseButtonEvent(int action, int button)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
     if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
         return;
     }
     const bool pressed = action == BUTTON_ACTION_PRESS;
     m_RemoteInputState.mouseButtonSent(button, pressed);
     LiSendMouseButtonEvent(action, button);
+}
+
+void SdlInputHandler::sendTrackedKeyboardEvent(short keyCode, char action,
+                                               char modifiers, char flags)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return;
+    }
+    m_RemoteInputState.keySent(keyCode, action == KEY_ACTION_DOWN);
+    LiSendKeyboardEvent2(0x8000 | keyCode, action, modifiers, flags);
+}
+
+void SdlInputHandler::sendTrackedTouchEvent(uint8_t eventType,
+                                            uint32_t pointerId,
+                                            float x, float y,
+                                            float pressure)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return;
+    }
+    m_RemoteInputState.touchSent(eventType, pointerId);
+    LiSendTouchEvent(eventType, pointerId, x, y, pressure,
+                     0, 0, LI_ROT_UNKNOWN);
+}
+
+void SdlInputHandler::sendTrackedPenEvent(uint8_t eventType, float x, float y,
+                                          float pressure)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return;
+    }
+    m_RemoteInputState.penSent(eventType);
+    LiSendPenEvent(eventType, LI_TOOL_TYPE_PEN, 0, x, y, pressure,
+                   0, 0, LI_ROT_UNKNOWN, LI_TILT_UNKNOWN);
 }
 
 void SdlInputHandler::notifyMouseLeave()
@@ -469,6 +545,15 @@ bool SdlInputHandler::isSystemKeyCaptureActive()
 
 void SdlInputHandler::setCaptureActive(bool active)
 {
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        m_DeferredCaptureActive = active;
+        return;
+    }
+    applyCaptureActive(active);
+}
+
+void SdlInputHandler::applyCaptureActive(bool active)
+{
     if (active) {
         // If we're in relative mode, try to activate SDL's relative mouse mode
         if (m_AbsoluteMouseMode || SDL_SetRelativeMouseMode(SDL_TRUE) < 0) {
@@ -523,6 +608,10 @@ void SdlInputHandler::setCaptureActive(bool active)
 
 void SdlInputHandler::handleTouchFingerEvent(SDL_TouchFingerEvent* event)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return;
+    }
 #if SDL_VERSION_ATLEAST(2, 0, 10)
     if (SDL_GetTouchDeviceType(event->touchId) != SDL_TOUCH_DEVICE_DIRECT) {
         // Ignore anything that isn't a touchscreen. We may get callbacks

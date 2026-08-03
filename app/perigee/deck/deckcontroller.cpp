@@ -2,14 +2,11 @@
 
 #include "perigee/actions/actionregistry.h"
 
-#include <QMetaObject>
-#include <QPointer>
-#include <QThread>
-
 DeckController::DeckController(ActionRegistry* registry, QObject* parent)
     : QObject(parent)
     , m_Registry(registry)
     , m_ActionModel(registry, this)
+    , m_PendingRefresh(std::make_shared<std::atomic_bool>(false))
 {
 }
 
@@ -285,6 +282,15 @@ void DeckController::refresh()
     }
 }
 
+bool DeckController::pumpPendingWork()
+{
+    if (!m_PendingRefresh->exchange(false, std::memory_order_acq_rel)) {
+        return false;
+    }
+    refresh();
+    return true;
+}
+
 ActionCategory DeckController::categoryForIndex(int categoryIndex)
 {
     switch (categoryIndex) {
@@ -335,20 +341,10 @@ void DeckController::executeAction(const QString& actionId)
         return;
     }
 
-    QPointer<DeckController> self(this);
-    m_Registry->execute(actionId, {}, [self](const ActionResult&) {
-        if (self.isNull()) {
-            return;
-        }
-        if (QThread::currentThread() == self->thread()) {
-            self->refresh();
-        }
-        else {
-            QMetaObject::invokeMethod(self.data(), [self] {
-                if (!self.isNull()) {
-                    self->refresh();
-                }
-            }, Qt::QueuedConnection);
+    std::weak_ptr<std::atomic_bool> pendingRefresh = m_PendingRefresh;
+    m_Registry->execute(actionId, {}, [pendingRefresh](const ActionResult&) {
+        if (const auto pending = pendingRefresh.lock()) {
+            pending->store(true, std::memory_order_release);
         }
     });
     refresh();

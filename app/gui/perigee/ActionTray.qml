@@ -34,8 +34,10 @@ FocusScope {
         currentIndex: deckController.actionModel.focusedRow
 
         onCurrentIndexChanged: {
-            if (currentIndex >= 0)
-                Qt.callLater(positionViewAtIndex, currentIndex, ListView.Contain)
+            if (currentIndex >= 0) {
+                forceLayout()
+                positionViewAtIndex(currentIndex, ListView.Contain)
+            }
         }
 
         delegate: Item {

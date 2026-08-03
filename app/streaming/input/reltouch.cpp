@@ -151,7 +151,7 @@ void SdlInputHandler::handleRelativeFingerEvent(SDL_TouchFingerEvent* event)
             SDL_RemoveTimer(m_RightButtonReleaseTimer);
             m_RightButtonReleaseTimer = SDL_AddTimer(TAP_BUTTON_RELEASE_DELAY,
                                                      releaseRightButtonTimerCallback,
-                                                     nullptr);
+                                                     this);
         }
         // 1 finger tap
         else if (event->timestamp - m_TouchDownEvent[0].timestamp < 250) {
@@ -162,7 +162,7 @@ void SdlInputHandler::handleRelativeFingerEvent(SDL_TouchFingerEvent* event)
             SDL_RemoveTimer(m_LeftButtonReleaseTimer);
             m_LeftButtonReleaseTimer = SDL_AddTimer(TAP_BUTTON_RELEASE_DELAY,
                                                     releaseLeftButtonTimerCallback,
-                                                    nullptr);
+                                                    this);
         }
     }
 

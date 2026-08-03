@@ -156,12 +156,14 @@ void SdlInputHandler::sendGamepadBatteryState(GamepadState* state, SDL_JoystickP
 Uint32 SdlInputHandler::mouseEmulationTimerCallback(Uint32 interval, void *param)
 {
     auto gamepad = reinterpret_cast<GamepadState*>(param);
-    if (gamepad->inputHandler != nullptr &&
-            gamepad->inputHandler->m_LocalOverlayInputActive.load(
-                std::memory_order_acquire)) {
+    if (gamepad->inputHandler == nullptr) {
         return interval;
     }
-
+    SdlInputHandler* handler = gamepad->inputHandler;
+    std::lock_guard<std::recursive_mutex> lock(handler->m_RemoteInputMutex);
+    if (handler->m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return interval;
+    }
     int rawX;
     int rawY;
 
@@ -195,6 +197,10 @@ Uint32 SdlInputHandler::mouseEmulationTimerCallback(Uint32 interval, void *param
 
 void SdlInputHandler::handleControllerAxisEvent(SDL_ControllerAxisEvent* event)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return;
+    }
     SDL_JoystickID gameControllerId = event->which;
     GamepadState* state = findStateForGamepad(gameControllerId);
     if (state == NULL) {
@@ -259,6 +265,10 @@ void SdlInputHandler::handleControllerAxisEvent(SDL_ControllerAxisEvent* event)
 
 void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* event)
 {
+    std::unique_lock<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return;
+    }
     if (event->button >= SDL_arraysize(k_ButtonMap)) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "No mapping for gamepad button: %u",
@@ -330,8 +340,14 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         if (event->button == SDL_CONTROLLER_BUTTON_START) {
             if (SDL_GetTicks() - state->lastStartDownTime > MOUSE_EMULATION_LONG_PRESS_TIME) {
                 if (state->mouseEmulationTimer != 0) {
-                    SDL_RemoveTimer(state->mouseEmulationTimer);
+                    const SDL_TimerID timer = state->mouseEmulationTimer;
                     state->mouseEmulationTimer = 0;
+                    lock.unlock();
+                    SDL_RemoveTimer(timer);
+                    lock.lock();
+                    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+                        return;
+                    }
 
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                                 "Mouse emulation deactivated");
@@ -380,8 +396,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         SDL_PushEvent(&event);
 
         // Clear buttons down on this gamepad
-        LiSendMultiControllerEvent(state->index, m_GamepadMask,
-                                   0, 0, 0, 0, 0, 0, 0);
+        sendNeutralControllerInput(state->jsId);
         return;
     }
 
@@ -395,8 +410,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
                                                             !Session::get()->getOverlayManager().isOverlayEnabled(Overlay::OverlayDebug));
 
         // Clear buttons down on this gamepad
-        LiSendMultiControllerEvent(state->index, m_GamepadMask,
-                                   0, 0, 0, 0, 0, 0, 0);
+        sendNeutralControllerInput(state->jsId);
         return;
     }
 
@@ -410,6 +424,10 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
 
 void SdlInputHandler::handleControllerSensorEvent(SDL_ControllerSensorEvent* event)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return;
+    }
     GamepadState* state = findStateForGamepad(event->which);
     if (state == NULL) {
         return;
@@ -445,6 +463,10 @@ void SdlInputHandler::handleControllerSensorEvent(SDL_ControllerSensorEvent* eve
 
 void SdlInputHandler::handleControllerTouchpadEvent(SDL_ControllerTouchpadEvent* event)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return;
+    }
     GamepadState* state = findStateForGamepad(event->which);
     if (state == NULL) {
         return;
@@ -476,6 +498,7 @@ void SdlInputHandler::handleControllerTouchpadEvent(SDL_ControllerTouchpadEvent*
 
 void SdlInputHandler::handleJoystickBatteryEvent(SDL_JoyBatteryEvent* event)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
     GamepadState* state = findStateForGamepad(event->which);
     if (state == NULL) {
         return;
@@ -488,6 +511,7 @@ void SdlInputHandler::handleJoystickBatteryEvent(SDL_JoyBatteryEvent* event)
 
 void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* event)
 {
+    std::unique_lock<std::recursive_mutex> lock(m_RemoteInputMutex);
     GamepadState* state;
 
     if (event->type == SDL_CONTROLLERDEVICEADDED) {
@@ -737,7 +761,15 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
         if (state != NULL) {
             if (state->mouseEmulationTimer != 0) {
                 Session::get()->notifyMouseEmulationMode(false);
-                SDL_RemoveTimer(state->mouseEmulationTimer);
+                const SDL_TimerID timer = state->mouseEmulationTimer;
+                state->mouseEmulationTimer = 0;
+                lock.unlock();
+                SDL_RemoveTimer(timer);
+                lock.lock();
+                state = findStateForGamepad(event->which);
+                if (state == nullptr) {
+                    return;
+                }
             }
 
             SDL_GameControllerClose(state->controller);

@@ -5,6 +5,9 @@
 #include <QObject>
 #include <QStringList>
 
+#include <atomic>
+#include <memory>
+
 class ActionRegistry;
 
 class DeckController final : public QObject
@@ -62,6 +65,7 @@ public:
     Q_INVOKABLE void acceptConfirmation();
     Q_INVOKABLE void back();
     Q_INVOKABLE void refresh();
+    bool pumpPendingWork();
 
 signals:
     void openChanged();
@@ -85,4 +89,5 @@ private:
     int m_ActiveCategory = 0;
     QString m_ConfirmationActionId;
     QString m_ConfirmationActionLabel;
+    std::shared_ptr<std::atomic_bool> m_PendingRefresh;
 };

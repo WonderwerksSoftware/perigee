@@ -175,6 +175,10 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
 
 void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return;
+    }
     short keyCode;
     char modifiers;
     bool shouldNotConvertToScanCodeOnServer = false;
@@ -464,17 +468,9 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
         }
     }
 
-    // Track the key state so we always know which keys are down
-    if (event->state == SDL_PRESSED) {
-        m_RemoteInputState.keySent(keyCode, true);
-    }
-    else {
-        m_RemoteInputState.keySent(keyCode, false);
-    }
-
-    LiSendKeyboardEvent2(0x8000 | keyCode,
-                        event->state == SDL_PRESSED ?
-                            KEY_ACTION_DOWN : KEY_ACTION_UP,
-                        modifiers,
-                        shouldNotConvertToScanCodeOnServer ? SS_KBE_FLAG_NON_NORMALIZED : 0);
+    sendTrackedKeyboardEvent(
+        keyCode,
+        event->state == SDL_PRESSED ? KEY_ACTION_DOWN : KEY_ACTION_UP,
+        modifiers,
+        shouldNotConvertToScanCodeOnServer ? SS_KBE_FLAG_NON_NORMALIZED : 0);
 }

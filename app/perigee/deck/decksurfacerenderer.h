@@ -1,5 +1,7 @@
 #pragma once
 
+#include "perigee/input/deckinputdelivery.h"
+
 #include <QImage>
 #include <QSize>
 #include <QString>
@@ -18,7 +20,7 @@ namespace Overlay {
 class OverlayManager;
 }
 
-class DeckSurfaceRenderer final
+class DeckSurfaceRenderer final : public DeckInputSink
 {
 public:
     DeckSurfaceRenderer();
@@ -38,10 +40,10 @@ public:
     bool render(QImage* premultipliedArgb, QString* error);
     bool renderAndPublishDeck(Overlay::OverlayManager* overlayManager,
                               QString* error);
-    bool sendKeyEvent(QKeyEvent* event);
-    bool sendPointerEvent(QMouseEvent* event);
-    bool sendWheelEvent(QWheelEvent* event);
-    bool sendTextInput(const QString& text);
+    bool sendKeyEvent(QKeyEvent* event) override;
+    bool sendPointerEvent(QMouseEvent* event) override;
+    bool sendWheelEvent(QWheelEvent* event) override;
+    bool sendTextInput(const QString& text) override;
     bool isDirty() const;
     void markDirty();
     QObject* rootObject() const;

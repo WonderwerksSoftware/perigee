@@ -7,6 +7,8 @@
 #include "remoteinputstate.h"
 
 #include <atomic>
+#include <mutex>
+#include <optional>
 
 struct CaptureSnapshot {
     bool mouseCaptured;
@@ -151,6 +153,8 @@ public:
 
     void sendNeutralRemoteInput();
 
+    bool sendNeutralControllerInput(SDL_JoystickID id);
+
     void notifyMouseLeave();
 
     void notifyFocusLost();
@@ -207,6 +211,17 @@ private:
 
     void sendTrackedMouseButtonEvent(int action, int button);
 
+    void sendTrackedKeyboardEvent(short keyCode, char action,
+                                  char modifiers, char flags);
+
+    void sendTrackedTouchEvent(uint8_t eventType, uint32_t pointerId,
+                               float x, float y, float pressure);
+
+    void sendTrackedPenEvent(uint8_t eventType, float x, float y,
+                             float pressure);
+
+    void applyCaptureActive(bool active);
+
     static
     Uint32 longPressTimerCallback(Uint32 interval, void* param);
 
@@ -238,7 +253,11 @@ private:
     int m_GamepadMask;
     GamepadState m_GamepadState[MAX_GAMEPADS];
     RemoteInputState m_RemoteInputState;
+    // Controller handlers can re-enter tracked-send helpers and targeted
+    // neutralization while preserving one ownership transaction.
+    std::recursive_mutex m_RemoteInputMutex;
     std::atomic_bool m_LocalOverlayInputActive {false};
+    std::optional<bool> m_DeferredCaptureActive;
     bool m_FakeMouseCaptureActive;
     bool m_KeyboardCaptureActive;
     QString m_OldIgnoreDevices;

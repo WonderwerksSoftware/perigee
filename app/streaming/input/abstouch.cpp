@@ -128,14 +128,14 @@ void SdlInputHandler::handleAbsoluteFingerEvent(SDL_TouchFingerEvent* event)
         }
 
         if (isPen) {
-            LiSendPenEvent(eventType, LI_TOOL_TYPE_PEN, 0, vidrelx / dst.w, vidrely / dst.h, event->pressure,
-                           0.0f, 0.0f, LI_ROT_UNKNOWN, LI_TILT_UNKNOWN);
+            sendTrackedPenEvent(eventType, vidrelx / dst.w,
+                                vidrely / dst.h, event->pressure);
         }
         else
 #endif
         {
-            LiSendTouchEvent(eventType, pointerId, vidrelx / dst.w, vidrely / dst.h, event->pressure,
-                             0.0f, 0.0f, LI_ROT_UNKNOWN);
+            sendTrackedTouchEvent(eventType, pointerId, vidrelx / dst.w,
+                                  vidrely / dst.h, event->pressure);
         }
 
         if (!m_DisabledTouchFeedback) {

@@ -6,6 +6,10 @@
 
 void SdlInputHandler::handleMouseButtonEvent(SDL_MouseButtonEvent* event)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return;
+    }
     int button;
 
     if (event->which == SDL_TOUCH_MOUSEID) {
@@ -70,6 +74,10 @@ void SdlInputHandler::handleMouseButtonEvent(SDL_MouseButtonEvent* event)
 
 void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return;
+    }
     if (!isCaptureActive()) {
         // Not capturing
         return;
@@ -158,6 +166,10 @@ void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
 
 void SdlInputHandler::handleMouseWheelEvent(SDL_MouseWheelEvent* event)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        return;
+    }
     if (!isCaptureActive()) {
         // Not capturing
         return;

@@ -44,9 +44,6 @@
 #include <QCursor>
 #include <QScreen>
 #include <QQmlEngine>
-#include <QKeyEvent>
-#include <QMouseEvent>
-#include <QWheelEvent>
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QQuickOpenGLUtils>
@@ -1052,12 +1049,9 @@ void Session::applyDeckInputResult(const DeckInputRouter::Result& result)
     }
 
     const bool wasOpen = m_DeckController->isOpen();
-    const auto sendNavigationKey = [this](int key) {
-        QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
-        m_DeckSurfaceRenderer->sendKeyEvent(&press);
-        QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
-        m_DeckSurfaceRenderer->sendKeyEvent(&release);
-    };
+    if (DeckInputDelivery::handles(result.action)) {
+        DeckInputDelivery::deliver(result, *m_DeckSurfaceRenderer);
+    }
 
     switch (result.action) {
     case DeckInputRouter::Action::None:
@@ -1083,41 +1077,19 @@ void Session::applyDeckInputResult(const DeckInputRouter::Result& result)
         closeDeckInput(false);
         break;
     case DeckInputRouter::Action::ToggleStats:
-        m_InputHandler->sendNeutralRemoteInput();
+        m_InputHandler->sendNeutralControllerInput(result.controllerId);
         m_OverlayManager.setOverlayState(
             Overlay::OverlayDebug,
             !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
         break;
-    case DeckInputRouter::Action::Key: {
-        QKeyEvent keyEvent(
-            result.pressed ? QEvent::KeyPress : QEvent::KeyRelease,
-            result.key,
-            result.keyModifiers,
-            result.text,
-            result.autoRepeat);
-        m_DeckSurfaceRenderer->sendKeyEvent(&keyEvent);
-        break;
-    }
+    case DeckInputRouter::Action::Key:
     case DeckInputRouter::Action::TextInput:
-        m_DeckSurfaceRenderer->sendTextInput(result.text);
-        break;
     case DeckInputRouter::Action::NavigateUp:
-        sendNavigationKey(Qt::Key_Up);
-        break;
     case DeckInputRouter::Action::NavigateDown:
-        sendNavigationKey(Qt::Key_Down);
-        break;
     case DeckInputRouter::Action::NavigateLeft:
-        sendNavigationKey(Qt::Key_Left);
-        break;
     case DeckInputRouter::Action::NavigateRight:
-        sendNavigationKey(Qt::Key_Right);
-        break;
     case DeckInputRouter::Action::Activate:
-        sendNavigationKey(Qt::Key_Return);
-        break;
     case DeckInputRouter::Action::Back:
-        sendNavigationKey(Qt::Key_Escape);
         break;
     case DeckInputRouter::Action::PreviousCategory:
         m_DeckController->previousCategory();
@@ -1130,36 +1102,9 @@ void Session::applyDeckInputResult(const DeckInputRouter::Result& result)
         break;
     case DeckInputRouter::Action::PointerMove:
     case DeckInputRouter::Action::PointerPress:
-    case DeckInputRouter::Action::PointerRelease: {
-        QEvent::Type type = QEvent::MouseMove;
-        if (result.action == DeckInputRouter::Action::PointerPress) {
-            type = QEvent::MouseButtonPress;
-        }
-        else if (result.action == DeckInputRouter::Action::PointerRelease) {
-            type = QEvent::MouseButtonRelease;
-        }
-        QMouseEvent mouseEvent(type,
-                               result.position,
-                               result.position,
-                               result.position,
-                               result.mouseButton,
-                               result.mouseButtons,
-                               Qt::NoModifier);
-        m_DeckSurfaceRenderer->sendPointerEvent(&mouseEvent);
+    case DeckInputRouter::Action::PointerRelease:
+    case DeckInputRouter::Action::PointerWheel:
         break;
-    }
-    case DeckInputRouter::Action::PointerWheel: {
-        QWheelEvent wheelEvent(result.position,
-                               result.position,
-                               QPoint(),
-                               result.wheelDelta,
-                               result.mouseButtons,
-                               Qt::NoModifier,
-                               Qt::NoScrollPhase,
-                               false);
-        m_DeckSurfaceRenderer->sendWheelEvent(&wheelEvent);
-        break;
-    }
     }
 
     if (wasOpen && !m_DeckController->isOpen()) {
@@ -1200,22 +1145,20 @@ void Session::pumpDeckUi()
         return;
     }
 
-    // Deliver queued controller completions and QML Qt.callLater work without
-    // re-entering an unrestricted Qt event loop during the SDL stream loop.
-    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
-
-    const bool wantsTextInput = m_DeckController->textInputRequested();
-    if (wantsTextInput != m_DeckTextInputActive) {
-        if (wantsTextInput) {
-            SDL_StartTextInput();
-        }
-        else {
-            SDL_StopTextInput();
-        }
-        m_DeckTextInputActive = wantsTextInput;
+    m_DeckController->pumpPendingWork();
+    const DeckUiPump::Decision decision = m_DeckUiPump.plan(
+        m_DeckController->isOpen(),
+        m_DeckController->textInputRequested(),
+        m_DeckSurfaceRenderer->isDirty());
+    m_DeckUiPump.applyTextInput(decision);
+    if (decision.textInput == DeckUiPump::TextInputAction::Start) {
+        m_DeckTextInputActive = true;
+    }
+    else if (decision.textInput == DeckUiPump::TextInputAction::Stop) {
+        m_DeckTextInputActive = false;
     }
 
-    if (!m_DeckController->isOpen() || !m_DeckSurfaceRenderer->isDirty()) {
+    if (!decision.render) {
         return;
     }
     updateDeckPointerMapping();

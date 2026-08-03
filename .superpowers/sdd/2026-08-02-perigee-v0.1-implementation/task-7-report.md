@@ -30,7 +30,9 @@ Starting HEAD: `732735ebfca30d7323e86bb6fd52a135540af477`
 ## Changed files
 
 - `app/perigee/input/deckinputrouter.{h,cpp}`
+- `app/perigee/input/deckinputdelivery.{h,cpp}`
 - `app/perigee/deck/deckcontroller.{h,cpp}`
+- `app/perigee/deck/deckuipump.{h,cpp}`
 - `app/perigee/deck/decksurfacerenderer.{h,cpp}`
 - `app/streaming/input/input.{h,cpp}`
 - `app/streaming/input/remoteinputstate.{h,cpp}`
@@ -38,6 +40,8 @@ Starting HEAD: `732735ebfca30d7323e86bb6fd52a135540af477`
 - `app/streaming/session.{h,cpp}`
 - `app/app.pro`
 - `tests/test_deckinputrouter.cpp`
+- `tests/test_{deckinputdelivery,deckuipump,inputintegration}.cpp`
+- `tests/input_integration_stubs.{h,cpp}`
 - `tests/test_inputneutralization.cpp`
 - `tests/test_{deckcontroller,deckqml,decksurfacerenderer}.cpp`
 - `tests/perigee-tests.pro`
@@ -131,28 +135,114 @@ stats preservation, release tails, and idempotent double neutralization.
 ## Build, full suite, platform, and stress results
 
 - Debug application build:
-  `CCACHE_DIR="$PWD/build-tests/.ccache" make -C build-tests/app -f Makefile.Debug -j1`
+  `CCACHE_DIR="$PWD/build-tests/.ccache" make -C build-tests/app qmake_all && CCACHE_DIR="$PWD/build-tests/.ccache" make -C build-tests/app -f Makefile.Debug -j1`
   — exit 0 and linked `moonlight`.
 - Full live Wayland suite:
-  `QT_QPA_PLATFORM=wayland ./build-tests/tests/perigee-tests -v1`
-  — 99 passed, 0 failed.
+  `QT_QPA_PLATFORM=wayland SDL_VIDEODRIVER=wayland ./build-tests/tests/perigee-tests`
+  — 121 passed, 0 failed.
 - Full offscreen/surfaceless suite:
-  `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=opengl QT_OPENGL=desktop LIBGL_ALWAYS_SOFTWARE=1 EGL_PLATFORM=surfaceless ./build-tests/tests/perigee-tests -silent`
-  — 99 passed, 0 failed. Qt emitted one non-fatal scene-graph backend warning
-  during the first QML case; every render and input assertion passed.
-- Stress gate: 100 fresh-process repetitions each of `DeckInputRouterTest` and
-  `InputNeutralizationTest` — exit 0. Every router repetition also executes 100
-  rapid open/close cycles, for 10,000 verified cycles total.
+  `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=opengl QT_OPENGL=desktop LIBGL_ALWAYS_SOFTWARE=1 EGL_PLATFORM=surfaceless ./build-tests/tests/perigee-tests -v1`
+  — 121 passed, 0 failed. This is the broad headless gate; no SDL video-driver
+  override is applied, so the renderer and SDL-window integration cases run in
+  the same process.
+- Stress gate: 25 fresh-process repetitions of the four ownership/callback
+  concurrency cases plus 25 fresh-process repetitions of Deck-scoped
+  completion draining — all exited 0.
 - `git diff --check` — clean.
 
 ## Review notes
 
-- The existing renderer cannot create its OpenGL context with plain
-  `QT_QPA_PLATFORM=offscreen` in this environment. The verified surfaceless
-  OpenGL environment above supplies the required offscreen gate; live Wayland
-  provides the display-capable integration gate.
+- The exact surfaceless command above requires normal Mesa/SDL device access.
+  A filesystem/device-sandboxed invocation could not create the OpenGL context
+  or SDL windows; the unrestricted canonical gate passed all 121 tests. Live
+  Wayland independently supplies the display-capable integration gate.
 - A parallel rebuild briefly linked while an unrelated generated Qt meta-object
   file was being refreshed and reported missing `AppModel` symbols. The
   generated object contained the expected symbols, and the deterministic
   serial application rebuild immediately linked cleanly. This did not involve
   Task 7 source behavior.
+
+## Independent review fix round 1
+
+Review starting HEAD: `517b9cd154edf53e29c401955a2fb9ecf4128a2f`
+
+The first independent review found one critical and seven important issues.
+This fix round closes all eight:
+
+1. Relative-touch delayed releases now pass the owning `SdlInputHandler` to
+   both SDL timer callbacks. The production scheduling test failed with
+   SIGSEGV/exit 139 at 101 ms when either callback received `nullptr`; it now
+   passes and observes press followed by release.
+2. `RemoteInputState` tracks native touch IDs and pen activity. Deck takeover
+   sends `CANCEL_ALL` and pen `CANCEL` before releasing capture, and later
+   native UP packets remain gated. The original RED observed only one touch
+   record where two were required.
+3. The ownership gate, remote-state bookkeeping, controller state mutations,
+   timer callbacks, sends, and neutral packet share one recursive transaction
+   mutex. Main-thread controller axis/button paths now participate in the same
+   happens-before relationship as gamepad-mouse callbacks. Timer removal drops
+   the lock before waiting, then reacquires and rechecks the ownership gate, so
+   tracked sends and targeted neutralization can re-enter without deadlock.
+   The deterministic RED showed an axis mutation returning while a blocked
+   mouse callback still owned the send transaction; GREEN waits for it.
+4. Removed the broad `sendPostedEvents(nullptr, QEvent::MetaCall)` drain.
+   `DeckController` now owns an atomic completion inbox and
+   `pumpPendingWork()` drains only Deck completions. A mutation restoring the
+   broad drain ran an unrelated queued meta-call and failed the scoped test.
+5. Both startup capture requests (`SDL_WINDOWEVENT_ENTER` and post-decoder
+   recreation) are deferred while Deck owns input. Closing Deck applies the
+   final deferred capture request. Removing the guard reproduced the RED.
+6. The stats chord neutralizes only its opening physical controller. In merged
+   single-controller mode, unrelated physical controller state remains in the
+   slot-0 packet; keys, mouse buttons, and other controller slots are untouched.
+   A mutation restoring global neutralization cleared the unrelated A button
+   and failed.
+7. `DeckUiPump` keeps the first open frame immediate, retains dirty state, and
+   limits subsequent renders to one per 16 ms. The unpaced mutation failed on
+   the second same-tick render. `Session::pumpDeckUi()` directly uses this
+   tested policy.
+8. The test target now compiles the real `input.cpp`, `gamepad.cpp`,
+   `abstouch.cpp`, `reltouch.cpp`, keyboard, mouse, and Deck input delivery
+   sources, stubbing only external Moonlight/session dependencies. Coverage
+   includes actual SDL text-input Start/Stop application, native cancel,
+   capture ordering, timer barriers, controller removal and battery
+   housekeeping, router-before-handler order, real Qt wheel construction, and
+   combined key plus `SDL_TEXTINPUT` delivery without duplicate commits.
+
+### Fix-round RED/GREEN evidence
+
+- SDL text application RED: `DeckUiPump::applyTextInput()` was temporarily a
+  no-op; `appliesTextInputTransitionsToSdl` failed because
+  `SDL_IsTextInputActive()` remained false. GREEN: 3 passed, 0 failed for the
+  focused invocation and 5 passed, 0 failed for `DeckUiPumpTest`.
+- Input delivery mutation RED: a duplicate text commit plus omitted wheel made
+  `deliversWheelAndCommitsTextOnlyOnce` report `textEvents == 2` instead of 1.
+  GREEN: `DeckInputDeliveryTest` 3 passed, 0 failed.
+- Housekeeping mutation RED: consuming unknown SDL events while Deck was open
+  changed the battery route disposition from passthrough to consumed. GREEN:
+  the actual battery send and controller removal path both run after the router.
+- Capture-order mutation RED: swapping physical uncapture ahead of neutral
+  produced `capture-off` as the first record instead of
+  `remote-mouse-release`. GREEN preserves neutral-first ordering.
+- Scoped completion mutation RED, startup-capture RED, targeted-stats RED, and
+  16 ms pacing RED were each reproduced independently before restoring GREEN.
+- Focused final results: `InputIntegrationTest` 13/0,
+  `DeckInputRouterTest` 13/0, `InputNeutralizationTest` 5/0,
+  `DeckControllerTest` 16/0, `DeckUiPumpTest` 5/0, and
+  `DeckInputDeliveryTest` 3/0.
+
+### Lock and lifetime audit
+
+- The recursive mutex is required only for same-thread composition: controller
+  handlers call tracked mouse helpers and legacy chords call targeted
+  controller neutralization. Cross-thread timer serialization still behaves as
+  a normal exclusive mutex.
+- No path waits in `SDL_RemoveTimer()` while holding the transaction lock.
+  Controller mouse-timer shutdown clears its timer ID, unlocks, removes the
+  timer, relocks, and rechecks Deck ownership before continuing.
+- Gamepad timer callback parameters point into the fixed-lifetime
+  `m_GamepadState` array. Device removal waits for the timer before clearing its
+  slot; destruction removes timers before the handler storage disappears.
+- Every `RemoteInputState` QSet access and every controller slot mutation that
+  can race a timer callback is protected by the same mutex. The 25-process
+  concurrency stress gate passed without hangs, late sends, or ordering drift.

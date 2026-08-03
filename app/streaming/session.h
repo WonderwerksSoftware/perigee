@@ -11,6 +11,7 @@
 #include "audio/renderers/renderer.h"
 #include "video/overlaymanager.h"
 #include "perigee/input/deckinputrouter.h"
+#include "perigee/deck/deckuipump.h"
 
 #include <memory>
 #include <optional>
@@ -306,6 +307,7 @@ private:
     std::unique_ptr<DeckSurfaceRenderer> m_DeckSurfaceRenderer;
     std::unique_ptr<DeckInputRouter> m_DeckInputRouter;
     std::optional<CaptureSnapshot> m_DeckCaptureSnapshot;
+    DeckUiPump m_DeckUiPump;
     bool m_DeckTextInputActive = false;
 
     static CONNECTION_LISTENER_CALLBACKS k_ConnCallbacks;

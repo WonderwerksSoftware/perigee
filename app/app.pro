@@ -207,8 +207,10 @@ SOURCES += \
     perigee/actions/actionregistry.cpp \
     perigee/deck/actionlistmodel.cpp \
     perigee/deck/deckcontroller.cpp \
+    perigee/deck/deckuipump.cpp \
     perigee/deck/decksurfacerenderer.cpp \
     perigee/input/deckinputrouter.cpp \
+    perigee/input/deckinputdelivery.cpp \
     path.cpp \
     settings/mappingmanager.cpp \
     gui/sdlgamepadkeynavigation.cpp \
@@ -253,8 +255,10 @@ HEADERS += \
     perigee/actions/hostadapter.h \
     perigee/deck/actionlistmodel.h \
     perigee/deck/deckcontroller.h \
+    perigee/deck/deckuipump.h \
     perigee/deck/decksurfacerenderer.h \
     perigee/input/deckinputrouter.h \
+    perigee/input/deckinputdelivery.h \
     path.h \
     settings/mappingmanager.h \
     gui/sdlgamepadkeynavigation.h \

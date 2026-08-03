@@ -8,6 +8,7 @@
 #include <QtTest>
 
 #include <optional>
+#include <thread>
 #include <utility>
 
 namespace {
@@ -34,6 +35,7 @@ public:
     HostSnapshot currentSnapshot;
     QStringList executedActionIds;
     std::optional<ActionResult> synchronousResult;
+    Completion pendingCompletion;
 
     HostSnapshot snapshot() override
     {
@@ -47,6 +49,9 @@ public:
         executedActionIds.push_back(actionId);
         if (synchronousResult.has_value()) {
             completion(*synchronousResult);
+        }
+        else {
+            pendingCompletion = std::move(completion);
         }
     }
 
@@ -99,6 +104,7 @@ private slots:
     void repeatedActivationDoesNotRedirectFromWorkingActionToPeer();
     void pointerFocusCancelsConfirmationOnlyAfterSuccessfulChange();
     void textInputRequestTracksOpenSearchFocus();
+    void deckPumpDrainsOnlyDeckCompletions();
 };
 
 void DeckControllerTest::keyboardOpenFocusesSearchAndShowsDisplayActions()
@@ -443,6 +449,38 @@ void DeckControllerTest::textInputRequestTracksOpenSearchFocus()
     QVERIFY(controller.textInputRequested());
     controller.close();
     QVERIFY(!controller.textInputRequested());
+}
+
+void DeckControllerTest::deckPumpDrainsOnlyDeckCompletions()
+{
+    MutableHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.refresh"), availableState(QStringLiteral("old")));
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.refresh"), QStringLiteral("Refresh display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+    controller.activateFocusedAction();
+    QVERIFY(bool(adapter.pendingCompletion));
+
+    bool unrelatedMetaCallRan = false;
+    QObject unrelated;
+    QMetaObject::invokeMethod(&unrelated, [&unrelatedMetaCallRan] {
+        unrelatedMetaCallRan = true;
+    }, Qt::QueuedConnection);
+    adapter.currentSnapshot.actionStates[QStringLiteral("display.refresh")].value =
+        QStringLiteral("new");
+    std::thread completionThread([completion = std::move(adapter.pendingCompletion)] {
+        completion(ActionResult {true, QStringLiteral("done"), {}, {}});
+    });
+    completionThread.join();
+
+    QVERIFY(controller.pumpPendingWork());
+    QVERIFY(!unrelatedMetaCallRan);
+    QCOMPARE(valueForAction(controller, QStringLiteral("display.refresh")),
+             QStringLiteral("new"));
 }
 
 REGISTER_PERIGEE_TEST(DeckControllerTest);
