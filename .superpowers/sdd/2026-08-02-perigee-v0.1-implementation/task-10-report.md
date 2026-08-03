@@ -278,3 +278,59 @@ Final local results for this fix round:
   was installed.
 - No live network, display, Xvfb, Polaris, Sunshine, ww-DevBox, 10G, push,
   merge, or release operation was used.
+
+## Fix round 4: chained sensitive path labels
+
+Base commit: `9704a63f`
+
+Focused regressions were compiled and run before the production change:
+
+- The chained-label data table produced 4 passed and 4 failed. Two exact
+  labels, three exact labels, two compound labels, and a longer mixed-case
+  hyphen/underscore/dot chain exposed either the trailing canary or an
+  intervening sensitive label. Both benign substring and benign compound
+  controls passed unchanged.
+- A valid Polaris transport request to
+  `/polaris/v1/session-token/authorization-key/CANARY_CHAINED_LOG_SECRET`
+  completed, but its captured metadata log did not contain the required
+  `/polaris/v1/session-token/<redacted>/<redacted>` path. The isolated transport
+  result was 2 passed and 1 failed.
+
+Source tracing showed that a pending redaction replaced the current segment,
+cleared `redactNext`, and continued before classifying the original segment.
+Consequently, a sensitive label consumed as the preceding label's value could
+not protect its own following value.
+
+The loop now classifies the original segment before replacing it. When a
+pending redaction consumes that segment, the saved classification determines
+whether the following segment must also be redacted. Exact labels and compound
+labels with hyphen, underscore, or dot boundaries keep the same classifier;
+encoded input, query handling, and benign substring guards are unchanged.
+
+This state machine is deliberately fail closed. A consumed secret value such
+as `CANARY_COMMAND` is indistinguishable from a path label and is itself a
+compound sensitive label, so it re-arms redaction and can hide the next label
+as well as its value. The retained command, key, session, token, and clipboard
+canary fixtures now assert that safer over-redacted output instead of weakening
+their values. Separate benign substring and compound controls prove that broad
+substring matching was not introduced.
+
+Final local results for this fix round:
+
+- Debug application and test compile/link: exit 0; the production redaction
+  object was recompiled and both binaries linked.
+- Focused chained-label table: 8 passed, 0 failed, 0 skipped.
+- Captured transport log canary: 3 passed, 0 failed, 0 skipped; the valid
+  endpoint logged `/polaris/v1/session-token/<redacted>/<redacted>` and emitted
+  no trailing canary.
+- `RedactionTest`: 24 passed, 0 failed, 0 skipped.
+- `PolarisApiClientTest`: 57 passed, 0 failed, 0 skipped.
+- Twenty fresh repetitions of both focused regressions produced 40 of 40 clean
+  processes and 220 passed test cases, with no canary output.
+- Canonical headless run: 344 passed, 11 failed, 0 skipped. The failures remain
+  exactly eight `DeckQmlTest` and three `DeckSurfaceRendererTest` instances of
+  the established `Deck OpenGL context creation failed` environment gate.
+- ThreadSanitizer remains unavailable because the documented runtime is not
+  installed. No TSan run or pass is claimed, and no package was installed.
+- No live network, display, Xvfb, Polaris, Sunshine, ww-DevBox, 10G, push,
+  merge, or release operation was used.

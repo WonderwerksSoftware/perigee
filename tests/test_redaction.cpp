@@ -13,6 +13,8 @@ private slots:
     void redactsSessionValuesAndSensitiveHeaderLikeInput();
     void redactsCompoundSensitivePathValues_data();
     void redactsCompoundSensitivePathValues();
+    void redactsChainedSensitivePathLabels_data();
+    void redactsChainedSensitivePathLabels();
     void failsClosedForEncodedPathAndHeaderMaterial();
     void sanitizesUnsafeQueryNamesAndRedactsEncodedValues();
     void removesControlCharactersAndLogInjection();
@@ -33,7 +35,8 @@ void RedactionTest::redactsSensitivePathValuesAndRejectsBodyLikeInput()
     const QString path = PerigeeRedaction::pathForLog(
         QStringLiteral("/polaris/v1/command/CANARY_COMMAND/key/CANARY_KEY"));
     QCOMPARE(path,
-             QStringLiteral("/polaris/v1/command/<redacted>/key/<redacted>"));
+             QStringLiteral(
+                 "/polaris/v1/command/<redacted>/<redacted>/<redacted>"));
 
     QCOMPARE(PerigeeRedaction::pathForLog(
                  QStringLiteral("{\"clipboard\":\"CANARY_BODY\"}")),
@@ -43,7 +46,8 @@ void RedactionTest::redactsSensitivePathValuesAndRejectsBodyLikeInput()
              QStringLiteral("<redacted>"));
     QCOMPARE(PerigeeRedaction::pathForLog(
                  QStringLiteral("/polaris/v1/commands/CANARY_COMMAND/clipboard/CANARY_CLIPBOARD")),
-             QStringLiteral("/polaris/v1/commands/<redacted>/clipboard/<redacted>"));
+             QStringLiteral(
+                 "/polaris/v1/commands/<redacted>/<redacted>/<redacted>"));
     QCOMPARE(PerigeeRedaction::pathForLog(
                  QStringLiteral("-----BEGIN PRIVATE KEY-----\nCANARY_PRIVATE_KEY")),
              QStringLiteral("<redacted>"));
@@ -59,7 +63,7 @@ void RedactionTest::redactsSessionValuesAndSensitiveHeaderLikeInput()
                        "tokens/CANARY_TOKEN/clipboards/CANARY_CLIPBOARD"));
     QCOMPARE(path,
              QStringLiteral("/polaris/v1/sessions/<redacted>/"
-                            "tokens/<redacted>/clipboards/<redacted>"));
+                            "<redacted>/<redacted>/<redacted>/<redacted>"));
     QVERIFY(!path.contains(QStringLiteral("CANARY")));
 
     QCOMPARE(PerigeeRedaction::pathForLog(
@@ -115,6 +119,62 @@ void RedactionTest::redactsCompoundSensitivePathValues_data()
 }
 
 void RedactionTest::redactsCompoundSensitivePathValues()
+{
+    QFETCH(QString, input);
+    QFETCH(QString, expected);
+
+    const QString redacted = PerigeeRedaction::pathForLog(input);
+
+    QCOMPARE(redacted, expected);
+    if (input.contains(QStringLiteral("CANARY"))) {
+        QVERIFY(!redacted.contains(QStringLiteral("CANARY")));
+    }
+}
+
+void RedactionTest::redactsChainedSensitivePathLabels_data()
+{
+    QTest::addColumn<QString>("input");
+    QTest::addColumn<QString>("expected");
+
+    QTest::newRow("two-exact-labels")
+        << QStringLiteral(
+               "/polaris/v1/token/key/CANARY_EXACT_CHAIN")
+        << QStringLiteral(
+               "/polaris/v1/token/<redacted>/<redacted>");
+    QTest::newRow("three-exact-labels")
+        << QStringLiteral(
+               "/polaris/v1/session/token/authorization/"
+               "CANARY_LONG_EXACT_CHAIN")
+        << QStringLiteral(
+               "/polaris/v1/session/<redacted>/<redacted>/<redacted>");
+    QTest::newRow("two-compound-labels")
+        << QStringLiteral(
+               "/polaris/v1/session-token/authorization-key/"
+               "CANARY_COMPOUND_CHAIN")
+        << QStringLiteral(
+               "/polaris/v1/session-token/<redacted>/<redacted>");
+    QTest::newRow("mixed-case-separator-chain")
+        << QStringLiteral(
+               "/polaris/v1/CLIENT.Certificate/SESSION_token/"
+               "AUTHORIZATION-KEY/CANARY_MIXED_CHAIN")
+        << QStringLiteral(
+               "/polaris/v1/CLIENT.Certificate/<redacted>/"
+               "<redacted>/<redacted>");
+    QTest::newRow("benign-substrings-remain-visible")
+        << QStringLiteral(
+               "/polaris/v1/sessiontoken/authorizationkey/"
+               "PUBLIC_VALUE")
+        << QStringLiteral(
+               "/polaris/v1/sessiontoken/authorizationkey/"
+               "PUBLIC_VALUE");
+    QTest::newRow("benign-compound-components-remain-visible")
+        << QStringLiteral(
+               "/polaris/v1/keyboard-layout/hockey-score/monkey")
+        << QStringLiteral(
+               "/polaris/v1/keyboard-layout/hockey-score/monkey");
+}
+
+void RedactionTest::redactsChainedSensitivePathLabels()
 {
     QFETCH(QString, input);
     QFETCH(QString, expected);

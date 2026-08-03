@@ -346,6 +346,7 @@ private slots:
     void callbackDeletionDiscardsRemainingSelectedCallbacks();
     void snapshotsComputerTupleUnderItsReadLock();
     void logsOnlyRedactedRequestMetadata();
+    void logsChainedSensitivePathLabelsWithoutCanaries();
     void teardownStopsWorkerAndDiscardsCallbacks();
     void teardownDiscardsQueuedCompletion();
 };
@@ -1316,6 +1317,41 @@ void PolarisApiClientTest::logsOnlyRedactedRequestMetadata()
     QVERIFY(!log.contains(QStringLiteral("CANARY_REQUEST_BODY")));
     QVERIFY(!log.contains(QStringLiteral("CANARY_PRIVATE_KEY")));
     QVERIFY(!log.contains(QStringLiteral("CANARY_CLIENT_CERTIFICATE_BYTES")));
+}
+
+void PolarisApiClientTest::logsChainedSensitivePathLabelsWithoutCanaries()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto state = std::make_shared<FakeNetworkState>();
+    enqueue(state, ReplyScript{
+        200, {QByteArrayLiteral("{\"ok\":true}")}, expected});
+    PolarisApiClient client(pairedComputer(expected),
+        std::make_unique<FakeNetworkBackend>(state));
+    {
+        QMutexLocker locker(&capturedMessagesMutex);
+        capturedMessages.clear();
+    }
+    const QtMessageHandler previous = qInstallMessageHandler(captureMessage);
+
+    client.get(
+        QStringLiteral(
+            "/polaris/v1/session-token/authorization-key/"
+            "CANARY_CHAINED_LOG_SECRET"),
+        true, [](auto, const PolarisResponse&) {});
+    QVERIFY(waitForCompletion(client));
+    client.drainCompletions();
+    qInstallMessageHandler(previous);
+
+    QString log;
+    {
+        QMutexLocker locker(&capturedMessagesMutex);
+        log = capturedMessages.join(QLatin1Char('\n'));
+    }
+    QVERIFY(log.contains(QStringLiteral("Polaris GET")));
+    QVERIFY(log.contains(QStringLiteral(
+        "/polaris/v1/session-token/<redacted>/<redacted>")));
+    QVERIFY(!log.contains(QStringLiteral("CANARY_CHAINED_LOG_SECRET")));
 }
 
 void PolarisApiClientTest::teardownStopsWorkerAndDiscardsCallbacks()

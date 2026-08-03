@@ -152,12 +152,13 @@ QString PerigeeRedaction::pathForLog(const QString& input)
     QStringList segments = rawPath.split(QLatin1Char('/'));
     bool redactNext = false;
     for (QString& segment : segments) {
+        const bool sensitiveLabel = isSensitivePathLabel(segment);
         if (redactNext && !segment.isEmpty()) {
             segment = QStringLiteral("<redacted>");
-            redactNext = false;
+            redactNext = sensitiveLabel;
             continue;
         }
-        redactNext = isSensitivePathLabel(segment);
+        redactNext = sensitiveLabel;
     }
 
     QString result = segments.join(QLatin1Char('/'));
