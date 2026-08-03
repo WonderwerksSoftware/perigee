@@ -21,8 +21,15 @@ public:
     }
     ActionInvocation(const ActionInvocation&) = delete;
     ActionInvocation& operator=(const ActionInvocation&) = delete;
-    ActionInvocation(ActionInvocation&&) = default;
-    ActionInvocation& operator=(ActionInvocation&&) = default;
+    ActionInvocation(ActionInvocation&& other) noexcept
+        : m_Parameters(std::move(other.m_Parameters))
+        , m_ConfirmedActionId(std::move(other.m_ConfirmedActionId))
+        , m_ConfirmedState(std::move(other.m_ConfirmedState))
+    {
+        other.m_ConfirmedActionId.clear();
+        other.m_ConfirmedState.reset();
+    }
+    ActionInvocation& operator=(ActionInvocation&&) = delete;
 
     const QVariantMap& parameters() const { return m_Parameters; }
     bool confirmationGrantedFor(const QString& actionId) const

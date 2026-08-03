@@ -61,13 +61,15 @@ ActionResult unavailableResult()
     };
 }
 
-ActionResult requestRejectedResult(const QString& operation)
+ActionResult requestRejectedResult(const QString& operation,
+                                   ActionState observedState)
 {
     return {
         false,
         {},
         QStringLiteral("request_rejected"),
         QStringLiteral("%1 could not be queued.").arg(operation),
+        std::move(observedState),
     };
 }
 
@@ -258,22 +260,26 @@ void GameStreamAdapter::execute(const QString& actionId,
     if (actionId == QString::fromLatin1(DisconnectClientId)) {
         if (authority->requestClientDisconnect()) {
             complete(completion,
-                     {true, QStringLiteral("Client disconnect requested"), {}, {}});
+                     {true, QStringLiteral("Client disconnect requested"), {}, {},
+                      availableState()});
         }
         else {
             complete(completion,
-                     requestRejectedResult(QStringLiteral("Client disconnect")));
+                     requestRejectedResult(QStringLiteral("Client disconnect"),
+                                           availableState()));
         }
         return;
     }
     if (actionId == QString::fromLatin1(QuitPerigeeId)) {
         if (authority->requestPerigeeQuit()) {
             complete(completion,
-                     {true, QStringLiteral("Perigee quit requested"), {}, {}});
+                     {true, QStringLiteral("Perigee quit requested"), {}, {},
+                      availableState()});
         }
         else {
             complete(completion,
-                     requestRejectedResult(QStringLiteral("Perigee quit")));
+                     requestRejectedResult(QStringLiteral("Perigee quit"),
+                                           availableState()));
         }
         return;
     }

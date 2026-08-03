@@ -158,6 +158,8 @@ private slots:
     void forgedConfirmationParameterIsRejected();
     void rejectedDisconnectRequestIsReportedTruthfully();
     void rejectedQuitRequestIsReportedTruthfully();
+    void sessionTerminalResultsCarryObservedState_data();
+    void sessionTerminalResultsCarryObservedState();
     void terminalEvidenceTracksAuthoritativeToggleState_data();
     void terminalEvidenceTracksAuthoritativeToggleState();
     void failureEvidenceClearsWhenAuthoritativeStateChanges();
@@ -404,6 +406,40 @@ void GameStreamAdapterTest::rejectedQuitRequestIsReportedTruthfully()
     QCOMPARE(result.errorCode, QStringLiteral("request_rejected"));
     QCOMPARE(result.evidence, QString());
     QCOMPARE(session.quitCount, 1);
+}
+
+void GameStreamAdapterTest::sessionTerminalResultsCarryObservedState_data()
+{
+    QTest::addColumn<QString>("actionId");
+    QTest::addColumn<bool>("requestAccepted");
+
+    QTest::newRow("disconnect accepted")
+        << QStringLiteral("session.disconnect-client") << true;
+    QTest::newRow("disconnect rejected")
+        << QStringLiteral("session.disconnect-client") << false;
+    QTest::newRow("quit accepted")
+        << QStringLiteral("session.quit-perigee") << true;
+    QTest::newRow("quit rejected")
+        << QStringLiteral("session.quit-perigee") << false;
+}
+
+void GameStreamAdapterTest::sessionTerminalResultsCarryObservedState()
+{
+    QFETCH(QString, actionId);
+    QFETCH(bool, requestAccepted);
+    FakeSession session;
+    session.acceptDisconnectRequest = requestAccepted;
+    session.acceptQuitRequest = requestAccepted;
+    GameStreamAdapter adapter(&session);
+
+    const ActionResult result = executeConfirmed(adapter, actionId);
+
+    QCOMPARE(result.ok, requestAccepted);
+    QVERIFY(result.observedState.has_value());
+    QVERIFY(result.observedState->enabled);
+    QVERIFY(!result.observedState->value.isValid());
+    QVERIFY(result.observedState->disabledCode.isEmpty());
+    QVERIFY(result.observedState->disabledReason.isEmpty());
 }
 
 void GameStreamAdapterTest::terminalEvidenceTracksAuthoritativeToggleState_data()

@@ -3,7 +3,11 @@
 #include "perigee/actions/actionregistry.h"
 
 #include <QtTest>
+#include <QSemaphore>
 
+#include <atomic>
+#include <future>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <type_traits>
@@ -16,7 +20,9 @@ static_assert(!std::is_move_assignable_v<ActionRegistry>);
 static_assert(!std::is_copy_constructible_v<ActionInvocation>);
 static_assert(!std::is_copy_assignable_v<ActionInvocation>);
 static_assert(std::is_move_constructible_v<ActionInvocation>);
-static_assert(std::is_move_assignable_v<ActionInvocation>);
+static_assert(!std::is_move_assignable_v<ActionInvocation>);
+static_assert(std::is_aggregate_v<ActionResult>);
+static_assert(!std::is_convertible_v<bool, ActionResult>);
 static_assert(std::is_same_v<decltype(ActionResult {}.observedState),
                              std::optional<ActionState>>);
 
@@ -64,10 +70,15 @@ public:
     QVector<QVariantMap> executedParameters;
     QVector<Completion> pendingCompletions;
     std::optional<ActionResult> synchronousResult;
+    std::function<void()> afterSnapshotCaptured;
 
     HostSnapshot snapshot() override
     {
-        return currentSnapshot;
+        const HostSnapshot captured = currentSnapshot;
+        if (afterSnapshotCaptured) {
+            afterSnapshotCaptured();
+        }
+        return captured;
     }
 
     void execute(const QString& actionId,
@@ -112,6 +123,8 @@ private slots:
     void resolvesConfirmationPolicyForInvocationRisk();
     void directExecuteCannotBypassKnownDisruptiveAction();
     void riskChangeAfterBeginConsumesConfirmation();
+    void confirmationFingerprintUsesStrictVariantSemantics_data();
+    void confirmationFingerprintUsesStrictVariantSemantics();
     void directCallerCannotForgeConfirmationWithParameters();
     void confirmationGrantIsActionBoundOneUseAndStateChecked();
     void failedBeginInvalidatesPendingConfirmation_data();
@@ -119,6 +132,12 @@ private slots:
     void successfulBeginReplacesPendingConfirmation();
     void executingAnotherActionInvalidatesPendingConfirmation();
     void rechecksPreconditionsAtExecutionTime();
+    void disabledActionReportsPreconditionBeforeConfirmation_data();
+    void disabledActionReportsPreconditionBeforeConfirmation();
+    void terminalPublicationRetriesAcrossSnapshotRace();
+    void terminalResultWithoutObservedStateIsNotPersisted();
+    void terminalFingerprintUsesStrictVariantSemantics_data();
+    void terminalFingerprintUsesStrictVariantSemantics();
     void terminalEvidenceClearsWhenAvailabilityChanges();
     void limitsInFlightActionsPerResourceAndTracksCompletion();
     void allowsConcurrentActionsWithoutAResourceKey();
@@ -352,6 +371,59 @@ void ActionRegistryTest::riskChangeAfterBeginConsumesConfirmation()
         [&result](const ActionResult& completed) { result = completed; });
     QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
     QVERIFY(adapter.executedActionIds.isEmpty());
+}
+
+void ActionRegistryTest::confirmationFingerprintUsesStrictVariantSemantics_data()
+{
+    QTest::addColumn<QVariant>("confirmedValue");
+    QTest::addColumn<QVariant>("currentValue");
+    QTest::addColumn<bool>("shouldExecute");
+
+    QTest::newRow("int to bool") << QVariant(1) << QVariant(true) << false;
+    QTest::newRow("int to string")
+        << QVariant(1) << QVariant(QStringLiteral("1")) << false;
+    QTest::newRow("stable double NaN")
+        << QVariant(std::numeric_limits<double>::quiet_NaN())
+        << QVariant(std::numeric_limits<double>::quiet_NaN()) << true;
+    QTest::newRow("stable float NaN")
+        << QVariant::fromValue(std::numeric_limits<float>::quiet_NaN())
+        << QVariant::fromValue(std::numeric_limits<float>::quiet_NaN()) << true;
+}
+
+void ActionRegistryTest::confirmationFingerprintUsesStrictVariantSemantics()
+{
+    QFETCH(QVariant, confirmedValue);
+    QFETCH(QVariant, currentValue);
+    QFETCH(bool, shouldExecute);
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("command.run"), availableState(confirmedValue, true));
+    adapter.synchronousResult = ActionResult {
+        true, QStringLiteral("Command accepted"), {}, {},
+        availableState(currentValue, true)
+    };
+    ActionRegistry registry({
+        descriptor(QStringLiteral("command.run"), QStringLiteral("Run command"),
+                   ActionCategory::Session, {}, {}, {}, 0,
+                   ConfirmationPolicy::WhenDisruptive),
+    }, adapter);
+    ActionResult result;
+
+    QVERIFY(registry.beginConfirmation(QStringLiteral("command.run")));
+    adapter.currentSnapshot.actionStates[QStringLiteral("command.run")]
+        = availableState(currentValue, true);
+    registry.acceptConfirmation(
+        QStringLiteral("command.run"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+
+    QCOMPARE(adapter.executeCallCount, shouldExecute ? 1 : 0);
+    if (shouldExecute) {
+        QVERIFY(result.ok);
+    }
+    else {
+        QVERIFY(!result.ok);
+        QCOMPARE(result.errorCode, QStringLiteral("state_changed"));
+    }
 }
 
 void ActionRegistryTest::directCallerCannotForgeConfirmationWithParameters()
@@ -596,6 +668,183 @@ void ActionRegistryTest::rechecksPreconditionsAtExecutionTime()
              QStringLiteral("The connected host does not advertise this capability."));
 }
 
+void ActionRegistryTest::disabledActionReportsPreconditionBeforeConfirmation_data()
+{
+    QTest::addColumn<int>("confirmationPolicy");
+    QTest::addColumn<QString>("precondition");
+    QTest::addColumn<QString>("expectedCode");
+
+    const int always = static_cast<int>(ConfirmationPolicy::Always);
+    const int disruptive = static_cast<int>(ConfirmationPolicy::WhenDisruptive);
+    QTest::newRow("always session unavailable")
+        << always << QStringLiteral("session") << QStringLiteral("session_unavailable");
+    QTest::newRow("disruptive session unavailable")
+        << disruptive << QStringLiteral("session") << QStringLiteral("session_unavailable");
+    QTest::newRow("always capability unavailable")
+        << always << QStringLiteral("capability")
+        << QStringLiteral("capability_unavailable");
+    QTest::newRow("disruptive capability unavailable")
+        << disruptive << QStringLiteral("capability")
+        << QStringLiteral("capability_unavailable");
+    QTest::newRow("always permission denied")
+        << always << QStringLiteral("permission") << QStringLiteral("permission_denied");
+    QTest::newRow("disruptive permission denied")
+        << disruptive << QStringLiteral("permission")
+        << QStringLiteral("permission_denied");
+}
+
+void ActionRegistryTest::disabledActionReportsPreconditionBeforeConfirmation()
+{
+    QFETCH(int, confirmationPolicy);
+    QFETCH(QString, precondition);
+    QFETCH(QString, expectedCode);
+    FakeHostAdapter adapter;
+    ActionState state = availableState({}, true);
+    QString requiredCapability;
+    quint32 requiredPermissions = 0;
+    if (precondition == QStringLiteral("session")) {
+        state.enabled = false;
+        state.disabledCode = QStringLiteral("session_unavailable");
+        state.disabledReason = QStringLiteral("The session is unavailable.");
+    }
+    else if (precondition == QStringLiteral("capability")) {
+        requiredCapability = QStringLiteral("session.control");
+    }
+    else {
+        requiredPermissions = 0x1;
+    }
+    adapter.currentSnapshot.actionStates.insert(QStringLiteral("session.end"), state);
+    ActionRegistry registry({
+        descriptor(QStringLiteral("session.end"), QStringLiteral("End session"),
+                   ActionCategory::Session, {}, {}, requiredCapability,
+                   requiredPermissions,
+                   static_cast<ConfirmationPolicy>(confirmationPolicy)),
+    }, adapter);
+    ActionResult result;
+
+    registry.execute(
+        QStringLiteral("session.end"), {},
+        [&result](const ActionResult& completed) { result = completed; });
+
+    QVERIFY(!result.ok);
+    QCOMPARE(result.errorCode, expectedCode);
+    QVERIFY(!result.userMessage.isEmpty());
+    QCOMPARE(adapter.executeCallCount, 0);
+}
+
+void ActionRegistryTest::terminalPublicationRetriesAcrossSnapshotRace()
+{
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("stats.toggle"), availableState(false));
+    ActionRegistry registry({
+        descriptor(QStringLiteral("stats.toggle"), QStringLiteral("Toggle statistics"),
+                   ActionCategory::Stats, {}, QStringLiteral("stats")),
+    }, adapter);
+    registry.execute(QStringLiteral("stats.toggle"), {}, [](const ActionResult&) {});
+
+    QSemaphore snapshotCaptured;
+    QSemaphore allowSnapshotReturn;
+    std::atomic_bool blockFirstSnapshot{true};
+    adapter.afterSnapshotCaptured = [&snapshotCaptured, &allowSnapshotReturn,
+                                     &blockFirstSnapshot]() {
+        if (blockFirstSnapshot.exchange(false)) {
+            snapshotCaptured.release();
+            allowSnapshotReturn.acquire();
+        }
+    };
+    std::future<ActionState> stateRead = std::async(std::launch::async, [&registry]() {
+        return registry.state(QStringLiteral("stats.toggle"));
+    });
+    QVERIFY(snapshotCaptured.tryAcquire(1, 1000));
+
+    adapter.currentSnapshot.actionStates[QStringLiteral("stats.toggle")]
+        = availableState(true);
+    adapter.completeNext({
+        true,
+        QStringLiteral("Statistics enabled"),
+        {},
+        {},
+        availableState(true),
+    });
+    allowSnapshotReturn.release();
+    const ActionState completed = stateRead.get();
+
+    QCOMPARE(completed.value.toBool(), true);
+    QCOMPARE(completed.phase, ActionPhase::Succeeded);
+    QCOMPARE(completed.message, QStringLiteral("Statistics enabled"));
+}
+
+void ActionRegistryTest::terminalResultWithoutObservedStateIsNotPersisted()
+{
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("stats.toggle"), availableState(false));
+    adapter.synchronousResult = ActionResult {
+        true, QStringLiteral("Unverified success"), {}, {}
+    };
+    ActionRegistry registry({
+        descriptor(QStringLiteral("stats.toggle"), QStringLiteral("Toggle statistics"),
+                   ActionCategory::Stats),
+    }, adapter);
+    ActionResult callerResult;
+
+    registry.execute(
+        QStringLiteral("stats.toggle"), {},
+        [&callerResult](const ActionResult& result) { callerResult = result; });
+
+    QVERIFY(callerResult.ok);
+    QCOMPARE(callerResult.evidence, QStringLiteral("Unverified success"));
+    const ActionState rendered = registry.state(QStringLiteral("stats.toggle"));
+    QCOMPARE(rendered.phase, ActionPhase::Idle);
+    QVERIFY(rendered.message.isEmpty());
+}
+
+void ActionRegistryTest::terminalFingerprintUsesStrictVariantSemantics_data()
+{
+    QTest::addColumn<QVariant>("observedValue");
+    QTest::addColumn<QVariant>("currentValue");
+    QTest::addColumn<bool>("shouldPersist");
+
+    QTest::newRow("int to bool") << QVariant(1) << QVariant(true) << false;
+    QTest::newRow("int to string")
+        << QVariant(1) << QVariant(QStringLiteral("1")) << false;
+    QTest::newRow("stable double NaN")
+        << QVariant(std::numeric_limits<double>::quiet_NaN())
+        << QVariant(std::numeric_limits<double>::quiet_NaN()) << true;
+    QTest::newRow("stable float NaN")
+        << QVariant::fromValue(std::numeric_limits<float>::quiet_NaN())
+        << QVariant::fromValue(std::numeric_limits<float>::quiet_NaN()) << true;
+}
+
+void ActionRegistryTest::terminalFingerprintUsesStrictVariantSemantics()
+{
+    QFETCH(QVariant, observedValue);
+    QFETCH(QVariant, currentValue);
+    QFETCH(bool, shouldPersist);
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("stats.toggle"), availableState(observedValue));
+    adapter.synchronousResult = ActionResult {
+        true, QStringLiteral("Statistics updated"), {}, {},
+        availableState(observedValue)
+    };
+    ActionRegistry registry({
+        descriptor(QStringLiteral("stats.toggle"), QStringLiteral("Toggle statistics"),
+                   ActionCategory::Stats),
+    }, adapter);
+
+    registry.execute(QStringLiteral("stats.toggle"), {}, [](const ActionResult&) {});
+    adapter.currentSnapshot.actionStates[QStringLiteral("stats.toggle")]
+        = availableState(currentValue);
+    const ActionState rendered = registry.state(QStringLiteral("stats.toggle"));
+
+    QCOMPARE(rendered.phase,
+             shouldPersist ? ActionPhase::Succeeded : ActionPhase::Idle);
+    QCOMPARE(rendered.message,
+             shouldPersist ? QStringLiteral("Statistics updated") : QString());
+}
+
 void ActionRegistryTest::terminalEvidenceClearsWhenAvailabilityChanges()
 {
     FakeHostAdapter adapter;
@@ -604,7 +853,8 @@ void ActionRegistryTest::terminalEvidenceClearsWhenAvailabilityChanges()
     adapter.currentSnapshot.actionStates.insert(
         QStringLiteral("display.select"), availableState(QStringLiteral("desk")));
     adapter.synchronousResult = ActionResult {
-        true, QStringLiteral("Display selected"), {}, {}
+        true, QStringLiteral("Display selected"), {}, {},
+        availableState(QStringLiteral("desk"))
     };
     ActionRegistry registry({
         descriptor(QStringLiteral("display.select"), QStringLiteral("Select display"),
@@ -678,7 +928,8 @@ void ActionRegistryTest::limitsInFlightActionsPerResourceAndTracksCompletion()
     QCOMPARE(adapter.executeCallCount, 2);
     QCOMPARE(adapter.executedActionIds.last(), QStringLiteral("stats.toggle"));
 
-    adapter.completeNext({ true, QStringLiteral("Display first confirmed"), {}, {} });
+    adapter.completeNext({ true, QStringLiteral("Display first confirmed"), {}, {},
+                           availableState() });
     QVERIFY(firstResult.has_value());
     QVERIFY(firstResult->ok);
     QCOMPARE(registry.state(QStringLiteral("display.first")).phase, ActionPhase::Succeeded);
@@ -690,7 +941,8 @@ void ActionRegistryTest::limitsInFlightActionsPerResourceAndTracksCompletion()
     QCOMPARE(adapter.executedActionIds.last(), QStringLiteral("display.second"));
 
     adapter.completeNext({ false, {}, QStringLiteral("network"),
-                           QStringLiteral("Host became unreachable.") });
+                           QStringLiteral("Host became unreachable."),
+                           availableState() });
     QVERIFY(statsResult.has_value());
     QVERIFY(!statsResult->ok);
     QCOMPARE(registry.state(QStringLiteral("stats.toggle")).phase, ActionPhase::Failed);
@@ -746,7 +998,8 @@ void ActionRegistryTest::handlesSynchronousAdapterCompletion()
     FakeHostAdapter adapter;
     adapter.currentSnapshot.actionStates.insert(QStringLiteral("display.select"), availableState());
     adapter.synchronousResult = ActionResult {
-        true, QStringLiteral("Display confirmed synchronously"), {}, {}
+        true, QStringLiteral("Display confirmed synchronously"), {}, {},
+        availableState()
     };
     ActionRegistry registry({
         descriptor(QStringLiteral("display.select"), QStringLiteral("Select display"),
@@ -784,7 +1037,8 @@ void ActionRegistryTest::ignoresDuplicateAdapterCompletion()
     });
     HostAdapter::Completion adapterCompletion = adapter.pendingCompletions.takeFirst();
 
-    adapterCompletion({ true, QStringLiteral("Statistics enabled"), {}, {} });
+    adapterCompletion({ true, QStringLiteral("Statistics enabled"), {}, {},
+                        availableState() });
     adapterCompletion({ false, {}, QStringLiteral("late_failure"),
                         QStringLiteral("Late duplicate failure") });
 
@@ -816,7 +1070,8 @@ void ActionRegistryTest::callerCompletionCanDestroyRegistry()
     });
     HostAdapter::Completion adapterCompletion = adapter.pendingCompletions.takeFirst();
 
-    adapterCompletion({ true, QStringLiteral("Display confirmed"), {}, {} });
+    adapterCompletion({ true, QStringLiteral("Display confirmed"), {}, {},
+                        availableState() });
     adapterCompletion({ false, {}, QStringLiteral("duplicate"),
                         QStringLiteral("Duplicate completion") });
 

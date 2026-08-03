@@ -265,6 +265,78 @@ Final build and stability results:
 - No Xvfb, ww-DevBox, live network, Polaris, Sunshine, or 10G path was used in
   this fix round.
 
+## Fix round 3: coherent action-state evidence
+
+Base commit: `6c4237a2dae95682fd35fc5e017be8550e815601`
+
+The review findings were reproduced before each production fix:
+
+- Terminal publication could race a stale adapter snapshot. The deterministic
+  RED test captured the old snapshot, published a completion with a newer
+  observation, and then released the snapshot read: 2 passed and 1 failed
+  because the rendered value was stale. Runtime state now has a revision
+  protocol. `state()` takes adapter snapshots without holding the runtime
+  mutex and retries when publication changes the revision. GREEN was 3 passed
+  and 0 failed.
+- A result without an observed state invented its baseline from a later
+  snapshot. RED was 2 passed and 1 failed because unverified success remained
+  rendered as `Succeeded`. The registry now returns the result to its caller
+  but does not persist terminal UI evidence without `observedState`. GREEN was
+  3 passed and 0 failed.
+- Accepted and rejected disconnect and quit results lacked an authoritative
+  observation. The four-row adapter RED run was 2 passed and 4 failed. All
+  four terminal paths now include their available session-action state. GREEN
+  was 6 passed and 0 failed.
+- Disabled confirming actions reported `confirmation_required` before their
+  structured precondition. The six RED rows were 2 passed and 6 failed:
+  `Always` and `WhenDisruptive` each hid `session_unavailable`,
+  `capability_unavailable`, and `permission_denied`. Preconditions now run
+  before confirmation for unconfirmed invocations. GREEN was 8 passed and 0
+  failed. A consumed confirmed grant whose fingerprint drifted still returns
+  `state_changed`; its focused regression remained 3 passed and 0 failed.
+- Qt's default `QVariant` equality allowed cross-type values to compare equal
+  and treated stable NaNs as drift. The confirmation RED run was 2 passed and
+  4 failed: integer 1 to Boolean true and integer 1 to string `"1"` both
+  dispatched, while stable double and float NaNs were rejected. The terminal
+  RED run was also 2 passed and 4 failed: cross-type terminal evidence stayed
+  visible, while both same-type NaNs cleared it. Fingerprints now require the
+  same Qt meta-type and treat same-type float or double NaN pairs as stable.
+  Both GREEN runs were 6 passed and 0 failed.
+- Compile-time RED assertions stopped the test build with exit 2 on exactly
+  two contract failures: `ActionInvocation` was move-assignable and
+  `ActionResult` was not an aggregate. `ActionResult` is again an aggregate
+  with a default `nullopt` observation. `ActionInvocation` remains
+  move-constructible, deletes move assignment, and explicitly clears the
+  moved-from confirmation ID and state. The test compile and link then exited
+  0. The compiler audit found no `ActionResult` missing-field-initializer
+  warning; only the established Qt SFINAE warnings remained.
+
+Final focused results:
+
+- `GameStreamAdapterTest`: 30 passed, 0 failed.
+- `SessionExitIntentTest`: 10 passed, 0 failed.
+- `InputIntegrationTest`: 34 passed, 0 failed.
+- `ActionRegistryTest`: 46 passed, 0 failed.
+- `DeckControllerTest`: 18 passed, 0 failed.
+- `DeckInputRouterTest`: 35 passed, 0 failed.
+- `DeckQmlTest::actionRowRendersSucceededEvidence`: 3 passed, 0 failed.
+
+Final build and stability results:
+
+- Debug application compile and link: exit 0.
+- Debug test compile and link: exit 0.
+- QML lint: exit 0 with 83 established unqualified-access warnings and no
+  errors.
+- Fresh-process stress: 20 of 20 adapter runs and 10 of 10 input-integration
+  runs exited 0.
+- Monolithic dummy-SDL/offscreen run: 262 passed and the exact 11 established
+  environment-only OpenGL context failures: eight in `DeckQmlTest` and three
+  in `DeckSurfaceRendererTest`. All non-renderer classes passed.
+- The writable build cache was `/tmp/perigee-ccache`; the default home cache
+  is read-only in this sandbox.
+- No Xvfb, ww-DevBox, live network, Polaris, Sunshine, or 10G path was used in
+  this fix round.
+
 ## Live-smoke status and residual concerns
 
 No ww-DevBox, homelab key, Polaris endpoint, Sunshine host, or 10G interface
