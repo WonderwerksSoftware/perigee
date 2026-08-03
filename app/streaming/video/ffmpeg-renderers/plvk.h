@@ -122,20 +122,23 @@ private:
         //
         // These values can be safely read by the render thread outside of the overlay lock,
         // but the copy from stagingOverlay to overlay must only happen under the overlay
-        // lock when hasStagingOverlay is true.
+        // lock when hasStagingUpdate is true.
         bool hasOverlay;
         pl_overlay overlay;
+        Overlay::OverlayPresentation presentation;
 
         // This state is written by the overlay update thread
         //
-        // NB: hasStagingOverlay may be false even if there is a staging overlay texture present,
+        // NB: hasStagingUpdate may be false even if there is a staging overlay texture present,
         // because this is how the overlay update path indicates that the overlay is not currently
         // safe for the render thread to read.
         //
         // It is safe for the overlay update thread to write to stagingOverlay outside of the lock,
-        // as long as hasStagingOverlay is false.
-        bool hasStagingOverlay;
+        // as long as hasStagingUpdate is false.
+        bool hasStagingUpdate;
+        bool stagingHasOverlay;
         pl_overlay stagingOverlay;
+        Overlay::OverlayPresentation stagingPresentation;
     } m_Overlays[Overlay::OverlayMax] = {};
 
     // Device context used for hwaccel decoders

@@ -603,12 +603,13 @@ void DXVA2Renderer::notifyOverlayUpdated(Overlay::OverlayType type)
 {
     HRESULT hr;
 
-    SDL_Surface* newSurface = Session::get()->getOverlayManager().getUpdatedOverlaySurface(type);
-    bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
-    if (newSurface == nullptr && overlayEnabled) {
-        // The overlay is enabled and there is no new surface. Leave the old texture alone.
+    SDL_Surface* newSurface = nullptr;
+    Overlay::OverlayPresentation presentation;
+    if (!Session::get()->getOverlayManager().getUpdatedOverlaySurface(
+            type, &newSurface, &presentation)) {
         return;
     }
+    bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
 
     SDL_AtomicLock(&m_OverlayLock);
     ComPtr<IDirect3DTexture9> oldTexture = std::move(m_OverlayTextures[type]);
@@ -616,7 +617,7 @@ void DXVA2Renderer::notifyOverlayUpdated(Overlay::OverlayType type)
     SDL_AtomicUnlock(&m_OverlayLock);
 
     // If the overlay is disabled, we're done
-    if (!overlayEnabled) {
+    if (!overlayEnabled || newSurface == nullptr) {
         SDL_FreeSurface(newSurface);
         return;
     }
@@ -656,21 +657,12 @@ void DXVA2Renderer::notifyOverlayUpdated(Overlay::OverlayType type)
 
     newTexture->UnlockRect(0);
 
-    SDL_FRect renderRect = {};
-
-    if (type == Overlay::OverlayStatusUpdate) {
-        // Bottom Left
-        renderRect.x = 0;
-        renderRect.y = m_DisplayHeight - newSurface->h;
-    }
-    else if (type == Overlay::OverlayDebug) {
-        // Top left
-        renderRect.x = 0;
-        renderRect.y = 0;
-    }
-
-    renderRect.w = newSurface->w;
-    renderRect.h = newSurface->h;
+    const SDL_FRect renderRect = Overlay::calculateOverlayRect(
+        presentation,
+        newSurface->w,
+        newSurface->h,
+        m_DisplayWidth,
+        m_DisplayHeight);
 
     // The surface is no longer required
     SDL_FreeSurface(newSurface);

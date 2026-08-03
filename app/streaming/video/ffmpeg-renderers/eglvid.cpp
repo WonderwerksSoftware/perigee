@@ -154,14 +154,18 @@ AVPixelFormat EGLRenderer::getPreferredPixelFormat(int videoFormat)
 
 void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, int viewportHeight)
 {
-    // Do nothing if this overlay is disabled
-    if (!Session::get()->getOverlayManager().isOverlayEnabled(type)) {
-        return;
-    }
+    const bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
 
     // Upload a new overlay texture if needed
-    SDL_Surface* newSurface = Session::get()->getOverlayManager().getUpdatedOverlaySurface(type);
-    if (newSurface != nullptr) {
+    SDL_Surface* newSurface = nullptr;
+    Overlay::OverlayPresentation presentation;
+    const bool overlayUpdated = Session::get()->getOverlayManager().getUpdatedOverlaySurface(
+        type, &newSurface, &presentation);
+    if (overlayUpdated && (newSurface == nullptr || !overlayEnabled)) {
+        SDL_AtomicSet(&m_OverlayHasValidData[type], 0);
+        SDL_FreeSurface(newSurface);
+    }
+    else if (overlayUpdated) {
         SDL_assert(!SDL_MUSTLOCK(newSurface));
         SDL_assert(newSurface->format->format == SDL_PIXELFORMAT_ARGB8888);
 
@@ -200,25 +204,14 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
             glPixelStorei(GL_UNPACK_ROW_LENGTH_EXT, 0);
         }
 
-        SDL_FRect overlayRect;
-
-        // These overlay positions differ from the other renderers because OpenGL
-        // places the origin in the lower-left corner instead of the upper-left.
-        if (type == Overlay::OverlayStatusUpdate) {
-            // Bottom Left
-            overlayRect.x = 0;
-            overlayRect.y = 0;
-        }
-        else if (type == Overlay::OverlayDebug) {
-            // Top left
-            overlayRect.x = 0;
-            overlayRect.y = viewportHeight - newSurface->h;
-        } else {
-            SDL_assert(false);
-        }
-
-        overlayRect.w = newSurface->w;
-        overlayRect.h = newSurface->h;
+        // OpenGL screen space has its origin in the lower-left corner.
+        SDL_FRect overlayRect = Overlay::calculateOverlayRect(
+            presentation,
+            newSurface->w,
+            newSurface->h,
+            viewportWidth,
+            viewportHeight,
+            true);
 
         SDL_FreeSurface(newSurface);
 
@@ -240,6 +233,10 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
         glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
 
         SDL_AtomicSet(&m_OverlayHasValidData[type], 1);
+    }
+
+    if (!overlayEnabled) {
+        return;
     }
 
     if (!SDL_AtomicGet(&m_OverlayHasValidData[type])) {

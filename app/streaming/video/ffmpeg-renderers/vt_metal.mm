@@ -520,27 +520,23 @@ public:
         // Now draw any overlays that are enabled
         for (int i = 0; i < Overlay::OverlayMax; i++) {
             id<MTLTexture> overlayTexture = nullptr;
+            Overlay::OverlayPresentation overlayPresentation;
 
             // Try to acquire a reference on the overlay texture
             SDL_AtomicLock(&m_OverlayLock);
             overlayTexture = [m_OverlayTextures[i] retain];
+            overlayPresentation = m_OverlayPresentations[i];
             SDL_AtomicUnlock(&m_OverlayLock);
 
             if (overlayTexture) {
-                SDL_FRect renderRect = {};
-                if (i == Overlay::OverlayStatusUpdate) {
-                    // Bottom Left
-                    renderRect.x = 0;
-                    renderRect.y = 0;
-                }
-                else if (i == Overlay::OverlayDebug) {
-                    // Top left
-                    renderRect.x = 0;
-                    renderRect.y = m_LastDrawableHeight - overlayTexture.height;
-                }
-
-                renderRect.w = overlayTexture.width;
-                renderRect.h = overlayTexture.height;
+                // Metal screen space follows the existing lower-left renderer convention.
+                SDL_FRect renderRect = Overlay::calculateOverlayRect(
+                    overlayPresentation,
+                    overlayTexture.width,
+                    overlayTexture.height,
+                    m_LastDrawableWidth,
+                    m_LastDrawableHeight,
+                    true);
 
                 // Convert screen space to normalized device coordinates
                 StreamUtils::screenSpaceToNormalizedDeviceCoords(&renderRect, m_LastDrawableWidth, m_LastDrawableHeight);
@@ -747,12 +743,13 @@ public:
 
     virtual void notifyOverlayUpdated(Overlay::OverlayType type) override
     { @autoreleasepool {
-        SDL_Surface* newSurface = Session::get()->getOverlayManager().getUpdatedOverlaySurface(type);
-        bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
-        if (newSurface == nullptr && overlayEnabled) {
-            // The overlay is enabled and there is no new surface. Leave the old texture alone.
+        SDL_Surface* newSurface = nullptr;
+        Overlay::OverlayPresentation presentation;
+        if (!Session::get()->getOverlayManager().getUpdatedOverlaySurface(
+                type, &newSurface, &presentation)) {
             return;
         }
+        bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
 
         SDL_AtomicLock(&m_OverlayLock);
         auto oldTexture = m_OverlayTextures[type];
@@ -762,7 +759,7 @@ public:
         [oldTexture release];
 
         // If the overlay is disabled, we're done
-        if (!overlayEnabled) {
+        if (!overlayEnabled || newSurface == nullptr) {
             SDL_FreeSurface(newSurface);
             return;
         }
@@ -791,6 +788,7 @@ public:
 
         SDL_AtomicLock(&m_OverlayLock);
         m_OverlayTextures[type] = newTexture;
+        m_OverlayPresentations[type] = presentation;
         SDL_AtomicUnlock(&m_OverlayLock);
     }}
 
@@ -950,6 +948,7 @@ private:
     id<MTLBuffer> m_CscParamsBuffer;
     id<MTLBuffer> m_VideoVertexBuffer;
     id<MTLTexture> m_OverlayTextures[Overlay::OverlayMax];
+    Overlay::OverlayPresentation m_OverlayPresentations[Overlay::OverlayMax];
     SDL_SpinLock m_OverlayLock;
     id<MTLRenderPipelineState> m_VideoPipelineState;
     id<MTLRenderPipelineState> m_OverlayPipelineState;

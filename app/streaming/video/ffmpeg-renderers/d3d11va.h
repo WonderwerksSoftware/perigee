@@ -45,7 +45,10 @@ private:
     bool setupVideoTexture(AVHWFramesContext* framesContext); // for !m_BindDecoderOutputTextures
     bool setupTexturePoolViews(AVHWFramesContext* framesContext); // for m_BindDecoderOutputTextures
     void renderOverlay(Overlay::OverlayType type);
-    bool createOverlayVertexBuffer(Overlay::OverlayType type, int width, int height, Microsoft::WRL::ComPtr<ID3D11Buffer>& newVertexBuffer);
+    bool createOverlayVertexBuffer(Overlay::OverlayPresentation presentation,
+                                   int width,
+                                   int height,
+                                   Microsoft::WRL::ComPtr<ID3D11Buffer>& newVertexBuffer);
     void bindColorConversion(bool frameChanged, AVFrame* frame);
     void bindVideoVertexBuffer(bool frameChanged, AVFrame* frame);
     void renderVideo(AVFrame* frame);
@@ -107,8 +110,8 @@ private:
     std::array<Microsoft::WRL::ComPtr<ID3D11Buffer>, Overlay::OverlayMax> m_OverlayVertexBuffers;
     std::array<Microsoft::WRL::ComPtr<ID3D11Texture2D>, Overlay::OverlayMax> m_OverlayTextures;
     std::array<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>, Overlay::OverlayMax> m_OverlayTextureResourceViews;
+    std::array<Overlay::OverlayPresentation, Overlay::OverlayMax> m_OverlayPresentations;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_OverlayPixelShader;
 
     AVBufferRef* m_HwDeviceContext;
 };
-

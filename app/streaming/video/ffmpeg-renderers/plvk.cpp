@@ -1003,18 +1003,25 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
     SDL_AtomicLock(&m_OverlayLock);
     for (int i = 0; i < Overlay::OverlayMax; i++) {
         // If we have a staging overlay, we need to transfer ownership to us
-        if (m_Overlays[i].hasStagingOverlay) {
+        if (m_Overlays[i].hasStagingUpdate) {
             if (m_Overlays[i].hasOverlay) {
                 texturesToDestroy.push_back(m_Overlays[i].overlay.tex);
             }
 
-            // Copy the overlay fields from the staging area
-            m_Overlays[i].overlay = m_Overlays[i].stagingOverlay;
+            if (m_Overlays[i].stagingHasOverlay) {
+                // Copy the overlay fields from the staging area
+                m_Overlays[i].overlay = m_Overlays[i].stagingOverlay;
+                m_Overlays[i].presentation = m_Overlays[i].stagingPresentation;
+                SDL_zero(m_Overlays[i].stagingOverlay);
+                m_Overlays[i].hasOverlay = true;
+            }
+            else {
+                SDL_zero(m_Overlays[i].overlay);
+                m_Overlays[i].hasOverlay = false;
+            }
 
-            // We now own the staging overlay
-            m_Overlays[i].hasStagingOverlay = false;
-            SDL_zero(m_Overlays[i].stagingOverlay);
-            m_Overlays[i].hasOverlay = true;
+            m_Overlays[i].hasStagingUpdate = false;
+            m_Overlays[i].stagingHasOverlay = false;
         }
 
         // If we have an overlay but it's been disabled, free the overlay texture
@@ -1028,18 +1035,18 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
         if (m_Overlays[i].hasOverlay) {
             // Position the overlay
             overlayParts[i].src = { 0, 0, (float)m_Overlays[i].overlay.tex->params.w, (float)m_Overlays[i].overlay.tex->params.h };
-            if (i == Overlay::OverlayStatusUpdate) {
-                // Bottom Left
-                overlayParts[i].dst.x0 = 0;
-                overlayParts[i].dst.y0 = SDL_max(0, targetFrame.crop.y1 - overlayParts[i].src.y1);
-            }
-            else if (i == Overlay::OverlayDebug) {
-                // Top left
-                overlayParts[i].dst.x0 = 0;
-                overlayParts[i].dst.y0 = 0;
-            }
-            overlayParts[i].dst.x1 = overlayParts[i].dst.x0 + overlayParts[i].src.x1;
-            overlayParts[i].dst.y1 = overlayParts[i].dst.y0 + overlayParts[i].src.y1;
+            const SDL_FRect overlayRect = Overlay::calculateOverlayRect(
+                m_Overlays[i].presentation,
+                m_Overlays[i].overlay.tex->params.w,
+                m_Overlays[i].overlay.tex->params.h,
+                targetFrame.crop.x1,
+                targetFrame.crop.y1);
+            overlayParts[i].dst = {
+                overlayRect.x,
+                overlayRect.y,
+                overlayRect.x + overlayRect.w,
+                overlayRect.y + overlayRect.h,
+            };
 
             m_Overlays[i].overlay.parts = &overlayParts[i];
             m_Overlays[i].overlay.num_parts = 1;
@@ -1190,7 +1197,7 @@ bool PlVkRenderer::createOverlay(pl_overlay* overlay, SDL_Surface* surface)
 
     // Create a new texture for this overlay if necessary, otherwise reuse the existing texture.
     // NB: We're guaranteed that the render thread won't be reading this concurrently because
-    // we set hasStagingOverlay to false above.
+    // we set hasStagingUpdate to false above.
     pl_tex_params texParams = {};
     texParams.w = surface->w;
     texParams.h = surface->h;
@@ -1237,25 +1244,36 @@ bool PlVkRenderer::createOverlay(pl_overlay* overlay, SDL_Surface* surface)
 
 void PlVkRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 {
-    SDL_Surface* newSurface = Session::get()->getOverlayManager().getUpdatedOverlaySurface(type);
-    if (newSurface == nullptr && Session::get()->getOverlayManager().isOverlayEnabled(type)) {
-        // The overlay is enabled and there is no new surface. Leave the old texture alone.
+    SDL_Surface* newSurface = nullptr;
+    Overlay::OverlayPresentation presentation;
+    if (!Session::get()->getOverlayManager().getUpdatedOverlaySurface(
+            type, &newSurface, &presentation)) {
         return;
     }
 
     SDL_AtomicLock(&m_OverlayLock);
-    // We want to clear the staging overlay flag even if a staging overlay is still present,
+    // We want to clear the staging update flag even if a staging overlay is still present,
     // since this ensures the render thread will not read from a partially initialized pl_tex
     // as we modify or recreate the staging overlay texture outside the overlay lock.
-    m_Overlays[type].hasStagingOverlay = false;
+    m_Overlays[type].hasStagingUpdate = false;
+    const bool hadStagingOverlay = m_Overlays[type].stagingHasOverlay;
+    m_Overlays[type].stagingHasOverlay = false;
     SDL_AtomicUnlock(&m_OverlayLock);
 
-    // If there's no new staging overlay, free the old staging overlay texture.
-    // NB: This is safe to do outside the overlay lock because we're guaranteed
-    // to not have racing readers/writers if hasStagingOverlay is false.
-    if (newSurface == nullptr) {
+    if (hadStagingOverlay) {
         pl_tex_destroy(m_Vulkan->gpu, &m_Overlays[type].stagingOverlay.tex);
         SDL_zero(m_Overlays[type].stagingOverlay);
+    }
+
+    if (newSurface == nullptr || !Session::get()->getOverlayManager().isOverlayEnabled(type)) {
+        SDL_FreeSurface(newSurface);
+
+        // Publish an empty staging update so the render thread safely retires
+        // any active texture after it finishes the current frame.
+        SDL_AtomicLock(&m_OverlayLock);
+        SDL_assert(!m_Overlays[type].hasStagingUpdate);
+        m_Overlays[type].hasStagingUpdate = true;
+        SDL_AtomicUnlock(&m_OverlayLock);
         return;
     }
 
@@ -1266,8 +1284,10 @@ void PlVkRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 
     // Make this staging overlay visible to the render thread
     SDL_AtomicLock(&m_OverlayLock);
-    SDL_assert(!m_Overlays[type].hasStagingOverlay);
-    m_Overlays[type].hasStagingOverlay = true;
+    SDL_assert(!m_Overlays[type].hasStagingUpdate);
+    m_Overlays[type].stagingPresentation = presentation;
+    m_Overlays[type].stagingHasOverlay = true;
+    m_Overlays[type].hasStagingUpdate = true;
     SDL_AtomicUnlock(&m_OverlayLock);
 }
 

@@ -1082,12 +1082,13 @@ void D3D11VARenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 {
     HRESULT hr;
 
-    SDL_Surface* newSurface = Session::get()->getOverlayManager().getUpdatedOverlaySurface(type);
-    bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
-    if (newSurface == nullptr && overlayEnabled) {
-        // The overlay is enabled and there is no new surface. Leave the old texture alone.
+    SDL_Surface* newSurface = nullptr;
+    Overlay::OverlayPresentation presentation;
+    if (!Session::get()->getOverlayManager().getUpdatedOverlaySurface(
+            type, &newSurface, &presentation)) {
         return;
     }
+    bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
 
     SDL_AtomicLock(&m_OverlayLock);
     ComPtr<ID3D11Texture2D> oldTexture = std::move(m_OverlayTextures[type]);
@@ -1096,7 +1097,7 @@ void D3D11VARenderer::notifyOverlayUpdated(Overlay::OverlayType type)
     SDL_AtomicUnlock(&m_OverlayLock);
 
     // If the overlay is disabled, we're done
-    if (!overlayEnabled) {
+    if (!overlayEnabled || newSurface == nullptr) {
         SDL_FreeSurface(newSurface);
         return;
     }
@@ -1143,7 +1144,7 @@ void D3D11VARenderer::notifyOverlayUpdated(Overlay::OverlayType type)
     }
 
     ComPtr<ID3D11Buffer> newVertexBuffer;
-    if (!createOverlayVertexBuffer(type, newSurface->w, newSurface->h, newVertexBuffer)) {
+    if (!createOverlayVertexBuffer(presentation, newSurface->w, newSurface->h, newVertexBuffer)) {
         SDL_FreeSurface(newSurface);
         return;
     }
@@ -1156,26 +1157,22 @@ void D3D11VARenderer::notifyOverlayUpdated(Overlay::OverlayType type)
     m_OverlayVertexBuffers[type] = std::move(newVertexBuffer);
     m_OverlayTextures[type] = std::move(newTexture);
     m_OverlayTextureResourceViews[type] = std::move(newTextureResourceView);
+    m_OverlayPresentations[type] = presentation;
     SDL_AtomicUnlock(&m_OverlayLock);
 }
 
-bool D3D11VARenderer::createOverlayVertexBuffer(Overlay::OverlayType type, int width, int height, ComPtr<ID3D11Buffer>& newVertexBuffer)
+bool D3D11VARenderer::createOverlayVertexBuffer(Overlay::OverlayPresentation presentation,
+                                                int width,
+                                                int height,
+                                                ComPtr<ID3D11Buffer>& newVertexBuffer)
 {
-    SDL_FRect renderRect = {};
-
-    if (type == Overlay::OverlayStatusUpdate) {
-        // Bottom Left
-        renderRect.x = 0;
-        renderRect.y = 0;
-    }
-    else if (type == Overlay::OverlayDebug) {
-        // Top left
-        renderRect.x = 0;
-        renderRect.y = m_DisplayHeight - height;
-    }
-
-    renderRect.w = width;
-    renderRect.h = height;
+    const SDL_FRect renderRect = Overlay::calculateOverlayRect(
+        presentation,
+        width,
+        height,
+        m_DisplayWidth,
+        m_DisplayHeight,
+        true);
 
     // Convert screen space to normalized device coordinates
     StreamUtils::screenSpaceToNormalizedDeviceCoords(&renderRect, m_DisplayWidth, m_DisplayHeight);
@@ -1262,7 +1259,10 @@ bool D3D11VARenderer::notifyWindowChanged(PWINDOW_STATE_CHANGE_INFO stateInfo)
 
             D3D11_TEXTURE2D_DESC textureDesc;
             m_OverlayTextures[i]->GetDesc(&textureDesc);
-            createOverlayVertexBuffer((Overlay::OverlayType)i, textureDesc.Width, textureDesc.Height, m_OverlayVertexBuffers[i]);
+            createOverlayVertexBuffer(m_OverlayPresentations[i],
+                                      textureDesc.Width,
+                                      textureDesc.Height,
+                                      m_OverlayVertexBuffers[i]);
         }
         SDL_AtomicUnlock(&m_OverlayLock);
 

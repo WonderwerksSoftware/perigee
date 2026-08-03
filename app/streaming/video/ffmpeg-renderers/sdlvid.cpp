@@ -224,45 +224,50 @@ bool SdlRenderer::initialize(PDECODER_PARAMETERS params)
 
 void SdlRenderer::renderOverlay(Overlay::OverlayType type)
 {
-    if (Session::get()->getOverlayManager().isOverlayEnabled(type)) {
-        // If a new surface has been created for updated overlay data, convert it into a texture.
-        // NB: We have to do this conversion at render-time because we can only interact
-        // with the renderer on a single thread.
-        SDL_Surface* newSurface = Session::get()->getOverlayManager().getUpdatedOverlaySurface(type);
-        if (newSurface != nullptr) {
-            if (m_OverlayTextures[type] != nullptr) {
-                SDL_DestroyTexture(m_OverlayTextures[type]);
-            }
+    const bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
 
-            if (type == Overlay::OverlayStatusUpdate) {
-                // Bottom Left
-                SDL_Rect viewportRect;
-                SDL_RenderGetViewport(m_Renderer, &viewportRect);
-                m_OverlayRects[type].x = 0;
-                m_OverlayRects[type].y = viewportRect.h - newSurface->h;
-            }
-            else if (type == Overlay::OverlayDebug) {
-                // Top left
-                m_OverlayRects[type].x = 0;
-                m_OverlayRects[type].y = 0;
-            }
+    // If a new surface has been created for updated overlay data, convert it into a texture.
+    // NB: We have to do this conversion at render-time because we can only interact
+    // with the renderer on a single thread.
+    SDL_Surface* newSurface = nullptr;
+    Overlay::OverlayPresentation presentation;
+    if (Session::get()->getOverlayManager().getUpdatedOverlaySurface(
+            type, &newSurface, &presentation)) {
+        if (m_OverlayTextures[type] != nullptr) {
+            SDL_DestroyTexture(m_OverlayTextures[type]);
+            m_OverlayTextures[type] = nullptr;
+        }
 
-            m_OverlayRects[type].w = newSurface->w;
-            m_OverlayRects[type].h = newSurface->h;
+        if (newSurface != nullptr && overlayEnabled) {
+            int viewportWidth;
+            int viewportHeight;
+            SDL_GetRendererOutputSize(m_Renderer, &viewportWidth, &viewportHeight);
+            const SDL_FRect overlayRect = Overlay::calculateOverlayRect(
+                presentation,
+                newSurface->w,
+                newSurface->h,
+                viewportWidth,
+                viewportHeight);
+            m_OverlayRects[type] = {
+                static_cast<int>(overlayRect.x),
+                static_cast<int>(overlayRect.y),
+                static_cast<int>(overlayRect.w),
+                static_cast<int>(overlayRect.h),
+            };
 
             m_OverlayTextures[type] = SDL_CreateTextureFromSurface(m_Renderer, newSurface);
-            SDL_FreeSurface(newSurface);
 
             if (m_OverlayTextures[type]) {
-                // Overlays are always drawn at exact size
                 SDL_SetTextureScaleMode(m_OverlayTextures[type], SDL_ScaleModeNearest);
             }
         }
 
-        // If we have an overlay texture, render it too
-        if (m_OverlayTextures[type] != nullptr) {
-            SDL_RenderCopy(m_Renderer, m_OverlayTextures[type], nullptr, &m_OverlayRects[type]);
-        }
+        SDL_FreeSurface(newSurface);
+    }
+
+    // If we have an enabled overlay texture, render it too
+    if (overlayEnabled && m_OverlayTextures[type] != nullptr) {
+        SDL_RenderCopy(m_Renderer, m_OverlayTextures[type], nullptr, &m_OverlayRects[type]);
     }
 }
 

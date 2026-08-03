@@ -1,7 +1,60 @@
 #include "overlaymanager.h"
 #include "path.h"
 
+#include <algorithm>
+#include <cmath>
+#include <new>
+
 using namespace Overlay;
+
+SDL_FRect Overlay::calculateOverlayRect(OverlayPresentation presentation,
+                                        int surfaceWidth, int surfaceHeight,
+                                        int viewportWidth, int viewportHeight,
+                                        bool originAtBottomLeft)
+{
+    const float viewportW = std::max(0, viewportWidth);
+    const float viewportH = std::max(0, viewportHeight);
+    const float margin = std::max(0, presentation.marginPx);
+    const float insetX = std::min(margin, viewportW * 0.5f);
+    const float insetY = std::min(margin, viewportH * 0.5f);
+    const float effectiveWidth = std::max(0.0f, viewportW - insetX * 2.0f);
+    const float effectiveHeight = std::max(0.0f, viewportH - insetY * 2.0f);
+
+    const auto sanitizeRatio = [](float ratio) {
+        return std::isfinite(ratio) ? std::clamp(ratio, 0.0f, 1.0f) : 0.0f;
+    };
+    const float maxWidth = effectiveWidth * sanitizeRatio(presentation.maxWidthRatio);
+    const float maxHeight = effectiveHeight * sanitizeRatio(presentation.maxHeightRatio);
+
+    float width = 0.0f;
+    float height = 0.0f;
+    if (surfaceWidth > 0 && surfaceHeight > 0) {
+        const float scale = std::min({1.0f,
+                                      maxWidth / static_cast<float>(surfaceWidth),
+                                      maxHeight / static_cast<float>(surfaceHeight)});
+        width = static_cast<float>(surfaceWidth) * scale;
+        height = static_cast<float>(surfaceHeight) * scale;
+    }
+
+    float x = insetX;
+    float y = insetY;
+    switch (presentation.anchor) {
+    case OverlayAnchor::TopLeft:
+        break;
+    case OverlayAnchor::TopCenter:
+        x += (effectiveWidth - width) * 0.5f;
+        break;
+    case OverlayAnchor::BottomLeft:
+        y += effectiveHeight - height;
+        break;
+    }
+
+    if (originAtBottomLeft) {
+        y = viewportH - y - height;
+    }
+
+    return {x, y, width, height};
+}
 
 OverlayManager::OverlayManager() :
     m_Renderer(nullptr),
@@ -31,8 +84,11 @@ OverlayManager::OverlayManager() :
 OverlayManager::~OverlayManager()
 {
     for (int i = 0; i < OverlayType::OverlayMax; i++) {
-        if (m_Overlays[i].surface != nullptr) {
-            SDL_FreeSurface(m_Overlays[i].surface);
+        PendingSurface* pendingSurface = (PendingSurface*)SDL_AtomicSetPtr(
+            (void**)&m_Overlays[i].pendingSurface, nullptr);
+        if (pendingSurface != nullptr) {
+            SDL_FreeSurface(pendingSurface->surface);
+            delete pendingSurface;
         }
         if (m_Overlays[i].font != nullptr) {
             TTF_CloseFont(m_Overlays[i].font);
@@ -74,11 +130,52 @@ int OverlayManager::getOverlayFontSize(OverlayType type)
     return m_Overlays[type].fontSize;
 }
 
-SDL_Surface* OverlayManager::getUpdatedOverlaySurface(OverlayType type)
+bool OverlayManager::getUpdatedOverlaySurface(OverlayType type,
+                                              SDL_Surface** ownedSurface,
+                                              OverlayPresentation* presentation)
 {
-    // If a new surface is available, return it. If not, return nullptr.
-    // Caller must free the surface on success.
-    return (SDL_Surface*)SDL_AtomicSetPtr((void**)&m_Overlays[type].surface, nullptr);
+    SDL_assert(ownedSurface != nullptr);
+    SDL_assert(presentation != nullptr);
+
+    *ownedSurface = nullptr;
+    PendingSurface* pendingSurface = (PendingSurface*)SDL_AtomicSetPtr(
+        (void**)&m_Overlays[type].pendingSurface, nullptr);
+    if (pendingSurface == nullptr) {
+        return false;
+    }
+
+    *ownedSurface = pendingSurface->surface;
+    *presentation = pendingSurface->presentation;
+    delete pendingSurface;
+    return true;
+}
+
+void OverlayManager::updateOverlaySurface(OverlayType type,
+                                          SDL_Surface* ownedSurface,
+                                          OverlayPresentation presentation)
+{
+    PendingSurface* pendingSurface = new (std::nothrow) PendingSurface {
+        ownedSurface,
+        presentation,
+    };
+    if (pendingSurface == nullptr) {
+        SDL_FreeSurface(ownedSurface);
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Failed to allocate pending overlay update");
+        return;
+    }
+
+    PendingSurface* oldPendingSurface = (PendingSurface*)SDL_AtomicSetPtr(
+        (void**)&m_Overlays[type].pendingSurface, pendingSurface);
+
+    if (m_Renderer != nullptr) {
+        m_Renderer->notifyOverlayUpdated(type);
+    }
+
+    if (oldPendingSurface != nullptr) {
+        SDL_FreeSurface(oldPendingSurface->surface);
+        delete oldPendingSurface;
+    }
 }
 
 void OverlayManager::setOverlayTextUpdated(OverlayType type)
@@ -100,6 +197,18 @@ void OverlayManager::setOverlayState(OverlayType type, bool enabled)
         if (!enabled) {
             // Set the text to empty string on disable
             m_Overlays[type].text[0] = 0;
+        }
+
+        if (type == OverlayDeck) {
+            // Deck is surface-backed rather than text-backed. Enabling waits for
+            // the producer's first surface; disabling publishes an explicit clear.
+            if (!enabled) {
+                updateOverlaySurface(
+                    type,
+                    nullptr,
+                    {OverlayAnchor::TopCenter, 0, 1.0f, 1.0f});
+            }
+            return;
         }
 
         notifyOverlayUpdated(type);
@@ -144,9 +253,13 @@ void OverlayManager::notifyOverlayUpdated(OverlayType type)
         }
     }
 
-    // Exchange the old surface with the new one
-    SDL_Surface* oldSurface = (SDL_Surface*)SDL_AtomicSetPtr(
-        (void**)&m_Overlays[type].surface,
+    OverlayPresentation presentation;
+    if (type == OverlayStatusUpdate) {
+        presentation.anchor = OverlayAnchor::BottomLeft;
+    }
+
+    updateOverlaySurface(
+        type,
         m_Overlays[type].enabled ?
             // The _Wrapped variant is required for line breaks to work
             RenderTextOutlinedWrapped(m_Overlays[type].font,
@@ -155,15 +268,8 @@ void OverlayManager::notifyOverlayUpdated(OverlayType type)
                                       {0, 0, 0, 255},
                                       4,
                                       1024)
-            : nullptr);
-
-    // Notify the renderer
-    m_Renderer->notifyOverlayUpdated(type);
-
-    // Free the old surface
-    if (oldSurface != nullptr) {
-        SDL_FreeSurface(oldSurface);
-    }
+            : nullptr,
+        presentation);
 }
 
 SDL_Surface* OverlayManager::RenderTextOutlinedWrapped(TTF_Font* font, const char* text, SDL_Color textColor, SDL_Color outlineColor, int outlineWidth, int wrapWidth) {
@@ -207,5 +313,3 @@ SDL_Surface* OverlayManager::RenderTextOutlinedWrapped(TTF_Font* font, const cha
     SDL_FreeSurface(textSurface);
     return outlineSurface;
 }
-
-

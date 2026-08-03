@@ -105,7 +105,7 @@ private:
     Uint32 m_OverlaySdlPixelFormat;
     VAImage m_OverlayImage[Overlay::OverlayMax];
     VASubpictureID m_OverlaySubpicture[Overlay::OverlayMax];
-    SDL_Rect m_OverlayRect[Overlay::OverlayMax];
+    Overlay::OverlayPresentation m_OverlayPresentation[Overlay::OverlayMax];
 
 #ifdef HAVE_LIBVA_X11
     Display* m_XDisplay;

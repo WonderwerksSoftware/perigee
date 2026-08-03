@@ -1544,9 +1544,16 @@ void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         return;
     }
 
-    // Don't upload if the overlay is disabled
-    if (!Session::get()->getOverlayManager().isOverlayEnabled(type)) {
-        // Turn the overlay plane off when transitioning from enabled to disabled
+    SDL_Surface* newSurface = nullptr;
+    Overlay::OverlayPresentation presentation;
+    const bool overlayUpdated = Session::get()->getOverlayManager().getUpdatedOverlaySurface(
+        type, &newSurface, &presentation);
+    const bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
+
+    if (!overlayEnabled || (overlayUpdated && newSurface == nullptr)) {
+        SDL_FreeSurface(newSurface);
+
+        // Turn the overlay plane off when disabling or explicitly clearing it.
         if (m_OverlayRects[type].w || m_OverlayRects[type].h) {
             if (m_OverlayCompositionSurface) {
                 blitOverlayToCompositionSurface(type, nullptr, nullptr);
@@ -1560,25 +1567,64 @@ void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         return;
     }
 
+    if (!overlayUpdated) {
+        return;
+    }
+
     // Upload a new overlay surface if needed
-    SDL_Surface* newSurface = Session::get()->getOverlayManager().getUpdatedOverlaySurface(type);
     if (newSurface != nullptr) {
         uint32_t dumbBuffer, fbId;
-        SDL_Rect overlayRect;
+        const SDL_FRect placedRect = Overlay::calculateOverlayRect(
+            presentation,
+            newSurface->w,
+            newSurface->h,
+            m_OutputRect.w,
+            m_OutputRect.h);
+        SDL_Rect overlayRect {
+            static_cast<int>(placedRect.x),
+            static_cast<int>(placedRect.y),
+            static_cast<int>(placedRect.w),
+            static_cast<int>(placedRect.h),
+        };
 
-        if (type == Overlay::OverlayStatusUpdate) {
-            // Bottom Left
-            overlayRect.x = 0;
-            overlayRect.y = m_OutputRect.h - newSurface->h;
-        }
-        else if (type == Overlay::OverlayDebug) {
-            // Top left
-            overlayRect.x = 0;
-            overlayRect.y = 0;
+        if (overlayRect.w <= 0 || overlayRect.h <= 0) {
+            SDL_FreeSurface(newSurface);
+            if (m_OverlayRects[type].w || m_OverlayRects[type].h) {
+                if (m_OverlayCompositionSurface) {
+                    blitOverlayToCompositionSurface(type, nullptr, nullptr);
+                }
+                else if (m_OverlayPlanes[type].isValid()) {
+                    m_PropSetter.disablePlane(m_OverlayPlanes[type]);
+                }
+                SDL_zero(m_OverlayRects[type]);
+            }
+            return;
         }
 
-        overlayRect.w = newSurface->w;
-        overlayRect.h = newSurface->h;
+        // The composition fallback uses unscaled blits, so scale once here.
+        // Hardware planes receive the same pixels and destination dimensions.
+        if (overlayRect.w != newSurface->w || overlayRect.h != newSurface->h) {
+            SDL_Surface* scaledSurface = SDL_CreateRGBSurfaceWithFormat(
+                0,
+                overlayRect.w,
+                overlayRect.h,
+                newSurface->format->BitsPerPixel,
+                newSurface->format->format);
+            if (scaledSurface == nullptr) {
+                SDL_FreeSurface(newSurface);
+                return;
+            }
+
+            SDL_SetSurfaceBlendMode(newSurface, SDL_BLENDMODE_NONE);
+            if (SDL_BlitScaled(newSurface, nullptr, scaledSurface, nullptr) != 0) {
+                SDL_FreeSurface(scaledSurface);
+                SDL_FreeSurface(newSurface);
+                return;
+            }
+
+            SDL_FreeSurface(newSurface);
+            newSurface = scaledSurface;
+        }
 
         // Try to let the display controller composite for us
         if (!m_OverlayCompositionSurface) {

@@ -10,8 +10,27 @@ namespace Overlay {
 enum OverlayType {
     OverlayDebug,
     OverlayStatusUpdate,
+    OverlayDeck,
     OverlayMax
 };
+
+enum class OverlayAnchor {
+    TopLeft,
+    TopCenter,
+    BottomLeft
+};
+
+struct OverlayPresentation {
+    OverlayAnchor anchor = OverlayAnchor::TopLeft;
+    int marginPx = 0;
+    float maxWidthRatio = 1.0f;
+    float maxHeightRatio = 1.0f;
+};
+
+SDL_FRect calculateOverlayRect(OverlayPresentation presentation,
+                               int surfaceWidth, int surfaceHeight,
+                               int viewportWidth, int viewportHeight,
+                               bool originAtBottomLeft = false);
 
 class IOverlayRenderer
 {
@@ -35,13 +54,23 @@ public:
     void setOverlayState(OverlayType type, bool enabled);
     SDL_Color getOverlayColor(OverlayType type);
     int getOverlayFontSize(OverlayType type);
-    SDL_Surface* getUpdatedOverlaySurface(OverlayType type);
+    bool getUpdatedOverlaySurface(OverlayType type,
+                                  SDL_Surface** ownedSurface,
+                                  OverlayPresentation* presentation);
+    void updateOverlaySurface(OverlayType type,
+                              SDL_Surface* ownedSurface,
+                              OverlayPresentation presentation);
 
     void setOverlayRenderer(IOverlayRenderer* renderer);
 
 private:
     void notifyOverlayUpdated(OverlayType type);
     SDL_Surface* RenderTextOutlinedWrapped(TTF_Font* font, const char* text, SDL_Color textColor, SDL_Color outlineColor, int outlineWidth, int wrapWidth);
+
+    struct PendingSurface {
+        SDL_Surface* surface;
+        OverlayPresentation presentation;
+    };
 
     struct {
         bool enabled;
@@ -50,7 +79,7 @@ private:
         char text[1024];
 
         TTF_Font* font;
-        SDL_Surface* surface;
+        PendingSurface* pendingSurface;
     } m_Overlays[OverlayMax];
     IOverlayRenderer* m_Renderer;
     QByteArray m_FontData;

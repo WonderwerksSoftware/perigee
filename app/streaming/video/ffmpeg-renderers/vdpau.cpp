@@ -371,12 +371,13 @@ void VDPAURenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 {
     VdpStatus status;
 
-    SDL_Surface* newSurface = Session::get()->getOverlayManager().getUpdatedOverlaySurface(type);
-    bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
-    if (newSurface == nullptr && overlayEnabled) {
-        // There's no updated surface and the overlay is enabled, so just leave the old surface alone.
+    SDL_Surface* newSurface = nullptr;
+    Overlay::OverlayPresentation presentation;
+    if (!Session::get()->getOverlayManager().getUpdatedOverlaySurface(
+            type, &newSurface, &presentation)) {
         return;
     }
+    bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
 
     // Destroy the old surface
     // NB: The mutex ensures the surface is not currently being read for rendering.
@@ -398,7 +399,7 @@ void VDPAURenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         }
     }
 
-    if (!overlayEnabled) {
+    if (!overlayEnabled || newSurface == nullptr) {
         SDL_FreeSurface(newSurface);
         return;
     }
@@ -435,21 +436,18 @@ void VDPAURenderer::notifyOverlayUpdated(Overlay::OverlayType type)
             return;
         }
 
-        VdpRect overlayRect;
-
-        if (type == Overlay::OverlayStatusUpdate) {
-            // Bottom Left
-            overlayRect.x0 = 0;
-            overlayRect.y0 = m_DisplayHeight - newSurface->h;
-        }
-        else if (type == Overlay::OverlayDebug) {
-            // Top left
-            overlayRect.x0 = 0;
-            overlayRect.y0 = 0;
-        }
-
-        overlayRect.x1 = overlayRect.x0 + newSurface->w;
-        overlayRect.y1 = overlayRect.y0 + newSurface->h;
+        const SDL_FRect placedRect = Overlay::calculateOverlayRect(
+            presentation,
+            newSurface->w,
+            newSurface->h,
+            m_DisplayWidth,
+            m_DisplayHeight);
+        const VdpRect overlayRect {
+            static_cast<uint32_t>(placedRect.x),
+            static_cast<uint32_t>(placedRect.y),
+            static_cast<uint32_t>(placedRect.x + placedRect.w),
+            static_cast<uint32_t>(placedRect.y + placedRect.h),
+        };
 
         // Surface data is no longer needed
         SDL_FreeSurface(newSurface);

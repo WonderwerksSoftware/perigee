@@ -171,21 +171,21 @@ SLVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
 
 void SLVideoDecoder::notifyOverlayUpdated(Overlay::OverlayType type)
 {
-    // SLVideo supports only one visible overlay at a time. Since we don't have
-    // stats like the FFmpeg-based decoders, we'll just support the status update
-    // overlay and nothing else.
-    if (type != Overlay::OverlayStatusUpdate) {
+    // SLVideo supports only one visible overlay at a time. It can display either
+    // the legacy status update or Deck, but it still has no statistics overlay.
+    if (type != Overlay::OverlayStatusUpdate && type != Overlay::OverlayDeck) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "Unsupported overlay type: %d", type);
         return;
     }
 
-    SDL_Surface* newSurface = Session::get()->getOverlayManager().getUpdatedOverlaySurface(type);
-    bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
-    if (newSurface == nullptr && overlayEnabled) {
-        // There's no updated surface and the overlay is enabled, so just leave the old surface alone.
+    SDL_Surface* newSurface = nullptr;
+    Overlay::OverlayPresentation presentation;
+    if (!Session::get()->getOverlayManager().getUpdatedOverlaySurface(
+            type, &newSurface, &presentation)) {
         return;
     }
+    bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
 
     // Hide and free any existing overlay
     if (m_Overlay != nullptr) {
@@ -194,7 +194,7 @@ void SLVideoDecoder::notifyOverlayUpdated(Overlay::OverlayType type)
         m_Overlay = nullptr;
     }
 
-    if (!overlayEnabled) {
+    if (!overlayEnabled || newSurface == nullptr) {
         SDL_FreeSurface(newSurface);
         return;
     }
@@ -215,10 +215,19 @@ void SLVideoDecoder::notifyOverlayUpdated(Overlay::OverlayType type)
     SDL_ConvertPixels(newSurface->w, newSurface->h, newSurface->format->format, newSurface->pixels, newSurface->pitch,
                       SDL_PIXELFORMAT_ARGB8888, pixels, pitch);
 
-    // Position the status overlay at the bottom left corner
-    float flWidth = (float)newSurface->w / m_ViewportWidth;
-    float flHeight = (float)newSurface->h / m_ViewportHeight;
-    SLVideo_SetOverlayDisplayArea(m_Overlay, 0.0f, 1.0f - flHeight, flWidth, flHeight);
+    const SDL_FRect overlayRect = Overlay::calculateOverlayRect(
+        presentation,
+        newSurface->w,
+        newSurface->h,
+        m_ViewportWidth,
+        m_ViewportHeight);
+    const float viewportWidth = SDL_max(1, m_ViewportWidth);
+    const float viewportHeight = SDL_max(1, m_ViewportHeight);
+    SLVideo_SetOverlayDisplayArea(m_Overlay,
+                                  overlayRect.x / viewportWidth,
+                                  overlayRect.y / viewportHeight,
+                                  overlayRect.w / viewportWidth,
+                                  overlayRect.h / viewportHeight);
 
     // We're done with the surface now
     SDL_FreeSurface(newSurface);

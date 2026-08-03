@@ -671,12 +671,13 @@ void VAAPIRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         return;
     }
 
-    SDL_Surface* newSurface = Session::get()->getOverlayManager().getUpdatedOverlaySurface(type);
-    bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
-    if (newSurface == nullptr && overlayEnabled) {
-        // There's no updated surface and the overlay is enabled, so just leave the old surface alone.
+    SDL_Surface* newSurface = nullptr;
+    Overlay::OverlayPresentation presentation;
+    if (!Session::get()->getOverlayManager().getUpdatedOverlaySurface(
+            type, &newSurface, &presentation)) {
         return;
     }
+    bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
 
     // Destroy the old image and subpicture
     // NB: The mutex ensures the overlay is not currently being read for rendering.
@@ -706,7 +707,7 @@ void VAAPIRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         }
     }
 
-    if (!overlayEnabled) {
+    if (!overlayEnabled || newSurface == nullptr) {
         SDL_FreeSurface(newSurface);
         return;
     }
@@ -751,22 +752,6 @@ void VAAPIRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
             return;
         }
 
-        SDL_Rect overlayRect;
-
-        if (type == Overlay::OverlayStatusUpdate) {
-            // Bottom Left
-            overlayRect.x = 0;
-            overlayRect.y = -newSurface->h;
-        }
-        else if (type == Overlay::OverlayDebug) {
-            // Top left
-            overlayRect.x = 0;
-            overlayRect.y = 0;
-        }
-
-        overlayRect.w = newSurface->w;
-        overlayRect.h = newSurface->h;
-
         // Surface data is no longer needed
         SDL_FreeSurface(newSurface);
 
@@ -783,7 +768,7 @@ void VAAPIRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         SDL_LockMutex(m_OverlayMutex);
         m_OverlayImage[type] = newImage;
         m_OverlaySubpicture[type] = newSubpicture;
-        m_OverlayRect[type] = overlayRect;
+        m_OverlayPresentation[type] = presentation;
         SDL_UnlockMutex(m_OverlayMutex);
     }
 }
@@ -846,15 +831,18 @@ VAAPIRenderer::renderFrame(AVFrame* frame)
                 continue;
             }
 
-            SDL_Rect overlayRect = m_OverlayRect[type];
-
-            // Negative values are relative to the other side of the window
-            if (overlayRect.x < 0) {
-                overlayRect.x += windowWidth;
-            }
-            if (overlayRect.y < 0) {
-                overlayRect.y += windowHeight;
-            }
+            const SDL_FRect placedRect = Overlay::calculateOverlayRect(
+                m_OverlayPresentation[type],
+                m_OverlayImage[type].width,
+                m_OverlayImage[type].height,
+                windowWidth,
+                windowHeight);
+            const SDL_Rect overlayRect {
+                static_cast<int>(placedRect.x),
+                static_cast<int>(placedRect.y),
+                static_cast<int>(placedRect.w),
+                static_cast<int>(placedRect.h),
+            };
 
             status = vaAssociateSubpicture(vaDeviceContext->display,
                                            m_OverlaySubpicture[type],
