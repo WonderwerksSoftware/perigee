@@ -38,6 +38,12 @@ SDL_FRect calculateOverlayRect(OverlayPresentation presentation,
                                int viewportWidth, int viewportHeight,
                                bool originAtBottomLeft = false);
 
+bool composeOverlaySurfacePatch(SDL_Surface* destination,
+                                SDL_Surface* source,
+                                const SDL_Rect& previousRect,
+                                const SDL_Rect& newRect,
+                                SDL_Rect* damagedRect);
+
 class OverlayLayoutState
 {
 public:
@@ -125,13 +131,15 @@ public:
                               SDL_Surface* ownedSurface,
                               OverlayPresentation presentation);
 
+    // Waits for every in-flight overlay callback before replacing the renderer.
+    // This must not be called from within IOverlayRenderer::notifyOverlayUpdated().
     void setOverlayRenderer(IOverlayRenderer* renderer);
 
 private:
-    void notifyOverlayUpdatedLocked(OverlayType type);
-    void updateOverlaySurfaceLocked(OverlayType type,
-                                    SDL_Surface* ownedSurface,
-                                    OverlayPresentation presentation);
+    SDL_Surface* notifyOverlayUpdatedLocked(OverlayType type);
+    SDL_Surface* updateOverlaySurfaceLocked(OverlayType type,
+                                            SDL_Surface* ownedSurface,
+                                            OverlayPresentation presentation);
     SDL_Surface* RenderTextOutlinedWrapped(TTF_Font* font, const char* text, SDL_Color textColor, SDL_Color outlineColor, int outlineWidth, int wrapWidth);
     void freeSurface(SDL_Surface* surface);
 

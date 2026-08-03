@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <utility>
 
 using namespace Overlay;
@@ -54,6 +56,141 @@ SDL_FRect Overlay::calculateOverlayRect(OverlayPresentation presentation,
     }
 
     return {x, y, width, height};
+}
+
+bool Overlay::composeOverlaySurfacePatch(SDL_Surface* destination,
+                                         SDL_Surface* source,
+                                         const SDL_Rect& previousRect,
+                                         const SDL_Rect& newRect,
+                                         SDL_Rect* damagedRect)
+{
+    if (destination == nullptr || source == nullptr || damagedRect == nullptr ||
+            destination->format == nullptr || source->format == nullptr ||
+            destination->pixels == nullptr || source->pixels == nullptr ||
+            destination->format->format != source->format->format ||
+            destination->format->BytesPerPixel <= 0 ||
+            destination->format->BytesPerPixel != source->format->BytesPerPixel ||
+            destination->pitch <= 0 || source->pitch <= 0 ||
+            newRect.w != source->w || newRect.h != source->h) {
+        return false;
+    }
+
+    const auto rectWithinSurface = [](const SDL_Rect& rect,
+                                      int width,
+                                      int height,
+                                      bool allowEmpty) {
+        if (rect.w < 0 || rect.h < 0 || rect.x < 0 || rect.y < 0) {
+            return false;
+        }
+        if (rect.w == 0 || rect.h == 0) {
+            return allowEmpty;
+        }
+        return static_cast<int64_t>(rect.x) + rect.w <= width &&
+               static_cast<int64_t>(rect.y) + rect.h <= height;
+    };
+    if (!rectWithinSurface(
+            newRect, destination->w, destination->h, false) ||
+            !rectWithinSurface(
+                previousRect, destination->w, destination->h, true)) {
+        return false;
+    }
+
+    SDL_Rect unionRect = newRect;
+    if (previousRect.w > 0 && previousRect.h > 0) {
+        const int left = std::min(previousRect.x, newRect.x);
+        const int top = std::min(previousRect.y, newRect.y);
+        const int64_t right = std::max(
+            static_cast<int64_t>(previousRect.x) + previousRect.w,
+            static_cast<int64_t>(newRect.x) + newRect.w);
+        const int64_t bottom = std::max(
+            static_cast<int64_t>(previousRect.y) + previousRect.h,
+            static_cast<int64_t>(newRect.y) + newRect.h);
+        if (right - left > std::numeric_limits<int>::max() ||
+                bottom - top > std::numeric_limits<int>::max()) {
+            return false;
+        }
+        unionRect = {
+            left,
+            top,
+            static_cast<int>(right - left),
+            static_cast<int>(bottom - top),
+        };
+    }
+
+    const auto checkedMultiply = [](size_t left,
+                                    size_t right,
+                                    size_t* product) {
+        if (left != 0 && right > std::numeric_limits<size_t>::max() / left) {
+            return false;
+        }
+        *product = left * right;
+        return true;
+    };
+
+    const size_t bytesPerPixel = destination->format->BytesPerPixel;
+    size_t sourceRowBytes;
+    size_t destinationVisibleRowBytes;
+    size_t patchRowBytes;
+    size_t patchBytes;
+    size_t sourceStorageBytes;
+    size_t destinationStorageBytes;
+    size_t patchXBytes;
+    size_t unionXBytes;
+    const size_t patchX = static_cast<size_t>(newRect.x - unionRect.x);
+    const size_t patchY = static_cast<size_t>(newRect.y - unionRect.y);
+    if (!checkedMultiply(source->w, bytesPerPixel, &sourceRowBytes) ||
+            !checkedMultiply(destination->w, bytesPerPixel,
+                             &destinationVisibleRowBytes) ||
+            !checkedMultiply(unionRect.w, bytesPerPixel, &patchRowBytes) ||
+            !checkedMultiply(patchRowBytes, unionRect.h, &patchBytes) ||
+            !checkedMultiply(source->pitch, source->h, &sourceStorageBytes) ||
+            !checkedMultiply(destination->pitch, destination->h,
+                             &destinationStorageBytes) ||
+            !checkedMultiply(patchX, bytesPerPixel, &patchXBytes) ||
+            !checkedMultiply(unionRect.x, bytesPerPixel, &unionXBytes) ||
+            sourceRowBytes > static_cast<size_t>(source->pitch) ||
+            destinationVisibleRowBytes > static_cast<size_t>(destination->pitch) ||
+            patchY + static_cast<size_t>(source->h) >
+                static_cast<size_t>(unionRect.h) ||
+            patchXBytes > patchRowBytes ||
+            sourceRowBytes > patchRowBytes - patchXBytes ||
+            unionXBytes > static_cast<size_t>(destination->pitch) ||
+            patchRowBytes > static_cast<size_t>(destination->pitch) - unionXBytes) {
+        return false;
+    }
+
+    auto* patch = static_cast<uint8_t*>(SDL_calloc(1, patchBytes));
+    if (patch == nullptr) {
+        return false;
+    }
+
+    for (size_t sourceY = 0; sourceY < static_cast<size_t>(source->h); sourceY++) {
+        const size_t sourceOffset = sourceY * static_cast<size_t>(source->pitch);
+        const size_t patchOffset =
+            (patchY + sourceY) * patchRowBytes + patchXBytes;
+        SDL_assert(sourceOffset + sourceRowBytes <= sourceStorageBytes);
+        SDL_assert(patchOffset + sourceRowBytes <= patchBytes);
+        memcpy(patch + patchOffset,
+               static_cast<const uint8_t*>(source->pixels) + sourceOffset,
+               sourceRowBytes);
+    }
+
+    for (size_t patchYIndex = 0;
+         patchYIndex < static_cast<size_t>(unionRect.h);
+         patchYIndex++) {
+        const size_t destinationOffset =
+            (static_cast<size_t>(unionRect.y) + patchYIndex) *
+                static_cast<size_t>(destination->pitch) +
+            unionXBytes;
+        SDL_assert(destinationOffset + patchRowBytes <= destinationStorageBytes);
+        memcpy(static_cast<uint8_t*>(destination->pixels) + destinationOffset,
+               patch + patchYIndex * patchRowBytes,
+               patchRowBytes);
+    }
+
+    SDL_free(patch);
+    *damagedRect = unionRect;
+    return true;
 }
 
 void OverlayLayoutState::setSurface(int surfaceWidth,
@@ -270,11 +407,15 @@ char* OverlayManager::getOverlayText(OverlayType type)
 
 void OverlayManager::updateOverlayText(OverlayType type, const char* text)
 {
-    std::lock_guard<std::mutex> notificationLock(m_NotificationMutexes[type]);
-    SDL_utf8strlcpy(m_Overlays[type].text, text, sizeof(m_Overlays[0].text));
-    if (m_Overlays[type].enabled.load()) {
-        notifyOverlayUpdatedLocked(type);
+    SDL_Surface* retiredSurface = nullptr;
+    {
+        std::lock_guard<std::mutex> notificationLock(m_NotificationMutexes[type]);
+        SDL_utf8strlcpy(m_Overlays[type].text, text, sizeof(m_Overlays[0].text));
+        if (m_Overlays[type].enabled.load()) {
+            retiredSurface = notifyOverlayUpdatedLocked(type);
+        }
     }
+    freeSurface(retiredSurface);
 }
 
 int OverlayManager::getOverlayMaxTextLength()
@@ -314,13 +455,17 @@ void OverlayManager::updateOverlaySurface(OverlayType type,
     // The per-type notification lock serializes publication through renderer
     // consumption. Renderer callbacks must not synchronously submit another
     // update for the same type. No pending-state lock is held during callbacks.
-    std::lock_guard<std::mutex> notificationLock(m_NotificationMutexes[type]);
-    updateOverlaySurfaceLocked(type, ownedSurface, presentation);
+    SDL_Surface* retiredSurface = nullptr;
+    {
+        std::lock_guard<std::mutex> notificationLock(m_NotificationMutexes[type]);
+        retiredSurface = updateOverlaySurfaceLocked(type, ownedSurface, presentation);
+    }
+    freeSurface(retiredSurface);
 }
 
-void OverlayManager::updateOverlaySurfaceLocked(OverlayType type,
-                                                SDL_Surface* ownedSurface,
-                                                OverlayPresentation presentation)
+SDL_Surface* OverlayManager::updateOverlaySurfaceLocked(OverlayType type,
+                                                        SDL_Surface* ownedSurface,
+                                                        OverlayPresentation presentation)
 {
     SDL_Surface* oldSurface = nullptr;
     {
@@ -337,47 +482,55 @@ void OverlayManager::updateOverlaySurfaceLocked(OverlayType type,
         m_Renderer->notifyOverlayUpdated(type);
     }
 
-    freeSurface(oldSurface);
+    return oldSurface;
 }
 
 void OverlayManager::setOverlayTextUpdated(OverlayType type)
 {
-    std::lock_guard<std::mutex> notificationLock(m_NotificationMutexes[type]);
+    SDL_Surface* retiredSurface = nullptr;
+    {
+        std::lock_guard<std::mutex> notificationLock(m_NotificationMutexes[type]);
 
-    // Only update the overlay state if it's enabled. If it's not enabled,
-    // the renderer has already been notified by setOverlayState().
-    if (m_Overlays[type].enabled.load()) {
-        notifyOverlayUpdatedLocked(type);
+        // Only update the overlay state if it's enabled. If it's not enabled,
+        // the renderer has already been notified by setOverlayState().
+        if (m_Overlays[type].enabled.load()) {
+            retiredSurface = notifyOverlayUpdatedLocked(type);
+        }
     }
+    freeSurface(retiredSurface);
 }
 
 void OverlayManager::setOverlayState(OverlayType type, bool enabled)
 {
-    std::lock_guard<std::mutex> notificationLock(m_NotificationMutexes[type]);
-    const bool stateChanged = m_Overlays[type].enabled.load() != enabled;
+    SDL_Surface* retiredSurface = nullptr;
+    {
+        std::lock_guard<std::mutex> notificationLock(m_NotificationMutexes[type]);
+        const bool stateChanged = m_Overlays[type].enabled.load() != enabled;
 
-    m_Overlays[type].enabled.store(enabled);
+        m_Overlays[type].enabled.store(enabled);
 
-    if (stateChanged) {
-        if (!enabled) {
-            // Set the text to empty string on disable
-            m_Overlays[type].text[0] = 0;
-        }
-
-        if (type == OverlayDeck) {
-            // Deck is surface-backed rather than text-backed. Enabling waits for
-            // the producer's first surface; disabling publishes an explicit clear.
+        if (stateChanged) {
             if (!enabled) {
-                updateOverlaySurfaceLocked(
-                    type,
-                    nullptr,
-                    {OverlayAnchor::TopCenter, 0, 1.0f, 1.0f});
+                // Set the text to empty string on disable
+                m_Overlays[type].text[0] = 0;
             }
-            return;
-        }
 
-        notifyOverlayUpdatedLocked(type);
+            if (type == OverlayDeck) {
+                // Deck is surface-backed rather than text-backed. Enabling waits for
+                // the producer's first surface; disabling publishes an explicit clear.
+                if (!enabled) {
+                    retiredSurface = updateOverlaySurfaceLocked(
+                        type,
+                        nullptr,
+                        {OverlayAnchor::TopCenter, 0, 1.0f, 1.0f});
+                }
+            }
+            else {
+                retiredSurface = notifyOverlayUpdatedLocked(type);
+            }
+        }
     }
+    freeSurface(retiredSurface);
 }
 
 SDL_Color OverlayManager::getOverlayColor(OverlayType type)
@@ -387,6 +540,12 @@ SDL_Color OverlayManager::getOverlayColor(OverlayType type)
 
 void OverlayManager::setOverlayRenderer(IOverlayRenderer* renderer)
 {
+    static_assert(OverlayMax == 3,
+                  "Update the all-overlay renderer lock when adding an overlay type");
+    std::scoped_lock notificationLocks(
+        m_NotificationMutexes[OverlayDebug],
+        m_NotificationMutexes[OverlayStatusUpdate],
+        m_NotificationMutexes[OverlayDeck]);
     m_Renderer = renderer;
 }
 
@@ -397,10 +556,10 @@ void OverlayManager::freeSurface(SDL_Surface* surface)
     }
 }
 
-void OverlayManager::notifyOverlayUpdatedLocked(OverlayType type)
+SDL_Surface* OverlayManager::notifyOverlayUpdatedLocked(OverlayType type)
 {
     if (m_Renderer == nullptr) {
-        return;
+        return nullptr;
     }
 
     // Construct the required font to render the overlay
@@ -408,7 +567,7 @@ void OverlayManager::notifyOverlayUpdatedLocked(OverlayType type)
         if (m_FontData.isEmpty()) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "SDL overlay font failed to load");
-            return;
+            return nullptr;
         }
 
         // m_FontData must stay around until the font is closed
@@ -421,7 +580,7 @@ void OverlayManager::notifyOverlayUpdatedLocked(OverlayType type)
                         TTF_GetError());
 
             // Can't proceed without a font
-            return;
+            return nullptr;
         }
     }
 
@@ -430,7 +589,7 @@ void OverlayManager::notifyOverlayUpdatedLocked(OverlayType type)
         presentation.anchor = OverlayAnchor::BottomLeft;
     }
 
-    updateOverlaySurfaceLocked(
+    return updateOverlaySurfaceLocked(
         type,
         m_Overlays[type].enabled.load() ?
             // The _Wrapped variant is required for line breaks to work

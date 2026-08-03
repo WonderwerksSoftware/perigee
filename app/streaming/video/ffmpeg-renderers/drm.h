@@ -788,7 +788,7 @@ private:
     bool mapDumbBuffer(uint32_t handle, size_t size, void** mapping);
     bool createFbForDumbBuffer(struct drm_mode_create_dumb* createBuf, uint32_t* fbId);
     void enterOverlayCompositionMode();
-    void blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL_Surface* newSurface, SDL_Rect* overlayRect);
+    bool blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL_Surface* newSurface, SDL_Rect* overlayRect);
     static bool drmFormatMatchesVideoFormat(uint32_t drmFormat, int videoFormat);
 
     IFFmpegRenderer* m_BackendRenderer;
@@ -839,4 +839,3 @@ private:
     EglImageFactory m_EglImageFactory;
 #endif
 };
-

@@ -1455,7 +1455,7 @@ Fail:
     drmIoctl(m_DrmFd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroyBuf);
 }
 
-void DrmRenderer::blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL_Surface* newSurface, SDL_Rect* overlayRect)
+bool DrmRenderer::blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL_Surface* newSurface, SDL_Rect* overlayRect)
 {
     SDL_assert(m_OverlayCompositionSurface);
 
@@ -1469,53 +1469,16 @@ void DrmRenderer::blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL
                              newSurface->format->format, newSurface->pixels, newSurface->pitch,
                              newSurface->format->format, newSurface->pixels, newSurface->pitch);
 
-        // Compute the union of the current and previous overlay rects. Our draw operation
-        // will need to cover this entire area to ensure the old dirty area is covered.
         SDL_Rect overlayUnionRect;
-        SDL_UnionRect(overlayRect, &m_OverlayRects[type], &overlayUnionRect);
-
-        // If the new overlay completely covers the old overlay, blit it all at once
-        if (SDL_RectEquals(&overlayUnionRect, overlayRect)) {
-            SDL_BlitSurface(newSurface, nullptr, m_OverlayCompositionSurface, overlayRect);
-        }
-        else {
-            SDL_assert(newSurface->format->format == m_OverlayCompositionSurface->format->format);
-
-            // Draw the surface row-by-row to ensure we clear the dirty area from the previous surface
-            // without causing flickering, which would be noticeable if we cleared the whole area first.
-            for (int y = overlayUnionRect.y; y < overlayUnionRect.y + overlayUnionRect.h; y++) {
-                auto dstPixelRow =
-                    (uint8_t*)m_OverlayCompositionSurface->pixels +
-                    (y * m_OverlayCompositionSurface->pitch);
-                auto bpp = m_OverlayCompositionSurface->format->BytesPerPixel;
-
-                if (y < overlayRect->y || y > overlayRect->y + overlayRect->h) {
-                    // Clear the whole row if the overlay doesn't intersect this row
-                    memset(dstPixelRow + (overlayUnionRect.x * bpp),
-                           0,
-                           overlayUnionRect.w * bpp);
-                }
-                else {
-                    auto srcPixelRow = (uint8_t*)newSurface->pixels + ((y - overlayRect->y) * newSurface->pitch);
-
-                    // Clear columns prior to the intersection
-                    SDL_assert(overlayRect->x >= overlayUnionRect.x);
-                    memset(dstPixelRow + (overlayUnionRect.x * bpp),
-                           0,
-                           (overlayRect->x - overlayUnionRect.x) * bpp);
-
-                    // Copy the overlay into the intersection
-                    memcpy(dstPixelRow + (overlayRect->x * bpp),
-                           srcPixelRow,
-                           overlayRect->w * bpp);
-
-                    // Clear columns after the intersection
-                    SDL_assert(overlayUnionRect.w >= overlayRect->w);
-                    memset(dstPixelRow + ((overlayRect->x + overlayRect->w) * bpp),
-                           0,
-                           (overlayUnionRect.w - overlayRect->w) * bpp);
-                }
-            }
+        if (!Overlay::composeOverlaySurfacePatch(
+                m_OverlayCompositionSurface,
+                newSurface,
+                m_OverlayRects[type],
+                *overlayRect,
+                &overlayUnionRect)) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "Failed to compose overlay surface patch");
+            return false;
         }
 
         // Dirty the modified portion of the plane
@@ -1523,11 +1486,15 @@ void DrmRenderer::blitOverlayToCompositionSurface(Overlay::OverlayType type, SDL
     }
     else {
         // Clear the pixels where this overlay was drawn before
-        SDL_FillRect(m_OverlayCompositionSurface, &m_OverlayRects[type], 0);
+        if (SDL_FillRect(
+                m_OverlayCompositionSurface, &m_OverlayRects[type], 0) != 0) {
+            return false;
+        }
 
         // Dirty the modified portion of the plane
         m_PropSetter.damagePlane(m_OverlayPlanes[0], m_OverlayRects[type]);
     }
+    return true;
 }
 
 void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
@@ -1556,7 +1523,9 @@ void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
         // Turn the overlay plane off when disabling or explicitly clearing it.
         if (m_OverlayRects[type].w || m_OverlayRects[type].h) {
             if (m_OverlayCompositionSurface) {
-                blitOverlayToCompositionSurface(type, nullptr, nullptr);
+                if (!blitOverlayToCompositionSurface(type, nullptr, nullptr)) {
+                    return;
+                }
             }
             else if (m_OverlayPlanes[type].isValid()) {
                 m_PropSetter.disablePlane(m_OverlayPlanes[type]);
@@ -1591,7 +1560,9 @@ void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
             SDL_FreeSurface(newSurface);
             if (m_OverlayRects[type].w || m_OverlayRects[type].h) {
                 if (m_OverlayCompositionSurface) {
-                    blitOverlayToCompositionSurface(type, nullptr, nullptr);
+                    if (!blitOverlayToCompositionSurface(type, nullptr, nullptr)) {
+                        return;
+                    }
                 }
                 else if (m_OverlayPlanes[type].isValid()) {
                     m_PropSetter.disablePlane(m_OverlayPlanes[type]);
@@ -1662,7 +1633,10 @@ void DrmRenderer::notifyOverlayUpdated(Overlay::OverlayType type)
 
         // If we're in overlay composition mode, blit this overlay into the composition surface
         if (m_OverlayCompositionSurface) {
-            blitOverlayToCompositionSurface(type, newSurface, &overlayRect);
+            if (!blitOverlayToCompositionSurface(type, newSurface, &overlayRect)) {
+                SDL_FreeSurface(newSurface);
+                return;
+            }
         }
         else {
             // Otherwise queue the plane flip with the new FB

@@ -4,9 +4,16 @@
 
 #include <QtTest>
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <thread>
+
+#ifdef Q_OS_UNIX
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 class RecordingOverlayRenderer final : public Overlay::IOverlayRenderer
 {
@@ -62,6 +69,11 @@ public:
         return m_MaxActiveCallbacks.load();
     }
 
+    int callbackCount() const
+    {
+        return m_CallCount.load();
+    }
+
     QVector<int> consumedMargins() const
     {
         std::lock_guard<std::mutex> lock(m_ConsumedMutex);
@@ -91,7 +103,10 @@ private slots:
     void layoutStateRecomputesAfterResizeWithoutSurfaceUpdate();
     void singleOverlayArbitratesStatusOverRetainedDeck();
     void deletesManagerOwnedSurfacesExactlyOnce();
+    void permitsSurfaceDeleterToReenterPublication();
     void serializesNotificationsPerOverlayType();
+    void rendererDetachWaitsForInFlightCallback();
+    void composesWideToNarrowOverlayWithinHalfOpenBounds();
     void replacesPendingSurfaceAndPresentation();
     void representsNullSurfaceAsAConsumableClear();
     void consumedSurfaceOutlivesManager();
@@ -339,6 +354,63 @@ void OverlayLayoutTest::deletesManagerOwnedSurfacesExactlyOnce()
     QCOMPARE(deleted.count(transferred), 1);
 }
 
+void OverlayLayoutTest::permitsSurfaceDeleterToReenterPublication()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Bounded deadlock regression requires fork()/waitpid()");
+#else
+    const pid_t child = fork();
+    QVERIFY2(child >= 0, "fork() failed");
+
+    if (child == 0) {
+        Overlay::OverlayManager* managerPtr = nullptr;
+        bool reentered = false;
+        SDL_Surface* superseded = reinterpret_cast<SDL_Surface*>(quintptr(0x1000));
+        SDL_Surface* replacement = reinterpret_cast<SDL_Surface*>(quintptr(0x2000));
+        const Overlay::OverlayPresentation presentation {
+            Overlay::OverlayAnchor::TopCenter, 0, 1.0f, 1.0f};
+
+        Overlay::OverlayManager manager(
+            [&](SDL_Surface* surface) {
+                if (surface == superseded) {
+                    reentered = true;
+                    managerPtr->updateOverlaySurface(
+                        Overlay::OverlayDeck, nullptr, presentation);
+                }
+            });
+        managerPtr = &manager;
+        manager.updateOverlaySurface(
+            Overlay::OverlayDeck, superseded, presentation);
+        manager.updateOverlaySurface(
+            Overlay::OverlayDeck, replacement, presentation);
+        _exit(reentered ? 0 : 2);
+    }
+
+    int status = 0;
+    bool exited = false;
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < 1000) {
+        const pid_t result = waitpid(child, &status, WNOHANG);
+        if (result == child) {
+            exited = true;
+            break;
+        }
+        QVERIFY2(result >= 0, "waitpid() failed");
+        QTest::qWait(10);
+    }
+
+    if (!exited) {
+        kill(child, SIGKILL);
+        waitpid(child, &status, 0);
+    }
+
+    QVERIFY2(exited, "surface deleter deadlocked while re-entering same-type publication");
+    QVERIFY2(WIFEXITED(status), "surface-deleter child did not exit normally");
+    QCOMPARE(WEXITSTATUS(status), 0);
+#endif
+}
+
 void OverlayLayoutTest::serializesNotificationsPerOverlayType()
 {
     {
@@ -449,6 +521,121 @@ void OverlayLayoutTest::serializesNotificationsPerOverlayType()
         QVERIFY(differentTypeCallbacksOverlapped);
         QCOMPARE(renderer.maxActiveCallbacks(), 2);
     }
+}
+
+void OverlayLayoutTest::rendererDetachWaitsForInFlightCallback()
+{
+    Overlay::OverlayManager manager;
+    BlockingOverlayRenderer renderer(&manager);
+    manager.setOverlayRenderer(&renderer);
+
+    SDL_Surface* firstSurface = SDL_CreateRGBSurfaceWithFormat(
+        0, 16, 9, 32, SDL_PIXELFORMAT_ARGB8888);
+    QVERIFY(firstSurface != nullptr);
+
+    std::thread producer([&]() {
+        manager.updateOverlaySurface(
+            Overlay::OverlayDeck,
+            firstSurface,
+            {Overlay::OverlayAnchor::TopCenter, 1, 1.0f, 1.0f});
+    });
+    const bool callbackEntered =
+        renderer.firstCallbackEntered.tryAcquire(1, 1000);
+
+    QSemaphore detachReturned;
+    std::thread detacher([&]() {
+        manager.setOverlayRenderer(nullptr);
+        detachReturned.release();
+    });
+    const bool detachedWhileCallbackBlocked =
+        detachReturned.tryAcquire(1, 250);
+
+    renderer.releaseFirstCallback.release();
+    producer.join();
+    const bool detachedAfterCallback = detachedWhileCallbackBlocked ||
+        detachReturned.tryAcquire(1, 1000);
+    detacher.join();
+
+    QVERIFY(callbackEntered);
+    QVERIFY2(!detachedWhileCallbackBlocked,
+             "renderer detach returned before the in-flight callback completed");
+    QVERIFY(detachedAfterCallback);
+    QCOMPARE(renderer.callbackCount(), 1);
+
+    SDL_Surface* afterDetach = SDL_CreateRGBSurfaceWithFormat(
+        0, 32, 18, 32, SDL_PIXELFORMAT_ARGB8888);
+    QVERIFY(afterDetach != nullptr);
+    manager.updateOverlaySurface(
+        Overlay::OverlayDeck,
+        afterDetach,
+        {Overlay::OverlayAnchor::TopCenter, 2, 1.0f, 1.0f});
+
+    QCOMPARE(renderer.callbackCount(), 1);
+    QVERIFY(!renderer.secondCallbackEntered.tryAcquire(1, 0));
+}
+
+void OverlayLayoutTest::composesWideToNarrowOverlayWithinHalfOpenBounds()
+{
+    constexpr int displayWidth = 1920;
+    constexpr int displayHeight = 4;
+    constexpr int guardWidth = 640;
+    constexpr int sourceWidth = 640;
+    constexpr int sourceHeight = 2;
+    constexpr quint32 guardPixel = 0xCCCCCCCC;
+    constexpr quint32 sourcePixel = 0x80402010;
+    constexpr quint32 sourceGuardPixel = 0xDEADBEEF;
+
+    QVector<quint32> destinationPixels(
+        (displayWidth + guardWidth) * displayHeight, guardPixel);
+    QVector<quint32> sourcePixels(
+        sourceWidth * (sourceHeight + 1), sourceGuardPixel);
+    std::fill_n(sourcePixels.begin(), sourceWidth * sourceHeight, sourcePixel);
+
+    SDL_Surface* destination = SDL_CreateRGBSurfaceWithFormatFrom(
+        destinationPixels.data(),
+        displayWidth,
+        displayHeight,
+        32,
+        (displayWidth + guardWidth) * static_cast<int>(sizeof(quint32)),
+        SDL_PIXELFORMAT_ARGB8888);
+    SDL_Surface* source = SDL_CreateRGBSurfaceWithFormatFrom(
+        sourcePixels.data(),
+        sourceWidth,
+        sourceHeight,
+        32,
+        sourceWidth * static_cast<int>(sizeof(quint32)),
+        SDL_PIXELFORMAT_ARGB8888);
+    QVERIFY(destination != nullptr);
+    QVERIFY(source != nullptr);
+
+    const SDL_Rect previousRect {0, 0, displayWidth, displayHeight};
+    const SDL_Rect newRect {640, 1, sourceWidth, sourceHeight};
+    SDL_Rect damagedRect {};
+    const bool composed = Overlay::composeOverlaySurfacePatch(
+        destination, source, previousRect, newRect, &damagedRect);
+
+    QVERIFY(composed);
+    QCOMPARE(damagedRect.x, 0);
+    QCOMPARE(damagedRect.y, 0);
+    QCOMPARE(damagedRect.w, displayWidth);
+    QCOMPARE(damagedRect.h, displayHeight);
+
+    for (int y = 0; y < displayHeight; y++) {
+        const quint32* row = destinationPixels.constData() +
+            y * (displayWidth + guardWidth);
+        for (int x = 0; x < displayWidth; x++) {
+            const bool inReplacement =
+                y >= newRect.y && y < newRect.y + newRect.h &&
+                x >= newRect.x && x < newRect.x + newRect.w;
+            QCOMPARE(row[x], inReplacement ? sourcePixel : quint32(0));
+        }
+        for (int x = displayWidth; x < displayWidth + guardWidth; x++) {
+            QCOMPARE(row[x], guardPixel);
+        }
+    }
+
+    SDL_FreeSurface(source);
+    SDL_FreeSurface(destination);
 }
 
 void OverlayLayoutTest::replacesPendingSurfaceAndPresentation()
