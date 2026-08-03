@@ -256,6 +256,7 @@ bool DrmRenderer::prepareDecoderContextInGetFormat(AVCodecContext*, AVPixelForma
 
 void DrmRenderer::prepareToRender()
 {
+    bool overlayOutputReady = false;
     {
         std::lock_guard lock { m_OverlayLock };
         m_OverlayReadiness.deactivate();
@@ -342,6 +343,8 @@ void DrmRenderer::prepareToRender()
                     m_OutputRect.h);
             SDL_zero(m_OverlayRects);
         }
+        overlayOutputReady =
+            hasValidOutput && m_OverlayCompositor != nullptr;
     }
 
     // Set HDMI content type to hopefully enable ALLM
@@ -412,15 +415,36 @@ void DrmRenderer::prepareToRender()
 
     // Enter overlay composition mode if we don't have enough planes to display all the
     // possible overlays we might need, but we have at least one available
-    if (m_OverlayPlanes[0].isValid() && !m_OverlayPlanes[Overlay::OverlayMax - 1].isValid()) {
+    const bool overlayCompositionRequired =
+        m_OverlayPlanes[0].isValid() &&
+        !m_OverlayPlanes[Overlay::OverlayMax - 1].isValid();
+    bool overlayCompositionReady = true;
+    if (overlayCompositionRequired) {
         std::lock_guard lock { m_OverlayLock };
-        enterOverlayCompositionMode();
+        overlayCompositionReady =
+            overlayOutputReady && enterOverlayCompositionMode();
     }
 
-    m_PropSetter.apply();
+    const bool initialApplySucceeded = m_PropSetter.apply();
 
-    // We've now changed state that must be restored
-    m_DrmStateModified = true;
+    // A successful apply may have changed state that must be restored. A
+    // failed atomic commit frees its pending buffers and changes no DRM state.
+    m_DrmStateModified = initialApplySucceeded;
+
+    if (!initialApplySucceeded) {
+        std::lock_guard lock { m_OverlayLock };
+        if (m_OverlayCompositionSurface) {
+            munmap(m_OverlayCompositionSurface->pixels,
+                   (uintptr_t)m_OverlayCompositionSurface->userdata);
+            SDL_FreeSurface(m_OverlayCompositionSurface);
+            m_OverlayCompositionSurface = nullptr;
+        }
+    }
+
+    const bool setupSucceeded =
+        overlayOutputReady &&
+        overlayCompositionReady &&
+        initialApplySucceeded;
 
     // FFmpeg attaches the frontend renderer before prepareToRender(), so a
     // producer may already have published an update. Transition to ready while
@@ -430,10 +454,10 @@ void DrmRenderer::prepareToRender()
     std::vector<Overlay::OverlayType> deferredTypes;
     {
         std::lock_guard lock { m_OverlayLock };
-        if (!hasValidOutput || m_OverlayCompositor == nullptr) {
-            return;
-        }
-        deferredTypes = m_OverlayReadiness.activate();
+        deferredTypes = m_OverlayReadiness.activateIfReady(setupSucceeded);
+    }
+    if (!setupSucceeded) {
+        return;
     }
 
     bool replayed[Overlay::OverlayMax] = {};
@@ -459,14 +483,17 @@ void DrmRenderer::cleanupRenderContext()
         m_OverlayReadiness.deactivate();
 
         // If we have a composition surface, unmap it before disabling planes.
-        // The compositor retains its independent layers until this renderer is
-        // destroyed; a same-size reprepare can rebuild the composition surface.
         if (m_OverlayCompositionSurface) {
             munmap(m_OverlayCompositionSurface->pixels,
                    (uintptr_t)m_OverlayCompositionSurface->userdata);
             SDL_FreeSurface(m_OverlayCompositionSurface);
             m_OverlayCompositionSurface = nullptr;
         }
+
+        // Planes are restored below, so retained geometry and pixels cannot be
+        // reused without fully configuring those planes again on reprepare.
+        m_OverlayCompositor.reset();
+        SDL_zero(m_OverlayRects);
     }
 
     // We might be called without prepareToRender() if we fail during decoder testing
@@ -1464,6 +1491,7 @@ bool DrmRenderer::enterOverlayCompositionMode()
     struct drm_mode_create_dumb createBuf = {};
     uint32_t fbId = 0;
     void* mapping = nullptr;
+    bool flipped = false;
 
     createBuf.width = m_OutputRect.w;
     createBuf.height = m_OutputRect.h;
@@ -1513,24 +1541,34 @@ bool DrmRenderer::enterOverlayCompositionMode()
     // Turn off all existing overlay planes only after the replacement surface
     // has been allocated and fully populated.
     for (auto &overlay : m_OverlayPlanes) {
-        if (overlay.isValid()) {
-            m_PropSetter.disablePlane(overlay);
+        if (overlay.isValid() && !m_PropSetter.disablePlane(overlay)) {
+            goto Fail;
         }
     }
 
     // Configure the overlay plane to cover the entire display
-    m_PropSetter.configurePlane(m_OverlayPlanes[0], m_Crtc.objectId(),
-                                0, 0, m_OutputRect.w, m_OutputRect.h,
-                                0, 0,
-                                m_OutputRect.w << 16,
-                                m_OutputRect.h << 16);
+    if (!m_PropSetter.configurePlane(
+            m_OverlayPlanes[0], m_Crtc.objectId(),
+            0, 0, m_OutputRect.w, m_OutputRect.h,
+            0, 0,
+            m_OutputRect.w << 16,
+            m_OutputRect.h << 16)) {
+        goto Fail;
+    }
 
     // Flip the surface onto the overlay
     //
     // NB: This will take ownership of both the FB and the dumb buffer,
     // but it won't free them until we stop streaming since we don't
     // flip this plane anymore after this.
-    m_PropSetter.flipPlane(m_OverlayPlanes[0], fbId, createBuf.handle);
+    flipped = m_PropSetter.flipPlane(
+        m_OverlayPlanes[0], fbId, createBuf.handle);
+    // flipPlane() takes ownership on both success and failure.
+    fbId = 0;
+    createBuf.handle = 0;
+    if (!flipped) {
+        goto Fail;
+    }
     m_PropSetter.damagePlane(m_OverlayPlanes[0], damageRect);
     return true;
 
@@ -1546,9 +1584,11 @@ Fail:
         munmap(mapping, createBuf.size);
     }
 
-    struct drm_mode_destroy_dumb destroyBuf = {};
-    destroyBuf.handle = createBuf.handle;
-    drmIoctl(m_DrmFd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroyBuf);
+    if (createBuf.handle != 0) {
+        struct drm_mode_destroy_dumb destroyBuf = {};
+        destroyBuf.handle = createBuf.handle;
+        drmIoctl(m_DrmFd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroyBuf);
+    }
     return false;
 }
 

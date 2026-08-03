@@ -460,11 +460,15 @@ class DrmRenderer : public IFFmpegRenderer {
             return ret;
         }
 
-        void disablePlane(const DrmPropertyMap& plane) {
+        bool disablePlane(const DrmPropertyMap& plane) {
             if (plane.isValid()) {
-                configurePlane(plane, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-                flipPlane(plane, 0, 0);
+                const bool configured =
+                    configurePlane(plane, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                const bool flipped = flipPlane(plane, 0, 0);
+                return configured && flipped;
             }
+
+            return true;
         }
 
         void restorePlane(const DrmPropertyMap& plane) {

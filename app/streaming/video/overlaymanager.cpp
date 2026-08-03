@@ -556,7 +556,18 @@ bool OverlayRendererReadiness::deferIfNotReady(OverlayType type)
 
 std::vector<OverlayType> OverlayRendererReadiness::activate()
 {
+    return activateIfReady(true);
+}
+
+std::vector<OverlayType> OverlayRendererReadiness::activateIfReady(
+        bool setupSucceeded)
+{
     std::vector<OverlayType> deferred;
+    if (!setupSucceeded) {
+        m_Ready = false;
+        return deferred;
+    }
+
     deferred.reserve(OverlayMax);
     for (int type = OverlayDebug; type < OverlayMax; type++) {
         if (m_Deferred[type]) {

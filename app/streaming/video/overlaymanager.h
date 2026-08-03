@@ -116,9 +116,13 @@ public:
     // Calls must be serialized with renderer activation and deactivation.
     bool deferIfNotReady(OverlayType type);
 
-    // Marks the renderer ready and returns each type deferred since the last
-    // activation exactly once. Replay callbacks after releasing the caller's
-    // renderer lock.
+    // Marks the renderer ready only after its output setup succeeds and returns
+    // each type deferred since the last activation exactly once. A failed setup
+    // leaves the renderer unready and every deferred type intact. Replay
+    // callbacks after releasing the caller's renderer lock.
+    std::vector<OverlayType> activateIfReady(bool setupSucceeded);
+
+    // Unconditional activation retained for renderers without fallible setup.
     std::vector<OverlayType> activate();
     void deactivate();
 

@@ -73,12 +73,12 @@ public:
         }
     }
 
-    QVector<Overlay::OverlayType> activateAndReplay()
+    QVector<Overlay::OverlayType> activateAndReplay(bool setupSucceeded = true)
     {
         std::vector<Overlay::OverlayType> replayTypes;
         {
             std::lock_guard<std::mutex> lock(m_Mutex);
-            replayTypes = m_Readiness.activate();
+            replayTypes = m_Readiness.activateIfReady(setupSucceeded);
         }
 
         QVector<Overlay::OverlayType> replayed;
@@ -224,6 +224,8 @@ private slots:
     void placesAndConstrainsOverlays();
     void layoutStateRecomputesAfterResizeWithoutSurfaceUpdate();
     void defersOverlayConsumptionUntilRendererIsReady();
+    void failedSetupDoesNotConsumePendingOverlay_data();
+    void failedSetupDoesNotConsumePendingOverlay();
     void singleOverlayArbitratesStatusOverRetainedDeck();
     void deletesManagerOwnedSurfacesExactlyOnce();
     void permitsSurfaceDeleterToReenterPublication();
@@ -404,6 +406,51 @@ void OverlayLayoutTest::defersOverlayConsumptionUntilRendererIsReady()
     QCOMPARE(renderer.consumedMargins(), QVector<int>({2, 3, 5}));
     QCOMPARE(renderer.consumedSurfaces(), QVector<bool>({false, true, true}));
     QCOMPARE(renderer.activateAndReplay().size(), 0);
+}
+
+void OverlayLayoutTest::failedSetupDoesNotConsumePendingOverlay_data()
+{
+    QTest::addColumn<bool>("setupSucceeded");
+
+    QTest::newRow("mandatory-fallback-failure") << false;
+    QTest::newRow("initial-atomic-apply-failure") << false;
+}
+
+void OverlayLayoutTest::failedSetupDoesNotConsumePendingOverlay()
+{
+    QFETCH(bool, setupSucceeded);
+
+    Overlay::OverlayManager manager;
+    ReadinessGatedOverlayRenderer renderer(&manager);
+    manager.setOverlayRenderer(&renderer);
+
+    SDL_Surface* superseded = SDL_CreateRGBSurfaceWithFormat(
+        0, 16, 9, 32, SDL_PIXELFORMAT_ARGB8888);
+    SDL_Surface* latestPending = SDL_CreateRGBSurfaceWithFormat(
+        0, 32, 18, 32, SDL_PIXELFORMAT_ARGB8888);
+    QVERIFY(superseded != nullptr);
+    QVERIFY(latestPending != nullptr);
+
+    manager.updateOverlaySurface(
+        Overlay::OverlayDeck,
+        superseded,
+        {Overlay::OverlayAnchor::TopCenter, 6, 1.0f, 1.0f});
+    manager.updateOverlaySurface(
+        Overlay::OverlayDeck,
+        latestPending,
+        {Overlay::OverlayAnchor::TopCenter, 7, 1.0f, 1.0f});
+
+    QCOMPARE(renderer.activateAndReplay(setupSucceeded).size(), 0);
+    QCOMPARE(renderer.consumedTypes().size(), 0);
+
+    QCOMPARE(renderer.activateAndReplay(true),
+             QVector<Overlay::OverlayType>({Overlay::OverlayDeck}));
+    QCOMPARE(renderer.consumedTypes(),
+             QVector<Overlay::OverlayType>({Overlay::OverlayDeck}));
+    QCOMPARE(renderer.consumedMargins(), QVector<int>({7}));
+    QCOMPARE(renderer.consumedSurfaces(), QVector<bool>({true}));
+    QCOMPARE(renderer.activateAndReplay(true).size(), 0);
+    QCOMPARE(renderer.consumedTypes().size(), 1);
 }
 
 void OverlayLayoutTest::singleOverlayArbitratesStatusOverRetainedDeck()
