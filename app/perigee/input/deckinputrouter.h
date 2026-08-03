@@ -1,5 +1,6 @@
 #pragma once
 
+#include "deckbindings.h"
 #include "SDL_compat.h"
 
 #include <QHash>
@@ -14,6 +15,9 @@
 class DeckInputRouter final
 {
 public:
+    DeckInputRouter();
+    explicit DeckInputRouter(DeckBindings bindings);
+
     enum class Disposition {
         Passthrough,
         Consumed,
@@ -103,4 +107,5 @@ private:
     QPointF m_LastPointerPosition;
     bool m_HasPointerPosition = false;
     Qt::MouseButtons m_LocalMouseButtons = Qt::NoButton;
+    DeckBindings m_Bindings;
 };

@@ -16,6 +16,15 @@ public:
 
     Q_INVOKABLE void save();
 
+    Q_INVOKABLE bool setDeckKeyboardBindingFromQt(int keyModifiers,
+                                                   int qtKey);
+    Q_INVOKABLE bool setDeckControllerBinding(int controllerButtons);
+    Q_INVOKABLE void resetDeckBindings();
+    Q_INVOKABLE QString formatDeckKeyboardBinding(int keyModifiers,
+                                                   int keyScancode) const;
+    Q_INVOKABLE QString formatDeckControllerBinding(int controllerButtons) const;
+    Q_INVOKABLE QString deckControllerConflictReason(int controllerButtons) const;
+
     void reload();
 
     enum AudioConfig
@@ -156,7 +165,11 @@ public:
     Q_PROPERTY(bool swapFaceButtons MEMBER swapFaceButtons NOTIFY swapFaceButtonsChanged)
     Q_PROPERTY(bool keepAwake MEMBER keepAwake NOTIFY keepAwakeChanged)
     Q_PROPERTY(CaptureSysKeysMode captureSysKeysMode MEMBER captureSysKeysMode NOTIFY captureSysKeysModeChanged)
-    Q_PROPERTY(Language language MEMBER language NOTIFY languageChanged);
+    Q_PROPERTY(Language language MEMBER language NOTIFY languageChanged)
+    Q_PROPERTY(int deckKeyModifiers MEMBER deckKeyModifiers NOTIFY deckBindingsChanged)
+    Q_PROPERTY(int deckKeyScancode MEMBER deckKeyScancode NOTIFY deckBindingsChanged)
+    Q_PROPERTY(int deckControllerButtons MEMBER deckControllerButtons NOTIFY deckBindingsChanged)
+    Q_PROPERTY(bool legacyGamepadDisconnect MEMBER legacyGamepadDisconnect NOTIFY legacyGamepadDisconnectChanged)
 
     Q_INVOKABLE bool retranslate();
 
@@ -200,6 +213,10 @@ public:
     Language language;
     CaptureSysKeysMode captureSysKeysMode;
     RendererSelection rendererSelection;
+    int deckKeyModifiers;
+    int deckKeyScancode;
+    int deckControllerButtons;
+    bool legacyGamepadDisconnect;
 
 signals:
     void displayModeChanged();
@@ -238,6 +255,8 @@ signals:
     void keepAwakeChanged();
     void languageChanged();
     void rendererSelectionChanged();
+    void deckBindingsChanged();
+    void legacyGamepadDisconnectChanged();
 
 private:
     explicit StreamingPreferences(QQmlEngine *qmlEngine);
@@ -246,4 +265,3 @@ private:
 
     QQmlEngine* m_QmlEngine;
 };
-

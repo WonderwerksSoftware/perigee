@@ -1,4 +1,5 @@
 #include "streamingpreferences.h"
+#include "perigee/input/deckbindings.h"
 #include "utils.h"
 
 #include <QSettings>
@@ -105,6 +106,7 @@ StreamingPreferences* StreamingPreferences::get(QQmlEngine *qmlEngine)
 void StreamingPreferences::reload()
 {
     QSettings settings;
+    const DeckBindings deckBindings = DeckBindings::load(settings);
 
     int defaultVer = settings.value(SER_DEFAULTVER, 0).toInt();
 
@@ -171,6 +173,10 @@ void StreamingPreferences::reload()
                                                                                                                  : UIDisplayMode::UI_MAXIMIZED)).toInt());
     language = static_cast<Language>(settings.value(SER_LANGUAGE,
                                                     static_cast<int>(Language::LANG_AUTO)).toInt());
+    deckKeyModifiers = deckBindings.keyModifiers();
+    deckKeyScancode = deckBindings.keyScancode();
+    deckControllerButtons = int(deckBindings.controllerButtons());
+    legacyGamepadDisconnect = deckBindings.legacyGamepadDisconnect();
 
 
     // Perform default settings updates as required based on last default version
@@ -322,6 +328,10 @@ QString StreamingPreferences::getSuffixFromLanguage(StreamingPreferences::Langua
 void StreamingPreferences::save()
 {
     QSettings settings;
+    const DeckBindings deckBindings(deckKeyModifiers,
+                                    deckKeyScancode,
+                                    quint32(deckControllerButtons),
+                                    legacyGamepadDisconnect);
 
     settings.setValue(SER_WIDTH, width);
     settings.setValue(SER_HEIGHT, height);
@@ -362,6 +372,84 @@ void StreamingPreferences::save()
     settings.setValue(SER_SWAPFACEBUTTONS, swapFaceButtons);
     settings.setValue(SER_CAPTURESYSKEYS, captureSysKeysMode);
     settings.setValue(SER_KEEPAWAKE, keepAwake);
+    deckBindings.save(settings);
+}
+
+bool StreamingPreferences::setDeckKeyboardBindingFromQt(int keyModifiers,
+                                                         int qtKey)
+{
+    const int scancode = DeckBindings::sdlScancodeForQtKey(qtKey);
+    DeckBindings bindings(deckKeyModifiers,
+                          deckKeyScancode,
+                          quint32(deckControllerButtons),
+                          legacyGamepadDisconnect);
+    if (!bindings.setKeyboardBinding(keyModifiers, scancode)) {
+        return false;
+    }
+    if (deckKeyModifiers == bindings.keyModifiers() &&
+            deckKeyScancode == bindings.keyScancode()) {
+        return true;
+    }
+    deckKeyModifiers = bindings.keyModifiers();
+    deckKeyScancode = bindings.keyScancode();
+    emit deckBindingsChanged();
+    return true;
+}
+
+bool StreamingPreferences::setDeckControllerBinding(int controllerButtons)
+{
+    DeckBindings bindings(deckKeyModifiers,
+                          deckKeyScancode,
+                          quint32(deckControllerButtons),
+                          legacyGamepadDisconnect);
+    if (!bindings.setControllerBinding(quint32(controllerButtons))) {
+        return false;
+    }
+    if (deckControllerButtons == int(bindings.controllerButtons())) {
+        return true;
+    }
+    deckControllerButtons = int(bindings.controllerButtons());
+    emit deckBindingsChanged();
+    return true;
+}
+
+void StreamingPreferences::resetDeckBindings()
+{
+    DeckBindings defaults;
+    const bool bindingsChanged =
+        deckKeyModifiers != defaults.keyModifiers() ||
+        deckKeyScancode != defaults.keyScancode() ||
+        deckControllerButtons != int(defaults.controllerButtons());
+    const bool legacyChanged =
+        legacyGamepadDisconnect != defaults.legacyGamepadDisconnect();
+    deckKeyModifiers = defaults.keyModifiers();
+    deckKeyScancode = defaults.keyScancode();
+    deckControllerButtons = int(defaults.controllerButtons());
+    legacyGamepadDisconnect = defaults.legacyGamepadDisconnect();
+    if (bindingsChanged) {
+        emit deckBindingsChanged();
+    }
+    if (legacyChanged) {
+        emit legacyGamepadDisconnectChanged();
+    }
+}
+
+QString StreamingPreferences::formatDeckKeyboardBinding(
+        int keyModifiers, int keyScancode) const
+{
+    return DeckBindings::formatKeyboardBinding(keyModifiers, keyScancode);
+}
+
+QString StreamingPreferences::formatDeckControllerBinding(
+        int controllerButtons) const
+{
+    return DeckBindings::formatControllerBinding(quint32(controllerButtons));
+}
+
+QString StreamingPreferences::deckControllerConflictReason(
+        int controllerButtons) const
+{
+    return DeckBindings::controllerConflictReason(quint32(controllerButtons));
 }
 
 int StreamingPreferences::getDefaultBitrate(int width, int height, int fps, bool yuv444)

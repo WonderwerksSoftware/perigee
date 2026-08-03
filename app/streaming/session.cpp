@@ -626,7 +626,11 @@ bool Session::initialize(QQuickWindow* qtWindow)
         else {
             m_DeckController = std::move(deckController);
             m_DeckSurfaceRenderer = std::move(deckRenderer);
-            m_DeckInputRouter = std::make_unique<DeckInputRouter>();
+            m_DeckInputRouter = std::make_unique<DeckInputRouter>(
+                DeckBindings(m_Preferences->deckKeyModifiers,
+                             m_Preferences->deckKeyScancode,
+                             quint32(m_Preferences->deckControllerButtons),
+                             m_Preferences->legacyGamepadDisconnect));
         }
     }
 #endif

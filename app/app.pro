@@ -209,6 +209,7 @@ SOURCES += \
     perigee/deck/deckcontroller.cpp \
     perigee/deck/deckuipump.cpp \
     perigee/deck/decksurfacerenderer.cpp \
+    perigee/input/deckbindings.cpp \
     perigee/input/deckinputrouter.cpp \
     perigee/input/deckinputdelivery.cpp \
     path.cpp \
@@ -258,6 +259,7 @@ HEADERS += \
     perigee/deck/deckcontroller.h \
     perigee/deck/deckuipump.h \
     perigee/deck/decksurfacerenderer.h \
+    perigee/input/deckbindings.h \
     perigee/input/deckinputrouter.h \
     perigee/input/deckinputdelivery.h \
     path.h \

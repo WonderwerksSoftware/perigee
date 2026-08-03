@@ -3,6 +3,8 @@ import QtQuick.Controls 2.2
 import QtQuick.Layouts 1.2
 import QtQuick.Window 2.2
 
+import "perigee" as Perigee
+
 import StreamingPreferences 1.0
 import ComputerManager 1.0
 import SdlGamepadKeyNavigation 1.0
@@ -1538,6 +1540,13 @@ Flickable {
                     ToolTip.text: qsTr("Allows Moonlight to capture gamepad inputs even if it's not the current window in focus")
                 }
             }
+        }
+
+        Perigee.DeckBindingSettings {
+            width: (parent.width - (parent.leftPadding + parent.rightPadding))
+            padding: 12
+            preferences: StreamingPreferences
+            gamepadNavigation: SdlGamepadKeyNavigation
         }
 
         GroupBox {

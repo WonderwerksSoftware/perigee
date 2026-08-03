@@ -5,6 +5,7 @@
 
 #include "SDL_compat.h"
 
+#include "perigee/input/deckbindings.h"
 #include "settings/streamingpreferences.h"
 
 class SdlGamepadKeyNavigation : public QObject
@@ -26,8 +27,18 @@ public:
 
     Q_INVOKABLE int getConnectedGamepads();
 
+    Q_INVOKABLE void beginControllerBindingCapture();
+
+    Q_INVOKABLE void cancelControllerBindingCapture();
+
+signals:
+    void controllerBindingCaptured(int buttons);
+    void controllerBindingCaptureCancelled();
+
 private:
     void sendKey(QEvent::Type type, Qt::Key key, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
+    void handleControllerBindingButton(SDL_JoystickID controller,
+                                       Uint8 button, bool pressed);
 
     void updateTimerState();
 
@@ -43,4 +54,6 @@ private:
     bool m_FirstPoll;
     bool m_HasFocus;
     Uint32 m_LastAxisNavigationEventTime;
+    DeckControllerChordCapture m_DeckBindingCapture;
+    SDL_JoystickID m_DeckBindingCaptureController = -1;
 };

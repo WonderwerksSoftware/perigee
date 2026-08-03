@@ -31,6 +31,60 @@ void StreamingPreferences::save()
 {
 }
 
+bool StreamingPreferences::setDeckKeyboardBindingFromQt(int keyModifiers,
+                                                         int qtKey)
+{
+    DeckBindings bindings(deckKeyModifiers, deckKeyScancode,
+                          quint32(deckControllerButtons),
+                          legacyGamepadDisconnect);
+    if (!bindings.setKeyboardBinding(
+            keyModifiers, DeckBindings::sdlScancodeForQtKey(qtKey))) {
+        return false;
+    }
+    deckKeyModifiers = bindings.keyModifiers();
+    deckKeyScancode = bindings.keyScancode();
+    return true;
+}
+
+bool StreamingPreferences::setDeckControllerBinding(int controllerButtons)
+{
+    DeckBindings bindings(deckKeyModifiers, deckKeyScancode,
+                          quint32(deckControllerButtons),
+                          legacyGamepadDisconnect);
+    if (!bindings.setControllerBinding(quint32(controllerButtons))) {
+        return false;
+    }
+    deckControllerButtons = int(bindings.controllerButtons());
+    return true;
+}
+
+void StreamingPreferences::resetDeckBindings()
+{
+    DeckBindings defaults;
+    deckKeyModifiers = defaults.keyModifiers();
+    deckKeyScancode = defaults.keyScancode();
+    deckControllerButtons = int(defaults.controllerButtons());
+    legacyGamepadDisconnect = defaults.legacyGamepadDisconnect();
+}
+
+QString StreamingPreferences::formatDeckKeyboardBinding(
+        int keyModifiers, int keyScancode) const
+{
+    return DeckBindings::formatKeyboardBinding(keyModifiers, keyScancode);
+}
+
+QString StreamingPreferences::formatDeckControllerBinding(
+        int controllerButtons) const
+{
+    return DeckBindings::formatControllerBinding(quint32(controllerButtons));
+}
+
+QString StreamingPreferences::deckControllerConflictReason(
+        int controllerButtons) const
+{
+    return DeckBindings::controllerConflictReason(quint32(controllerButtons));
+}
+
 bool StreamingPreferences::retranslate()
 {
     return false;
@@ -49,6 +103,11 @@ void initializePreferences(StreamingPreferences& preferences)
     preferences.absoluteMouseMode = false;
     preferences.absoluteTouchMode = false;
     preferences.captureSysKeysMode = StreamingPreferences::CSK_OFF;
+    const DeckBindings defaults;
+    preferences.deckKeyModifiers = defaults.keyModifiers();
+    preferences.deckKeyScancode = defaults.keyScancode();
+    preferences.deckControllerButtons = int(defaults.controllerButtons());
+    preferences.legacyGamepadDisconnect = false;
 }
 
 SDL_UserEvent inputTimerEvent(uint32_t token)

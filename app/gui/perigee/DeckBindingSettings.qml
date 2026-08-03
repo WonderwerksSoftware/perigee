@@ -1,0 +1,206 @@
+import QtQuick 2.9
+import QtQuick.Controls 2.2
+import QtQuick.Layouts 1.2
+
+GroupBox {
+    id: root
+    objectName: "perigeeDeckSettings"
+    title: "<font color=\"skyblue\">" + qsTr("Perigee Deck") + "</font>"
+    font.pointSize: 12
+
+    property var preferences
+    property var gamepadNavigation
+    property string captureMode: ""
+    property string conflictMessage: ""
+
+    function isModifierKey(key) {
+        return key === Qt.Key_Shift || key === Qt.Key_Control ||
+               key === Qt.Key_Alt || key === Qt.Key_Meta
+    }
+
+    function beginKeyboardCapture() {
+        cancelCapture()
+        captureMode = "keyboard"
+        conflictMessage = ""
+        forceActiveFocus(Qt.ShortcutFocusReason)
+    }
+
+    function beginControllerCapture() {
+        cancelCapture()
+        captureMode = "controller"
+        conflictMessage = ""
+        if (gamepadNavigation) {
+            gamepadNavigation.beginControllerBindingCapture()
+        }
+    }
+
+    function cancelCapture() {
+        if (gamepadNavigation) {
+            gamepadNavigation.cancelControllerBindingCapture()
+        }
+        captureMode = ""
+        conflictMessage = ""
+    }
+
+    function applyControllerCapture(buttons) {
+        if (captureMode !== "controller" || !preferences) {
+            return
+        }
+        var reason = preferences.deckControllerConflictReason(buttons)
+        if (reason.length !== 0 || !preferences.setDeckControllerBinding(buttons)) {
+            conflictMessage = reason.length !== 0 ? reason :
+                qsTr("Choose at least two supported controller buttons.")
+            if (gamepadNavigation) {
+                gamepadNavigation.beginControllerBindingCapture()
+            }
+            return
+        }
+        captureMode = ""
+        conflictMessage = ""
+        controllerCaptureButton.forceActiveFocus(Qt.TabFocusReason)
+    }
+
+    Keys.onPressed: function(event) {
+        if (captureMode.length === 0) {
+            return
+        }
+        event.accepted = true
+        if (event.key === Qt.Key_Escape) {
+            cancelCapture()
+            return
+        }
+        if (captureMode !== "keyboard" || event.isAutoRepeat ||
+                isModifierKey(event.key)) {
+            return
+        }
+        if (!preferences ||
+                !preferences.setDeckKeyboardBindingFromQt(event.modifiers,
+                                                           event.key)) {
+            conflictMessage = qsTr("Hold one or more modifiers, then press a supported key.")
+            return
+        }
+        captureMode = ""
+        conflictMessage = ""
+        keyboardCaptureButton.forceActiveFocus(Qt.TabFocusReason)
+    }
+
+    Connections {
+        target: root.gamepadNavigation
+
+        function onControllerBindingCaptured(buttons) {
+            root.applyControllerCapture(buttons)
+        }
+
+        function onControllerBindingCaptureCancelled() {
+            root.cancelCapture()
+        }
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        spacing: 5
+
+        Label {
+            Layout.fillWidth: true
+            text: qsTr("Open the in-stream menu with one keyboard shortcut or controller chord.")
+            wrapMode: Text.Wrap
+            font.pointSize: 9
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Keyboard: %1").arg(root.preferences ?
+                    root.preferences.formatDeckKeyboardBinding(
+                        root.preferences.deckKeyModifiers,
+                        root.preferences.deckKeyScancode) : "")
+                wrapMode: Text.Wrap
+            }
+
+            Button {
+                id: keyboardCaptureButton
+                objectName: "deckKeyboardCaptureButton"
+                activeFocusOnTab: true
+                text: root.captureMode === "keyboard" ?
+                    qsTr("Press shortcut...") : qsTr("Capture")
+                onClicked: root.beginKeyboardCapture()
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Controller: %1").arg(root.preferences ?
+                    root.preferences.formatDeckControllerBinding(
+                        root.preferences.deckControllerButtons) : "")
+                wrapMode: Text.Wrap
+            }
+
+            Button {
+                id: controllerCaptureButton
+                objectName: "deckControllerCaptureButton"
+                activeFocusOnTab: true
+                text: root.captureMode === "controller" ?
+                    qsTr("Press chord (B cancels)...") : qsTr("Capture")
+                onClicked: root.beginControllerCapture()
+            }
+        }
+
+        Label {
+            id: conflictLabel
+            objectName: "deckBindingConflict"
+            Layout.fillWidth: true
+            visible: root.conflictMessage.length !== 0
+            text: root.conflictMessage
+            color: "#ffb4a8"
+            wrapMode: Text.Wrap
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+
+            Button {
+                objectName: "deckCaptureCancelButton"
+                activeFocusOnTab: true
+                visible: root.captureMode.length !== 0
+                text: qsTr("Cancel capture")
+                onClicked: root.cancelCapture()
+            }
+
+            Button {
+                objectName: "deckBindingsResetButton"
+                activeFocusOnTab: true
+                text: qsTr("Reset to defaults")
+                onClicked: {
+                    root.cancelCapture()
+                    if (root.preferences) {
+                        root.preferences.resetDeckBindings()
+                    }
+                }
+            }
+        }
+
+        CheckBox {
+            objectName: "legacyDisconnectCheck"
+            Layout.fillWidth: true
+            activeFocusOnTab: true
+            text: qsTr("Legacy direct disconnect")
+            checked: root.preferences ?
+                root.preferences.legacyGamepadDisconnect : false
+            onToggled: {
+                if (root.preferences) {
+                    root.preferences.legacyGamepadDisconnect = checked
+                }
+            }
+
+            ToolTip.delay: 1000
+            ToolTip.timeout: 10000
+            ToolTip.visible: hovered
+            ToolTip.text: qsTr("Use LB+RB+Back+Start to disconnect immediately. The keyboard shortcut still opens Perigee Deck.")
+        }
+    }
+}

@@ -11,14 +11,6 @@ quint32 buttonBit(Uint8 button)
     return button < 32 ? quint32(1) << button : 0;
 }
 
-quint32 chordMask(SDL_GameControllerButton finalButton)
-{
-    return buttonBit(SDL_CONTROLLER_BUTTON_LEFTSHOULDER) |
-        buttonBit(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) |
-        buttonBit(SDL_CONTROLLER_BUTTON_BACK) |
-        buttonBit(finalButton);
-}
-
 bool containsAny(const QSet<SDL_Scancode>& keys,
                  SDL_Scancode left, SDL_Scancode right)
 {
@@ -32,6 +24,13 @@ DeckInputRouter::Result consumedResult()
     return result;
 }
 
+}
+
+DeckInputRouter::DeckInputRouter() = default;
+
+DeckInputRouter::DeckInputRouter(DeckBindings bindings)
+    : m_Bindings(std::move(bindings))
+{
 }
 
 DeckInputRouter::Result DeckInputRouter::route(const SDL_Event& event)
@@ -120,7 +119,8 @@ DeckInputRouter::Result DeckInputRouter::routeKey(const SDL_KeyboardEvent& event
     const SDL_Scancode scanCode = event.keysym.scancode;
     if (!pressed && m_KeyReleaseTail.remove(scanCode)) {
         m_KeysDown.remove(scanCode);
-        if (scanCode == SDL_SCANCODE_SPACE || m_KeyReleaseTail.isEmpty()) {
+        if (scanCode == SDL_Scancode(m_Bindings.keyScancode()) ||
+                m_KeyReleaseTail.isEmpty()) {
             m_KeyboardChordTriggered = false;
         }
         return consumedResult();
@@ -220,7 +220,7 @@ DeckInputRouter::Result DeckInputRouter::routeControllerButton(
     }
 
     if (pressed && !wasDown && !m_ChordTriggered.contains(event.which)) {
-        if (m_Open && down == chordMask(SDL_CONTROLLER_BUTTON_X)) {
+        if (m_Open && down == DeckBindings::statsControllerButtons()) {
             m_ChordTriggered.insert(event.which);
             m_ButtonReleaseTail[event.which] |= down;
             Result result;
@@ -229,7 +229,8 @@ DeckInputRouter::Result DeckInputRouter::routeControllerButton(
             result.controllerId = event.which;
             return result;
         }
-        if (down == chordMask(SDL_CONTROLLER_BUTTON_START) &&
+        if (!m_Bindings.legacyGamepadDisconnect() &&
+                down == m_Bindings.controllerButtons() &&
                 (!m_Open || m_ControllerOwner < 0 ||
                  m_ControllerOwner == event.which)) {
             m_ChordTriggered.insert(event.which);
@@ -414,16 +415,22 @@ DeckInputRouter::Result DeckInputRouter::routeMouseWheel(
 
 bool DeckInputRouter::keyboardChordHeld(const SDL_KeyboardEvent& event) const
 {
-    const SDL_Keymod modifiers = SDL_Keymod(event.keysym.mod);
-    const bool modifiersReported =
-        (modifiers & KMOD_CTRL) && (modifiers & KMOD_ALT) &&
-        (modifiers & KMOD_SHIFT);
-    const bool modifiersTracked =
-        containsAny(m_KeysDown, SDL_SCANCODE_LCTRL, SDL_SCANCODE_RCTRL) &&
-        containsAny(m_KeysDown, SDL_SCANCODE_LALT, SDL_SCANCODE_RALT) &&
-        containsAny(m_KeysDown, SDL_SCANCODE_LSHIFT, SDL_SCANCODE_RSHIFT);
-    return m_KeysDown.contains(SDL_SCANCODE_SPACE) &&
-        (modifiersReported || modifiersTracked);
+    int modifiers = int(qtModifiers(SDL_Keymod(event.keysym.mod)));
+    if (containsAny(m_KeysDown, SDL_SCANCODE_LCTRL, SDL_SCANCODE_RCTRL)) {
+        modifiers |= Qt::ControlModifier;
+    }
+    if (containsAny(m_KeysDown, SDL_SCANCODE_LALT, SDL_SCANCODE_RALT)) {
+        modifiers |= Qt::AltModifier;
+    }
+    if (containsAny(m_KeysDown, SDL_SCANCODE_LSHIFT, SDL_SCANCODE_RSHIFT)) {
+        modifiers |= Qt::ShiftModifier;
+    }
+    if (containsAny(m_KeysDown, SDL_SCANCODE_LGUI, SDL_SCANCODE_RGUI)) {
+        modifiers |= Qt::MetaModifier;
+    }
+    const int requiredModifiers = m_Bindings.keyModifiers();
+    return m_KeysDown.contains(SDL_Scancode(m_Bindings.keyScancode())) &&
+        (modifiers & requiredModifiers) == requiredModifiers;
 }
 
 quint32 DeckInputRouter::controllerMask(SDL_JoystickID controller) const

@@ -16,6 +16,7 @@ SOURCES += \
     ../app/perigee/deck/deckcontroller.cpp \
     ../app/perigee/deck/deckuipump.cpp \
     ../app/perigee/deck/decksurfacerenderer.cpp \
+    ../app/perigee/input/deckbindings.cpp \
     ../app/perigee/input/deckinputrouter.cpp \
     ../app/perigee/input/deckinputdelivery.cpp \
     ../app/streaming/input/abstouch.cpp \
@@ -25,6 +26,7 @@ SOURCES += \
     ../app/streaming/input/mouse.cpp \
     ../app/streaming/input/reltouch.cpp \
     ../app/streaming/input/remoteinputstate.cpp \
+    ../app/gui/sdlgamepadkeynavigation.cpp \
     ../app/path.cpp \
     ../app/streaming/video/overlaymanager.cpp \
     test_main.cpp \
@@ -33,10 +35,13 @@ SOURCES += \
     test_deckuipump.cpp \
     test_deckqml.cpp \
     test_decksurfacerenderer.cpp \
+    test_deckbindings.cpp \
+    test_deckbindingsqml.cpp \
     test_deckinputrouter.cpp \
     test_deckinputdelivery.cpp \
     test_inputneutralization.cpp \
     test_inputintegration.cpp \
+    test_sdlgamepadkeynavigation.cpp \
     input_integration_stubs.cpp \
     test_overlaylayout.cpp \
     test_smoke.cpp
@@ -57,10 +62,12 @@ HEADERS += \
     ../app/perigee/deck/deckcontroller.h \
     ../app/perigee/deck/deckuipump.h \
     ../app/perigee/deck/decksurfacerenderer.h \
+    ../app/perigee/input/deckbindings.h \
     ../app/perigee/input/deckinputrouter.h \
     ../app/perigee/input/deckinputdelivery.h \
     ../app/streaming/input/remoteinputstate.h \
     ../app/settings/streamingpreferences.h \
+    ../app/gui/sdlgamepadkeynavigation.h \
     input_integration_stubs.h \
     ../app/path.h \
     ../app/streaming/video/overlaymanager.h \

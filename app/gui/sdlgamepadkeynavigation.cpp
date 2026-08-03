@@ -126,6 +126,14 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
         case SDL_CONTROLLERBUTTONDOWN:
         case SDL_CONTROLLERBUTTONUP:
         {
+            if (m_DeckBindingCapture.isActive()) {
+                handleControllerBindingButton(
+                    event.cbutton.which,
+                    event.cbutton.button,
+                    event.type == SDL_CONTROLLERBUTTONDOWN);
+                break;
+            }
+
             QEvent::Type type =
                     event.type == SDL_CONTROLLERBUTTONDOWN ?
                         QEvent::Type::KeyPress : QEvent::Type::KeyRelease;
@@ -289,6 +297,9 @@ void SdlGamepadKeyNavigation::updateTimerState()
 void SdlGamepadKeyNavigation::setUiNavMode(bool uiNavMode)
 {
     m_UiNavMode = uiNavMode;
+    if (!uiNavMode) {
+        cancelControllerBindingCapture();
+    }
 }
 
 int SdlGamepadKeyNavigation::getConnectedGamepads()
@@ -304,4 +315,45 @@ int SdlGamepadKeyNavigation::getConnectedGamepads()
     }
 
     return count;
+}
+
+void SdlGamepadKeyNavigation::beginControllerBindingCapture()
+{
+    m_DeckBindingCapture.begin();
+    m_DeckBindingCaptureController = -1;
+}
+
+void SdlGamepadKeyNavigation::cancelControllerBindingCapture()
+{
+    m_DeckBindingCapture.cancel();
+    m_DeckBindingCaptureController = -1;
+}
+
+void SdlGamepadKeyNavigation::handleControllerBindingButton(
+        SDL_JoystickID controller, Uint8 button, bool pressed)
+{
+    if (!m_DeckBindingCapture.isActive()) {
+        return;
+    }
+    if (m_DeckBindingCaptureController < 0 && pressed) {
+        m_DeckBindingCaptureController = controller;
+    }
+    if (controller != m_DeckBindingCaptureController) {
+        return;
+    }
+
+    const std::optional<quint32> completed =
+        m_DeckBindingCapture.handleButton(button, pressed);
+    if (!completed.has_value()) {
+        return;
+    }
+
+    m_DeckBindingCaptureController = -1;
+    const quint32 controllerBack = quint32(1) << SDL_CONTROLLER_BUTTON_B;
+    if (*completed == controllerBack) {
+        emit controllerBindingCaptureCancelled();
+    }
+    else {
+        emit controllerBindingCaptured(int(*completed));
+    }
 }

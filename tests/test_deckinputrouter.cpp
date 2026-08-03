@@ -1,5 +1,6 @@
 #include "test_registry.h"
 
+#include "perigee/input/deckbindings.h"
 #include "perigee/input/deckinputrouter.h"
 
 #include <QtTest>
@@ -118,6 +119,8 @@ private slots:
     void textInsertionComesOnlyFromSdlTextInput();
     void ownerRemovalAllowsSafeRecovery();
     void repeatedOpenCloseReturnsToCleanPassthrough();
+    void configuredPhysicalChordsReplaceTheDefaults();
+    void legacyModePassesOriginalControllerDisconnectThrough();
 };
 
 void DeckInputRouterTest::closedInputPassesThroughAndKeyboardShortcutOwnsReleaseTail()
@@ -418,6 +421,78 @@ void DeckInputRouterTest::repeatedOpenCloseReturnsToCleanPassthrough()
                  DeckInputRouter::Disposition::Passthrough);
         router.route(keyEvent(SDL_KEYUP, SDL_SCANCODE_Z, SDLK_z));
     }
+}
+
+void DeckInputRouterTest::configuredPhysicalChordsReplaceTheDefaults()
+{
+    const quint32 controllerChord =
+        (quint32(1) << SDL_CONTROLLER_BUTTON_LEFTSHOULDER) |
+        (quint32(1) << SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) |
+        (quint32(1) << SDL_CONTROLLER_BUTTON_BACK) |
+        (quint32(1) << SDL_CONTROLLER_BUTTON_Y);
+    DeckInputRouter router(DeckBindings(
+        int(Qt::ControlModifier | Qt::AltModifier),
+        SDL_SCANCODE_F8,
+        controllerChord,
+        false));
+
+    router.route(keyEvent(SDL_KEYDOWN, SDL_SCANCODE_LCTRL, SDLK_LCTRL,
+                          KMOD_CTRL));
+    router.route(keyEvent(SDL_KEYDOWN, SDL_SCANCODE_LALT, SDLK_LALT,
+                          SDL_Keymod(KMOD_CTRL | KMOD_ALT)));
+    const auto oldDefault = router.route(keyEvent(
+        SDL_KEYDOWN, SDL_SCANCODE_SPACE, SDLK_SPACE,
+        SDL_Keymod(KMOD_CTRL | KMOD_ALT | KMOD_SHIFT)));
+    QCOMPARE(oldDefault.disposition, DeckInputRouter::Disposition::Passthrough);
+    QVERIFY(!router.isDeckOpen());
+    router.route(keyEvent(SDL_KEYUP, SDL_SCANCODE_SPACE, SDLK_SPACE));
+
+    const auto keyboardOpen = router.route(keyEvent(
+        SDL_KEYDOWN, SDL_SCANCODE_F8, SDLK_F8,
+        SDL_Keymod(KMOD_CTRL | KMOD_ALT)));
+    QCOMPARE(keyboardOpen.action, DeckInputRouter::Action::OpenFromKeyboard);
+    QVERIFY(router.isDeckOpen());
+    router.closeDeck();
+    router.route(keyEvent(SDL_KEYUP, SDL_SCANCODE_F8, SDLK_F8));
+    router.route(keyEvent(SDL_KEYUP, SDL_SCANCODE_LALT, SDLK_LALT));
+    router.route(keyEvent(SDL_KEYUP, SDL_SCANCODE_LCTRL, SDLK_LCTRL));
+
+    const auto controllerOpen = routeChord(
+        router, 84, SDL_CONTROLLER_BUTTON_Y);
+    QCOMPARE(controllerOpen.action,
+             DeckInputRouter::Action::OpenFromController);
+    QCOMPARE(router.controllerOwner(), SDL_JoystickID(84));
+}
+
+void DeckInputRouterTest::legacyModePassesOriginalControllerDisconnectThrough()
+{
+    DeckInputRouter router(DeckBindings(
+        int(Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier),
+        SDL_SCANCODE_SPACE,
+        (quint32(1) << SDL_CONTROLLER_BUTTON_LEFTSHOULDER) |
+            (quint32(1) << SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) |
+            (quint32(1) << SDL_CONTROLLER_BUTTON_BACK) |
+            (quint32(1) << SDL_CONTROLLER_BUTTON_START),
+        true));
+
+    const auto legacyChord = routeChord(
+        router, 91, SDL_CONTROLLER_BUTTON_START);
+    QCOMPARE(legacyChord.disposition,
+             DeckInputRouter::Disposition::Passthrough);
+    QCOMPARE(legacyChord.action, DeckInputRouter::Action::None);
+    QVERIFY(!router.isDeckOpen());
+
+    router.route(keyEvent(SDL_KEYDOWN, SDL_SCANCODE_LCTRL, SDLK_LCTRL,
+                          KMOD_CTRL));
+    router.route(keyEvent(SDL_KEYDOWN, SDL_SCANCODE_LALT, SDLK_LALT,
+                          SDL_Keymod(KMOD_CTRL | KMOD_ALT)));
+    router.route(keyEvent(SDL_KEYDOWN, SDL_SCANCODE_LSHIFT, SDLK_LSHIFT,
+                          SDL_Keymod(KMOD_CTRL | KMOD_ALT | KMOD_SHIFT)));
+    const auto keyboardOpen = router.route(keyEvent(
+        SDL_KEYDOWN, SDL_SCANCODE_SPACE, SDLK_SPACE,
+        SDL_Keymod(KMOD_CTRL | KMOD_ALT | KMOD_SHIFT)));
+    QCOMPARE(keyboardOpen.action, DeckInputRouter::Action::OpenFromKeyboard);
+    QVERIFY(router.isDeckOpen());
 }
 
 REGISTER_PERIGEE_TEST(DeckInputRouterTest);
