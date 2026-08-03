@@ -1,6 +1,10 @@
 QT += core quick network quickcontrols2 svg
 CONFIG += c++17
 
+!versionAtLeast(QT_VERSION, 6.7.0) {
+    error("Perigee requires Qt 6.7 or newer")
+}
+
 unix:!macx {
     TARGET = moonlight
 } else {
