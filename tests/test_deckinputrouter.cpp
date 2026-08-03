@@ -110,6 +110,8 @@ class DeckInputRouterTest : public QObject
 private slots:
     void closedInputPassesThroughAndKeyboardShortcutOwnsReleaseTail();
     void controllerOwnerNavigatesAndOtherControllersAreSuppressed();
+    void nonOwnerCannotTriggerStatsWhileControllerOwnsDeck();
+    void nonOwnerCannotTriggerLegacyDisconnectWhileControllerOwnsDeck();
     void controllerNavigationHonorsFaceButtonSwap();
     void stickNavigationUsesPressAndReleaseDeadzones();
     void mouseMapsViewportAndRejectsOrClampsOutOfBoundsInput();
@@ -243,6 +245,84 @@ void DeckInputRouterTest::controllerOwnerNavigatesAndOtherControllersAreSuppress
     QCOMPARE(nonOwner.action, DeckInputRouter::Action::None);
     QCOMPARE(router.route(axisEvent(73, SDL_CONTROLLER_AXIS_LEFTX, 30000)).disposition,
              DeckInputRouter::Disposition::Consumed);
+}
+
+void DeckInputRouterTest::nonOwnerCannotTriggerStatsWhileControllerOwnsDeck()
+{
+    DeckInputRouter router;
+    QCOMPARE(routeChord(router, 41, SDL_CONTROLLER_BUTTON_START).action,
+             DeckInputRouter::Action::OpenFromController);
+    for (SDL_GameControllerButton button : {
+             SDL_CONTROLLER_BUTTON_START,
+             SDL_CONTROLLER_BUTTON_BACK,
+             SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+             SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+         }) {
+        QCOMPARE(router.route(buttonEvent(
+                     SDL_CONTROLLERBUTTONUP, 41, button)).disposition,
+                 DeckInputRouter::Disposition::Consumed);
+    }
+
+    const auto nonOwnerStats =
+        routeChord(router, 73, SDL_CONTROLLER_BUTTON_X);
+    QCOMPARE(nonOwnerStats.disposition,
+             DeckInputRouter::Disposition::Consumed);
+    QCOMPARE(nonOwnerStats.action, DeckInputRouter::Action::None);
+    QVERIFY(router.isDeckOpen());
+    for (SDL_GameControllerButton button : {
+             SDL_CONTROLLER_BUTTON_X,
+             SDL_CONTROLLER_BUTTON_BACK,
+             SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+             SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+         }) {
+        QCOMPARE(router.route(buttonEvent(
+                     SDL_CONTROLLERBUTTONUP, 73, button)).disposition,
+                 DeckInputRouter::Disposition::Consumed);
+    }
+
+    QCOMPARE(routeChord(router, 41, SDL_CONTROLLER_BUTTON_X).action,
+             DeckInputRouter::Action::ToggleStats);
+}
+
+void DeckInputRouterTest::nonOwnerCannotTriggerLegacyDisconnectWhileControllerOwnsDeck()
+{
+    const quint32 customChord =
+        (quint32(1) << SDL_CONTROLLER_BUTTON_A) |
+        (quint32(1) << SDL_CONTROLLER_BUTTON_B);
+    DeckInputRouter router(DeckBindings(
+        int(Qt::ControlModifier), SDL_SCANCODE_F8,
+        customChord, true));
+    router.openForKeyboard();
+
+    QCOMPARE(router.route(buttonEvent(
+                 SDL_CONTROLLERBUTTONDOWN, 41,
+                 SDL_CONTROLLER_BUTTON_A)).action,
+             DeckInputRouter::Action::Activate);
+    QCOMPARE(router.controllerOwner(), SDL_JoystickID(41));
+    QCOMPARE(router.route(buttonEvent(
+                 SDL_CONTROLLERBUTTONUP, 41,
+                 SDL_CONTROLLER_BUTTON_A)).disposition,
+             DeckInputRouter::Disposition::Consumed);
+
+    const auto nonOwnerDisconnect =
+        routeChord(router, 73, SDL_CONTROLLER_BUTTON_START);
+    QCOMPARE(nonOwnerDisconnect.disposition,
+             DeckInputRouter::Disposition::Consumed);
+    QCOMPARE(nonOwnerDisconnect.action, DeckInputRouter::Action::None);
+    QVERIFY(router.isDeckOpen());
+    for (SDL_GameControllerButton button : {
+             SDL_CONTROLLER_BUTTON_START,
+             SDL_CONTROLLER_BUTTON_BACK,
+             SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+             SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+         }) {
+        QCOMPARE(router.route(buttonEvent(
+                     SDL_CONTROLLERBUTTONUP, 73, button)).disposition,
+                 DeckInputRouter::Disposition::Consumed);
+    }
+
+    QCOMPARE(routeChord(router, 41, SDL_CONTROLLER_BUTTON_START).action,
+             DeckInputRouter::Action::LegacyDisconnect);
 }
 
 void DeckInputRouterTest::controllerNavigationHonorsFaceButtonSwap()

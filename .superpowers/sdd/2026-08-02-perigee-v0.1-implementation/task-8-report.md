@@ -1,6 +1,6 @@
 # Task 8 Report: Make Deck Bindings Configurable
 
-Status: implementation and three hardening rounds are complete. Live display and
+Status: implementation and four hardening rounds are complete. Live display and
 physical-controller qualification remain deferred because the current
 headless environment cannot create the required OpenGL or SDL windows.
 
@@ -11,7 +11,8 @@ Task 8 commits:
 - `86eb605615b6d39d09540577a94844cee928dde9` — configurable Deck bindings
 - `6d2e4c7c` — first input and capture hardening round
 - `76376b756257fb1f2d3b20629e6fa7a88686860c` — second input hardening round
-- `fix: preserve immediate closed input` — third hardening round (this commit)
+- `fix: preserve immediate closed input` — third hardening round
+- `fix: enforce Deck controller ownership` — fourth hardening round
 
 ## Implemented behavior
 
@@ -51,6 +52,9 @@ Task 8 commits:
   gamepad-mouse modes.
 - Open-Deck statistics input remains local and side-effect-free for both face
   swap states and both face-first and shared-button-first orders.
+- Once a physical controller owns an open Deck, every local controller target
+  is owner-gated. Other controllers remain consumed without toggling
+  statistics, closing Deck, or requesting legacy disconnect.
 - While Deck is open, the exact physical legacy chord becomes a dedicated
   router action. Session invokes the same handler helper used by the closed
   path, so legacy disconnect bypasses the overlay gate without duplicating raw
@@ -183,17 +187,37 @@ router recognizes the exact physical legacy chord and requests the same
 handler helper through a dedicated action, bypassing the ordinary overlay input
 gate without duplicating quit or neutralization logic in `Session`.
 
+### Hardening round 4 RED
+
+The fourth review found that only the configured Deck target checked the
+established controller owner. Statistics and legacy-disconnect targets remained
+viable for a second physical controller while Deck was open.
+
+Two-controller tests were added before the production change. The observed RED
+was:
+
+- router: 2 targeted failures — controller B completed `ToggleStats` and
+  `LegacyDisconnect` while controller A owned Deck;
+- real-handler integration: the controller-B legacy chord completed as
+  `LegacyDisconnect`, and the real helper logged the reserved quit path.
+
+The correction rejects every local controller target at the shared target
+qualification boundary when an established owner has a different joystick ID.
+Owner behavior and unowned acquisition keep their existing paths. The real
+integration regression polls the SDL event queue and proves that the blocked
+non-owner chord does not enqueue `SDL_QUIT`.
+
 ## Current GREEN results
 
 Fresh focused runs:
 
 - `DeckBindingsTest`: 14 passed, 0 failed.
 - `DeckBindingsQmlTest`: 9 passed, 0 failed.
-- `DeckInputRouterTest`: 33 passed, 0 failed.
+- `DeckInputRouterTest`: 35 passed, 0 failed.
 - `SdlGamepadKeyNavigationTest`: 9 passed, 0 failed.
 - `StreamingPreferencesTest`: 5 passed, 0 failed.
 - `StreamingPreferencesIsolationTest`: 3 passed, 0 failed in monolithic order.
-- `InputIntegrationTest` with dummy SDL: 28 passed, 0 failed.
+- `InputIntegrationTest` with dummy SDL: 29 passed, 0 failed.
 - `InputIntegrationTest` with offscreen Qt but no dummy SDL: 21 passed; the two
   SDL hidden-window cases fail before Task 8 logic because the environment
   cannot create a window.
@@ -204,6 +228,8 @@ chord prefix neutralization, Start long-press timing, legacy-off immunity to an
 unrelated release, legacy disconnect through the open-overlay helper, bounded
 local replay, and replayed Back followed by exactly one balanced deferred host
 press/release.
+It also includes a two-controller ownership case that blocks a non-owner legacy
+chord and verifies that no `SDL_QUIT` event is present.
 
 ## Build and stress
 
@@ -215,13 +241,15 @@ press/release.
   runs, 50 full binding-QML runs, and 50 real preferences runs — no failures.
 - Round 3 fresh-process stress: 100 full router runs, 100 focused real-handler
   runs, 50 full binding-QML runs, and 50 real preferences runs — no failures.
+- Round 4 focused runs: `DeckInputRouterTest` 35 passed and
+  `InputIntegrationTest` 29 passed, both with 0 failed.
 - `git diff --check` — clean before commit.
 
 ## Full-suite environment result
 
 The canonical headless run used offscreen Qt and dummy SDL. Every non-renderer
-class passed, including all 28 real input-integration records and the global
-settings-isolation sentinel. The only failures were:
+class passed, including all 28 then-current real input-integration records and
+the global settings-isolation sentinel. The only failures were:
 
 - `DeckQmlTest`: 8 OpenGL-context creation failures;
 - `DeckSurfaceRendererTest`: 3 OpenGL-context creation failures.

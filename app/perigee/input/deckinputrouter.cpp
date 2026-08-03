@@ -443,7 +443,11 @@ quint8 DeckInputRouter::viableControllerTargets(
 
     const bool controllerCanOwnDeck =
         m_ControllerOwner < 0 || m_ControllerOwner == controller;
-    if (!m_Bindings.legacyGamepadDisconnect() && controllerCanOwnDeck &&
+    if (!controllerCanOwnDeck) {
+        return 0;
+    }
+
+    if (!m_Bindings.legacyGamepadDisconnect() &&
             (down & ~m_Bindings.controllerButtons()) == 0) {
         targets |= ConfiguredTarget;
     }

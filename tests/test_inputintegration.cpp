@@ -170,6 +170,7 @@ private slots:
     void legacyOffIgnoresReservedQuitAfterUnrelatedButtonRelease();
     void legacyDisconnectHelperBypassesOverlayGate();
     void legacyOnOpenDisconnectsThroughRealHandler();
+    void nonOwnerLegacyChordCannotQuitWhileDeckIsOwned();
 };
 
 void InputIntegrationTest::init()
@@ -1320,6 +1321,73 @@ void InputIntegrationTest::legacyOnOpenDisconnectsThroughRealHandler()
             state.controller = nullptr;
         }
     }
+}
+
+void InputIntegrationTest::nonOwnerLegacyChordCannotQuitWhileDeckIsOwned()
+{
+    SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    preferences.legacyGamepadDisconnect = true;
+    SdlInputHandler handler(preferences, 1920, 1080);
+    GamepadState& owner = handler.m_GamepadState[0];
+    owner.controller = reinterpret_cast<SDL_GameController*>(quintptr(1));
+    owner.jsId = 508;
+    owner.index = 0;
+    GamepadState& nonOwner = handler.m_GamepadState[1];
+    nonOwner.controller = reinterpret_cast<SDL_GameController*>(quintptr(2));
+    nonOwner.jsId = 509;
+    nonOwner.index = 1;
+    handler.m_GamepadMask = 0x3;
+
+    const quint32 customChord =
+        (quint32(1) << SDL_CONTROLLER_BUTTON_A) |
+        (quint32(1) << SDL_CONTROLLER_BUTTON_B);
+    DeckInputRouter router(DeckBindings(
+        int(Qt::ControlModifier), SDL_SCANCODE_F8,
+        customChord, true));
+    router.openForKeyboard();
+    handler.beginLocalOverlayInput();
+
+    QCOMPARE(routeThroughRealHandler(
+                 router, handler,
+                 controllerButtonEvent(SDL_CONTROLLERBUTTONDOWN,
+                                       owner.jsId,
+                                       SDL_CONTROLLER_BUTTON_A)).action,
+             DeckInputRouter::Action::Activate);
+    QCOMPARE(router.controllerOwner(), owner.jsId);
+    QCOMPARE(routeThroughRealHandler(
+                 router, handler,
+                 controllerButtonEvent(SDL_CONTROLLERBUTTONUP,
+                                       owner.jsId,
+                                       SDL_CONTROLLER_BUTTON_A)).disposition,
+             DeckInputRouter::Disposition::Consumed);
+
+    DeckInputRouter::Result completed;
+    for (Uint8 button : {
+             SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+             SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+             SDL_CONTROLLER_BUTTON_BACK,
+             SDL_CONTROLLER_BUTTON_START,
+         }) {
+        completed = routeThroughRealHandler(
+            router, handler,
+            controllerButtonEvent(SDL_CONTROLLERBUTTONDOWN,
+                                  nonOwner.jsId, button));
+    }
+    QCOMPARE(completed.disposition,
+             DeckInputRouter::Disposition::Consumed);
+    QCOMPARE(completed.action, DeckInputRouter::Action::None);
+    bool sawQuit = false;
+    SDL_Event queued {};
+    while (SDL_PollEvent(&queued)) {
+        sawQuit |= queued.type == SDL_QUIT;
+    }
+    QVERIFY(!sawQuit);
+    QCOMPARE(router.controllerOwner(), owner.jsId);
+
+    owner.controller = nullptr;
+    nonOwner.controller = nullptr;
 }
 
 REGISTER_PERIGEE_TEST(InputIntegrationTest);
