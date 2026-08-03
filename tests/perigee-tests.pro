@@ -3,6 +3,7 @@ QT += core gui network opengl qml quick testlib
 TEMPLATE = app
 TARGET = perigee-tests
 CONFIG += c++17 testcase link_pkgconfig
+DEFINES += PERIGEE_TESTING
 QMAKE_LFLAGS += -Wl,--wrap=SDL_GetNumTouchFingers \
     -Wl,--wrap=SDL_SetRelativeMouseMode \
     -Wl,--wrap=SDL_PushEvent \
@@ -39,6 +40,7 @@ SOURCES += \
     ../app/gui/sdlgamepadkeynavigation.cpp \
     ../app/path.cpp \
     ../app/streaming/video/overlaymanager.cpp \
+    support/fakepolarisserver.cpp \
     test_main.cpp \
     test_actionregistry.cpp \
     test_gamestreamadapter.cpp \
@@ -65,6 +67,7 @@ SOURCES += \
     test_polarisadapter.cpp \
     test_polarisactions.cpp \
     test_polarisapiclient.cpp \
+    test_polarisintegration.cpp \
     test_redaction.cpp \
     test_smoke.cpp
 
@@ -103,6 +106,7 @@ HEADERS += \
     ../app/streaming/video/overlaymanager.h \
     ../app/perigee/polaris/polarismodels.h \
     ../app/perigee/polaris/polarisadapter.h \
+    support/fakepolarisserver.h \
     test_registry.h
 
 RESOURCES += ../app/qml.qrc

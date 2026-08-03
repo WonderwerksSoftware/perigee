@@ -51,6 +51,13 @@ public:
     explicit PolarisApiClient(
         const NvComputer& computer,
         std::unique_ptr<PolarisNetworkBackend> backend = {});
+#ifdef PERIGEE_TESTING
+    struct TestIdentityTag final {};
+    PolarisApiClient(
+        const NvComputer& computer, TestIdentityTag,
+        const QSslConfiguration& testIdentity,
+        std::unique_ptr<PolarisNetworkBackend> backend = {});
+#endif
     ~PolarisApiClient();
 
     PolarisApiClient(const PolarisApiClient&) = delete;
@@ -87,6 +94,10 @@ public:
         const QList<QSslError>& errors = {});
 
 private:
+    void initialize(const NvComputer& computer,
+                    QSslConfiguration identity,
+                    std::unique_ptr<PolarisNetworkBackend> backend);
+
     struct Private;
     std::unique_ptr<Private> d;
 };

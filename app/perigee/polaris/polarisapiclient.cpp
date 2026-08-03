@@ -758,6 +758,25 @@ PolarisApiClient::PolarisApiClient(
     std::unique_ptr<PolarisNetworkBackend> backend)
     : d(std::make_unique<Private>())
 {
+    initialize(computer, IdentityManager::get()->getSslConfig(),
+               std::move(backend));
+}
+
+#ifdef PERIGEE_TESTING
+PolarisApiClient::PolarisApiClient(
+    const NvComputer& computer, TestIdentityTag,
+    const QSslConfiguration& testIdentity,
+    std::unique_ptr<PolarisNetworkBackend> backend)
+    : d(std::make_unique<Private>())
+{
+    initialize(computer, testIdentity, std::move(backend));
+}
+#endif
+
+void PolarisApiClient::initialize(
+    const NvComputer& computer, QSslConfiguration identity,
+    std::unique_ptr<PolarisNetworkBackend> backend)
+{
     NvAddress activeAddress;
     quint16 activeHttpsPort = 0;
     QSslCertificate serverCert;
@@ -768,7 +787,6 @@ PolarisApiClient::PolarisApiClient(
         serverCert = computer.serverCert;
     }
     d->origin = pairedOrigin(activeAddress, activeHttpsPort);
-    QSslConfiguration identity = IdentityManager::get()->getSslConfig();
     if (!backend) {
         backend = std::make_unique<QtPolarisNetworkBackend>();
     }
