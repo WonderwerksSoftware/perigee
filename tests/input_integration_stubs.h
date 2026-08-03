@@ -7,6 +7,12 @@
 
 namespace InputIntegrationStubs {
 
+enum class TimerCallbackBlock {
+    None,
+    RemoteSend,
+    InputEventPush,
+};
+
 struct MouseButtonRecord
 {
     int action;
@@ -25,11 +31,17 @@ QVector<PenRecord> pens();
 QVector<ControllerRecord> controllers();
 QVector<BatteryRecord> batteries();
 int mouseMoveCount();
+QVector<bool> mouseEmulationNotifications();
 void beginOrderingObservation();
 QStringList ordering();
 void blockNextMouseButtonSend();
 void blockNextMouseMoveSend();
+void blockNextTimerCallbackSideEffect();
+void failNextInputTimerPush();
+void failNextTimerAdd();
 bool waitUntilSendBlocked(int timeoutMs = 1000);
+TimerCallbackBlock waitUntilTimerCallbackBlocked(int timeoutMs = 1000);
+bool waitUntilTimerCallbackReleased(int timeoutMs = 1000);
 void releaseBlockedSend();
 
 }

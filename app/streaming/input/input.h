@@ -7,6 +7,7 @@
 #include "remoteinputstate.h"
 
 #include <atomic>
+#include <QHash>
 #include <mutex>
 #include <optional>
 
@@ -18,7 +19,6 @@ struct CaptureSnapshot {
 class SdlInputHandler;
 
 struct GamepadState {
-    SdlInputHandler* inputHandler;
     SDL_GameController* controller;
     SDL_JoystickID jsId;
     short index;
@@ -30,6 +30,7 @@ struct GamepadState {
 #endif
 
     SDL_TimerID mouseEmulationTimer;
+    uint32_t mouseEmulationTimerToken;
     uint32_t lastStartDownTime;
 
     bool clickpadButtonEmulationEnabled;
@@ -143,6 +144,8 @@ public:
 
     void handleTouchFingerEvent(SDL_TouchFingerEvent* event);
 
+    bool handleInputTimerEvent(const SDL_UserEvent& event);
+
     int getAttachedGamepadMask();
 
     void raiseAllKeys();
@@ -177,6 +180,24 @@ public:
     QString getUnmappedGamepads();
 
 private:
+    static constexpr Uint32 MouseEmulationPollingInterval = 50;
+    static constexpr float MouseEmulationMotionMultiplier = 4.0f;
+    static constexpr float MouseEmulationDeadzone = 2.0f;
+
+    enum class InputTimerAction {
+        LongPress,
+        ReleaseLeftButton,
+        ReleaseRightButton,
+        Drag,
+        MouseEmulation,
+    };
+
+    struct InputTimerRequest {
+        InputTimerAction action;
+        SDL_JoystickID controllerId;
+        bool repeating;
+    };
+
     enum KeyCombo {
         KeyComboQuit,
         KeyComboUngrabInput,
@@ -221,6 +242,18 @@ private:
                              float pressure);
 
     void applyCaptureActive(bool active);
+
+    bool startInputTimer(SDL_TimerID& timer, uint32_t& token,
+                         Uint32 interval, InputTimerAction action,
+                         SDL_JoystickID controllerId = 0,
+                         bool repeating = false);
+
+    void cancelInputTimer(SDL_TimerID& timer, uint32_t& token);
+
+    void dispatchInputTimer(const InputTimerRequest& request);
+
+    static
+    bool pushInputTimerEvent(void* param);
 
     static
     Uint32 longPressTimerCallback(Uint32 interval, void* param);
@@ -276,6 +309,7 @@ private:
     SDL_TouchFingerEvent m_LastTouchDownEvent;
     SDL_TouchFingerEvent m_LastTouchUpEvent;
     SDL_TimerID m_LongPressTimer;
+    uint32_t m_LongPressTimerToken;
     int m_StreamWidth;
     int m_StreamHeight;
     bool m_AbsoluteMouseMode;
@@ -284,10 +318,15 @@ private:
 
     SDL_TouchFingerEvent m_TouchDownEvent[MAX_FINGERS];
     SDL_TimerID m_LeftButtonReleaseTimer;
+    uint32_t m_LeftButtonReleaseTimerToken;
     SDL_TimerID m_RightButtonReleaseTimer;
+    uint32_t m_RightButtonReleaseTimerToken;
     SDL_TimerID m_DragTimer;
+    uint32_t m_DragTimerToken;
     char m_DragButton;
     int m_NumFingersDown;
+
+    QHash<uint32_t, InputTimerRequest> m_InputTimerRequests;
 
     static const int k_ButtonMap[];
 };

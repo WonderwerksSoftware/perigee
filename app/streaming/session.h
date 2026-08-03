@@ -181,6 +181,8 @@ private:
 
     void notifyMouseEmulationMode(bool enabled);
 
+    void toggleStatsOverlay();
+
     bool routeDeckInputEvent(const SDL_Event& event);
 
     void applyDeckInputResult(const DeckInputRouter::Result& result);

@@ -19,14 +19,9 @@
 // How far the finger can move before it can override the double tap deadzone
 #define DOUBLE_TAP_DEAD_ZONE_DELTA 0.025f
 
-Uint32 SdlInputHandler::longPressTimerCallback(Uint32, void* param)
+Uint32 SdlInputHandler::longPressTimerCallback(Uint32 interval, void* param)
 {
-    auto me = reinterpret_cast<SdlInputHandler*>(param);
-    // Raise the left click and start a right click
-    me->sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
-    me->sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
-
-    return 0;
+    return pushInputTimerEvent(param) ? 0 : interval;
 }
 
 void SdlInputHandler::disableTouchFeedback()
@@ -185,8 +180,7 @@ void SdlInputHandler::emulateAbsoluteFingerEvent(SDL_TouchFingerEvent* event)
 
     if (qSqrt(qPow(event->x - m_LastTouchDownEvent.x, 2) + qPow(event->y - m_LastTouchDownEvent.y, 2)) > LONG_PRESS_ACTIVATION_DELTA) {
         // Moved too far since touch down. Cancel the long press timer.
-        SDL_RemoveTimer(m_LongPressTimer);
-        m_LongPressTimer = 0;
+        cancelInputTimer(m_LongPressTimer, m_LongPressTimerToken);
     }
 
     // Don't reposition for finger down events within the deadzone. This makes double-clicking easier.
@@ -205,10 +199,10 @@ void SdlInputHandler::emulateAbsoluteFingerEvent(SDL_TouchFingerEvent* event)
         m_LastTouchDownEvent = *event;
 
         // Start/restart the long press timer
-        SDL_RemoveTimer(m_LongPressTimer);
-        m_LongPressTimer = SDL_AddTimer(LONG_PRESS_ACTIVATION_DELAY,
-                                        longPressTimerCallback,
-                                        this);
+        startInputTimer(m_LongPressTimer,
+                        m_LongPressTimerToken,
+                        LONG_PRESS_ACTIVATION_DELAY,
+                        InputTimerAction::LongPress);
 
         // Left button down on finger down
         sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
@@ -217,8 +211,7 @@ void SdlInputHandler::emulateAbsoluteFingerEvent(SDL_TouchFingerEvent* event)
         m_LastTouchUpEvent = *event;
 
         // Cancel the long press timer
-        SDL_RemoveTimer(m_LongPressTimer);
-        m_LongPressTimer = 0;
+        cancelInputTimer(m_LongPressTimer, m_LongPressTimerToken);
 
         // Left button up on finger up
         sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);

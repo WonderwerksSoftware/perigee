@@ -14,36 +14,19 @@
 // How far the finger can move before it cancels a drag or tap
 #define DEAD_ZONE_DELTA 0.01f
 
-Uint32 SdlInputHandler::releaseLeftButtonTimerCallback(Uint32, void* param)
+Uint32 SdlInputHandler::releaseLeftButtonTimerCallback(Uint32 interval, void* param)
 {
-    auto me = reinterpret_cast<SdlInputHandler*>(param);
-    me->sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
-    return 0;
+    return pushInputTimerEvent(param) ? 0 : interval;
 }
 
-Uint32 SdlInputHandler::releaseRightButtonTimerCallback(Uint32, void* param)
+Uint32 SdlInputHandler::releaseRightButtonTimerCallback(Uint32 interval, void* param)
 {
-    auto me = reinterpret_cast<SdlInputHandler*>(param);
-    me->sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
-    return 0;
+    return pushInputTimerEvent(param) ? 0 : interval;
 }
 
-Uint32 SdlInputHandler::dragTimerCallback(Uint32, void *param)
+Uint32 SdlInputHandler::dragTimerCallback(Uint32 interval, void *param)
 {
-    auto me = reinterpret_cast<SdlInputHandler*>(param);
-
-    // Check how many fingers are down now to decide
-    // which button to hold down
-    if (me->m_NumFingersDown == 2) {
-        me->m_DragButton = BUTTON_RIGHT;
-    }
-    else if (me->m_NumFingersDown == 1) {
-        me->m_DragButton = BUTTON_LEFT;
-    }
-
-    me->sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, me->m_DragButton);
-
-    return 0;
+    return pushInputTimerEvent(param) ? 0 : interval;
 }
 
 void SdlInputHandler::handleRelativeFingerEvent(SDL_TouchFingerEvent* event)
@@ -110,18 +93,17 @@ void SdlInputHandler::handleRelativeFingerEvent(SDL_TouchFingerEvent* event)
     // fingers go down
     if (event->type == SDL_FINGERDOWN &&
             (fingerIndex == 0 || fingerIndex == 1)) {
-        SDL_RemoveTimer(m_DragTimer);
-        m_DragTimer = SDL_AddTimer(DRAG_ACTIVATION_DELAY,
-                                   dragTimerCallback,
-                                   this);
+        startInputTimer(m_DragTimer,
+                        m_DragTimerToken,
+                        DRAG_ACTIVATION_DELAY,
+                        InputTimerAction::Drag);
     }
 
     if (event->type == SDL_FINGERMOTION) {
         // If it's outside the deadzone delta, cancel drags and taps
         if (qSqrt(qPow(event->x - m_TouchDownEvent[fingerIndex].x, 2) +
                   qPow(event->y - m_TouchDownEvent[fingerIndex].y, 2)) > DEAD_ZONE_DELTA) {
-            SDL_RemoveTimer(m_DragTimer);
-            m_DragTimer = 0;
+            cancelInputTimer(m_DragTimer, m_DragTimerToken);
 
             // This effectively cancels the tap logic below
             m_TouchDownEvent[fingerIndex].timestamp = 0;
@@ -130,8 +112,7 @@ void SdlInputHandler::handleRelativeFingerEvent(SDL_TouchFingerEvent* event)
 
     if (event->type == SDL_FINGERUP) {
         // Cancel the drag timer on finger up
-        SDL_RemoveTimer(m_DragTimer);
-        m_DragTimer = 0;
+        cancelInputTimer(m_DragTimer, m_DragTimerToken);
 
         // Release any drag
         if (m_DragButton != 0) {
@@ -148,10 +129,10 @@ void SdlInputHandler::handleRelativeFingerEvent(SDL_TouchFingerEvent* event)
             sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
 
             // Queue a timer to release it in 100 ms
-            SDL_RemoveTimer(m_RightButtonReleaseTimer);
-            m_RightButtonReleaseTimer = SDL_AddTimer(TAP_BUTTON_RELEASE_DELAY,
-                                                     releaseRightButtonTimerCallback,
-                                                     this);
+            startInputTimer(m_RightButtonReleaseTimer,
+                            m_RightButtonReleaseTimerToken,
+                            TAP_BUTTON_RELEASE_DELAY,
+                            InputTimerAction::ReleaseRightButton);
         }
         // 1 finger tap
         else if (event->timestamp - m_TouchDownEvent[0].timestamp < 250) {
@@ -159,10 +140,10 @@ void SdlInputHandler::handleRelativeFingerEvent(SDL_TouchFingerEvent* event)
             sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
 
             // Queue a timer to release it in 100 ms
-            SDL_RemoveTimer(m_LeftButtonReleaseTimer);
-            m_LeftButtonReleaseTimer = SDL_AddTimer(TAP_BUTTON_RELEASE_DELAY,
-                                                    releaseLeftButtonTimerCallback,
-                                                    this);
+            startInputTimer(m_LeftButtonReleaseTimer,
+                            m_LeftButtonReleaseTimerToken,
+                            TAP_BUTTON_RELEASE_DELAY,
+                            InputTimerAction::ReleaseLeftButton);
         }
     }
 

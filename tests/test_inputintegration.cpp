@@ -4,11 +4,14 @@
 #include <QtTest>
 
 #include <atomic>
+#include <functional>
+#include <memory>
 #include <thread>
 
 #define private public
 #include "settings/streamingpreferences.h"
 #include "streaming/input/input.h"
+#include "streaming/sdleventcodes.h"
 #include "perigee/input/deckinputrouter.h"
 #undef private
 
@@ -46,6 +49,32 @@ void initializePreferences(StreamingPreferences& preferences)
     preferences.captureSysKeysMode = StreamingPreferences::CSK_OFF;
 }
 
+SDL_UserEvent inputTimerEvent(uint32_t token)
+{
+    SDL_UserEvent event {};
+    event.type = SDL_USEREVENT;
+    event.code = SDL_CODE_INPUT_TIMER;
+    event.data1 = reinterpret_cast<void*>(uintptr_t(token));
+    return event;
+}
+
+bool dispatchNextInputTimerEvent(SdlInputHandler& handler, int timeoutMs = 1000)
+{
+    QElapsedTimer elapsed;
+    elapsed.start();
+    do {
+        SDL_Event event {};
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_USEREVENT &&
+                    event.user.code == SDL_CODE_INPUT_TIMER) {
+                return handler.handleInputTimerEvent(event.user);
+            }
+        }
+        QTest::qWait(1);
+    } while (elapsed.elapsed() < timeoutMs);
+    return false;
+}
+
 }
 
 class InputIntegrationTest : public QObject
@@ -55,20 +84,25 @@ class InputIntegrationTest : public QObject
 private slots:
     void init();
     void relativeTapReleaseTimerUsesTheOwningHandler();
+    void timerCallbacksOnlyEnqueueAndDoNotTouchTheHandler();
+    void destructionCanFinishWhileDragTimerCallbackIsInFlight();
     void nativeInputIsCancelledBeforeDeckOwnsInput();
     void ownershipWaitsForInFlightTimerSendBeforeNeutralizing();
-    void gamepadMouseTimerCannotSendAfterOwnershipGate();
-    void controllerAxisMutationWaitsForInFlightMouseCallback();
+    void takeoverRotatesGamepadTimerTokenAndDropsQueuedWork();
+    void gamepadMouseDispatchReadsAxisStateOnMainThread();
+    void gamepadTimerAddFailureDoesNotAdvertiseMouseMode();
+    void staleTimerTokenIsIgnoredAfterHandlerReplacement();
     void neutralRemoteInputPrecedesPhysicalCaptureRelease();
     void startupCaptureRequestsAreDeferredWhileDeckIsOpen();
     void statsChordNeutralizesOnlyItsController();
     void statsChordPreservesOtherPhysicalControllerInMergedMode();
-    void statsChordRoutesBeforeTheRemoteHandlerAndConsumesReleaseTails();
+    void closedStatsChordUsesRemoteHandlerAndReleasesGamepadMouseButtons();
     void routerRunsBeforeDeviceAndBatteryHousekeeping();
 };
 
 void InputIntegrationTest::init()
 {
+    SDL_FlushEvent(SDL_USEREVENT);
     InputIntegrationStubs::reset();
 }
 
@@ -86,13 +120,92 @@ void InputIntegrationTest::relativeTapReleaseTimerUsesTheOwningHandler()
     release.fingerId = 17;
     release.timestamp = 500;
     handler.handleRelativeFingerEvent(&release);
+    QVERIFY(dispatchNextInputTimerEvent(handler));
 
-    QTRY_COMPARE_WITH_TIMEOUT(InputIntegrationStubs::mouseButtons().size(), 2, 1000);
+    QCOMPARE(InputIntegrationStubs::mouseButtons().size(), 2);
     const auto records = InputIntegrationStubs::mouseButtons();
     QCOMPARE(records.at(0).action, int(BUTTON_ACTION_PRESS));
     QCOMPARE(records.at(0).button, BUTTON_LEFT);
     QCOMPARE(records.at(1).action, int(BUTTON_ACTION_RELEASE));
     QCOMPARE(records.at(1).button, BUTTON_LEFT);
+}
+
+void InputIntegrationTest::timerCallbacksOnlyEnqueueAndDoNotTouchTheHandler()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    SdlInputHandler handler(preferences, 1920, 1080);
+    handler.m_NumFingersDown = 1;
+    GamepadState gamepad {};
+    gamepad.lsX = 32767;
+
+    InputIntegrationStubs::failNextInputTimerPush();
+    QCOMPARE(SdlInputHandler::dragTimerCallback(23, &handler), Uint32(23));
+
+    const QVector<std::function<Uint32()>> callbacks {
+        [&handler] { return SdlInputHandler::longPressTimerCallback(1, &handler); },
+        [&handler] { return SdlInputHandler::releaseLeftButtonTimerCallback(1, &handler); },
+        [&handler] { return SdlInputHandler::releaseRightButtonTimerCallback(1, &handler); },
+        [&handler] { return SdlInputHandler::dragTimerCallback(1, &handler); },
+        [&gamepad] { return SdlInputHandler::mouseEmulationTimerCallback(1, &gamepad); },
+    };
+
+    QVector<InputIntegrationStubs::TimerCallbackBlock> blockedAt;
+    for (const auto& callback : callbacks) {
+        InputIntegrationStubs::blockNextTimerCallbackSideEffect();
+        std::thread timer([&callback] { callback(); });
+        blockedAt.push_back(
+            InputIntegrationStubs::waitUntilTimerCallbackBlocked());
+        InputIntegrationStubs::releaseBlockedSend();
+        timer.join();
+    }
+
+    QCOMPARE(blockedAt,
+             QVector<InputIntegrationStubs::TimerCallbackBlock>(
+                 callbacks.size(),
+                 InputIntegrationStubs::TimerCallbackBlock::InputEventPush));
+    QCOMPARE(InputIntegrationStubs::mouseButtons().size(), 0);
+    QCOMPARE(InputIntegrationStubs::mouseMoveCount(), 0);
+}
+
+void InputIntegrationTest::destructionCanFinishWhileDragTimerCallbackIsInFlight()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    auto handler = std::make_unique<SdlInputHandler>(preferences, 1920, 1080);
+    InputIntegrationStubs::blockNextTimerCallbackSideEffect();
+    handler->startInputTimer(handler->m_DragTimer,
+                             handler->m_DragTimerToken,
+                             1,
+                             SdlInputHandler::InputTimerAction::Drag);
+    QVERIFY(handler->m_DragTimer != 0);
+    const auto blockedAt =
+        InputIntegrationStubs::waitUntilTimerCallbackBlocked();
+
+    bool destroyedWhileCallbackBlocked = false;
+    if (blockedAt == InputIntegrationStubs::TimerCallbackBlock::InputEventPush) {
+        std::atomic_bool destroyed {false};
+        std::thread destroyer([&handler, &destroyed] {
+            handler.reset();
+            destroyed.store(true);
+        });
+        for (int i = 0; i < 100 && !destroyed.load(); ++i) {
+            QTest::qWait(1);
+        }
+        destroyedWhileCallbackBlocked = destroyed.load();
+        InputIntegrationStubs::releaseBlockedSend();
+        QVERIFY(InputIntegrationStubs::waitUntilTimerCallbackReleased());
+        destroyer.join();
+    }
+    else {
+        InputIntegrationStubs::releaseBlockedSend();
+        handler.reset();
+    }
+
+    QCOMPARE(blockedAt,
+             InputIntegrationStubs::TimerCallbackBlock::InputEventPush);
+    QVERIFY(destroyedWhileCallbackBlocked);
+    QCOMPARE(InputIntegrationStubs::mouseButtons().size(), 0);
 }
 
 void InputIntegrationTest::nativeInputIsCancelledBeforeDeckOwnsInput()
@@ -148,75 +261,140 @@ void InputIntegrationTest::ownershipWaitsForInFlightTimerSendBeforeNeutralizing(
     QCOMPARE(records.at(1).button, BUTTON_LEFT);
 }
 
-void InputIntegrationTest::gamepadMouseTimerCannotSendAfterOwnershipGate()
-{
-    StreamingPreferences preferences(nullptr);
-    initializePreferences(preferences);
-    SdlInputHandler handler(preferences, 1920, 1080);
-    GamepadState state {};
-    state.inputHandler = &handler;
-    state.lsX = 32767;
-
-    InputIntegrationStubs::blockNextMouseMoveSend();
-    std::atomic_bool ownershipReturned {false};
-    std::thread timer([&state] {
-        SdlInputHandler::mouseEmulationTimerCallback(50, &state);
-    });
-    QVERIFY(InputIntegrationStubs::waitUntilSendBlocked());
-    std::thread owner([&handler, &ownershipReturned] {
-        handler.beginLocalOverlayInput();
-        ownershipReturned.store(true);
-    });
-    QTRY_VERIFY_WITH_TIMEOUT(handler.m_LocalOverlayInputActive.load(), 1000);
-    QTest::qWait(20);
-    QVERIFY(!ownershipReturned.load());
-    InputIntegrationStubs::releaseBlockedSend();
-    timer.join();
-    owner.join();
-    QVERIFY(ownershipReturned.load());
-    QCOMPARE(InputIntegrationStubs::mouseMoveCount(), 1);
-    QCOMPARE(SdlInputHandler::mouseEmulationTimerCallback(50, &state), Uint32(50));
-    QCOMPARE(InputIntegrationStubs::mouseMoveCount(), 1);
-}
-
-void InputIntegrationTest::controllerAxisMutationWaitsForInFlightMouseCallback()
+void InputIntegrationTest::takeoverRotatesGamepadTimerTokenAndDropsQueuedWork()
 {
     StreamingPreferences preferences(nullptr);
     initializePreferences(preferences);
     SdlInputHandler handler(preferences, 1920, 1080);
     GamepadState& state = handler.m_GamepadState[0];
-    state.inputHandler = &handler;
     state.controller = reinterpret_cast<SDL_GameController*>(quintptr(1));
     state.jsId = 44;
     state.index = 0;
     state.lsX = 32767;
     handler.m_GamepadMask = 1;
+    handler.startInputTimer(state.mouseEmulationTimer,
+                            state.mouseEmulationTimerToken,
+                            100000,
+                            SdlInputHandler::InputTimerAction::MouseEmulation,
+                            state.jsId,
+                            true);
+    const uint32_t oldToken = state.mouseEmulationTimerToken;
+    QVERIFY(oldToken != 0);
 
-    InputIntegrationStubs::blockNextMouseMoveSend();
-    std::atomic_bool axisReturned {false};
-    std::thread timer([&state] {
-        SdlInputHandler::mouseEmulationTimerCallback(50, &state);
-    });
-    QVERIFY(InputIntegrationStubs::waitUntilSendBlocked());
+    const CaptureSnapshot snapshot = handler.beginLocalOverlayInput();
+    const uint32_t deckToken = state.mouseEmulationTimerToken;
+    QVERIFY(deckToken != 0);
+    QVERIFY(deckToken != oldToken);
+    QVERIFY(state.mouseEmulationTimer != 0);
+    QVERIFY(!handler.m_InputTimerRequests.contains(oldToken));
+    QVERIFY(handler.m_InputTimerRequests.contains(deckToken));
+
+    QVERIFY(handler.handleInputTimerEvent(inputTimerEvent(oldToken)));
+    QVERIFY(handler.handleInputTimerEvent(inputTimerEvent(deckToken)));
+    QCOMPARE(InputIntegrationStubs::mouseMoveCount(), 0);
+
+    handler.endLocalOverlayInput(snapshot, false);
+    const uint32_t remoteToken = state.mouseEmulationTimerToken;
+    QVERIFY(remoteToken != 0);
+    QVERIFY(remoteToken != deckToken);
+    state.lsX = 32767;
+    QVERIFY(handler.handleInputTimerEvent(inputTimerEvent(oldToken)));
+    QCOMPARE(InputIntegrationStubs::mouseMoveCount(), 0);
+    QVERIFY(handler.handleInputTimerEvent(inputTimerEvent(deckToken)));
+    QCOMPARE(InputIntegrationStubs::mouseMoveCount(), 0);
+    QVERIFY(handler.handleInputTimerEvent(inputTimerEvent(remoteToken)));
+    QCOMPARE(InputIntegrationStubs::mouseMoveCount(), 1);
+
+    handler.cancelInputTimer(state.mouseEmulationTimer,
+                             state.mouseEmulationTimerToken);
+    state.controller = nullptr;
+}
+
+void InputIntegrationTest::gamepadTimerAddFailureDoesNotAdvertiseMouseMode()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    preferences.gamepadMouse = true;
+    SdlInputHandler handler(preferences, 1920, 1080);
+    GamepadState& state = handler.m_GamepadState[0];
+    state.controller = reinterpret_cast<SDL_GameController*>(quintptr(1));
+    state.jsId = 45;
+    state.index = 0;
+    state.lastStartDownTime = SDL_GetTicks() - 751;
+    handler.m_GamepadMask = 1;
+
+    InputIntegrationStubs::failNextTimerAdd();
+    SDL_ControllerButtonEvent event {};
+    event.type = SDL_CONTROLLERBUTTONUP;
+    event.which = state.jsId;
+    event.button = SDL_CONTROLLER_BUTTON_START;
+    event.state = SDL_RELEASED;
+    handler.handleControllerButtonEvent(&event);
+
+    QCOMPARE(state.mouseEmulationTimer, SDL_TimerID(0));
+    QCOMPARE(state.mouseEmulationTimerToken, uint32_t(0));
+    QCOMPARE(InputIntegrationStubs::mouseEmulationNotifications().size(), 0);
+    state.controller = nullptr;
+}
+
+void InputIntegrationTest::gamepadMouseDispatchReadsAxisStateOnMainThread()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    SdlInputHandler handler(preferences, 1920, 1080);
+    GamepadState& state = handler.m_GamepadState[0];
+    state.controller = reinterpret_cast<SDL_GameController*>(quintptr(1));
+    state.jsId = 44;
+    state.index = 0;
+    handler.m_GamepadMask = 1;
+    handler.startInputTimer(state.mouseEmulationTimer,
+                            state.mouseEmulationTimerToken,
+                            100000,
+                            SdlInputHandler::InputTimerAction::MouseEmulation,
+                            state.jsId,
+                            true);
+
     SDL_ControllerAxisEvent axis {};
     axis.type = SDL_CONTROLLERAXISMOTION;
     axis.which = 44;
     axis.axis = SDL_CONTROLLER_AXIS_LEFTX;
-    axis.value = 1234;
-    std::thread mainMutation([&] {
-        handler.handleControllerAxisEvent(&axis);
-        axisReturned.store(true);
-    });
-    QTest::qWait(20);
-    const bool returnedWhileCallbackWasInFlight = axisReturned.load();
+    axis.value = 32767;
+    handler.handleControllerAxisEvent(&axis);
+    QCOMPARE(state.lsX, short(32767));
+    QVERIFY(handler.handleInputTimerEvent(
+        inputTimerEvent(state.mouseEmulationTimerToken)));
+    QCOMPARE(InputIntegrationStubs::mouseMoveCount(), 1);
 
-    InputIntegrationStubs::releaseBlockedSend();
-    timer.join();
-    mainMutation.join();
-    QVERIFY(!returnedWhileCallbackWasInFlight);
-    QVERIFY(axisReturned.load());
-    QCOMPARE(state.lsX, short(1234));
+    handler.cancelInputTimer(state.mouseEmulationTimer,
+                             state.mouseEmulationTimerToken);
     state.controller = nullptr;
+}
+
+void InputIntegrationTest::staleTimerTokenIsIgnoredAfterHandlerReplacement()
+{
+    StreamingPreferences firstPreferences(nullptr);
+    initializePreferences(firstPreferences);
+    auto first = std::make_unique<SdlInputHandler>(
+        firstPreferences, 1920, 1080);
+    first->startInputTimer(first->m_LeftButtonReleaseTimer,
+                           first->m_LeftButtonReleaseTimerToken,
+                           100000,
+                           SdlInputHandler::InputTimerAction::ReleaseLeftButton);
+    const uint32_t staleToken = first->m_LeftButtonReleaseTimerToken;
+    QVERIFY(staleToken != 0);
+    first.reset();
+
+    StreamingPreferences secondPreferences(nullptr);
+    initializePreferences(secondPreferences);
+    SdlInputHandler second(secondPreferences, 1920, 1080);
+    second.startInputTimer(second.m_LeftButtonReleaseTimer,
+                           second.m_LeftButtonReleaseTimerToken,
+                           100000,
+                           SdlInputHandler::InputTimerAction::ReleaseLeftButton);
+    QVERIFY(second.m_LeftButtonReleaseTimerToken != staleToken);
+
+    QVERIFY(second.handleInputTimerEvent(inputTimerEvent(staleToken)));
+    QCOMPARE(InputIntegrationStubs::mouseButtons().size(), 0);
 }
 
 void InputIntegrationTest::neutralRemoteInputPrecedesPhysicalCaptureRelease()
@@ -333,21 +511,17 @@ void InputIntegrationTest::statsChordPreservesOtherPhysicalControllerInMergedMod
     handler.m_GamepadState[1].controller = nullptr;
 }
 
-void InputIntegrationTest::statsChordRoutesBeforeTheRemoteHandlerAndConsumesReleaseTails()
+void InputIntegrationTest::closedStatsChordUsesRemoteHandlerAndReleasesGamepadMouseButtons()
 {
     StreamingPreferences preferences(nullptr);
     initializePreferences(preferences);
     SdlInputHandler handler(preferences, 1920, 1080);
-    handler.m_GamepadMask = 0x3;
+    handler.m_GamepadMask = 0x1;
     handler.m_GamepadState[0].controller = reinterpret_cast<SDL_GameController*>(quintptr(1));
     handler.m_GamepadState[0].jsId = 70;
     handler.m_GamepadState[0].index = 0;
-    handler.m_GamepadState[1].controller = reinterpret_cast<SDL_GameController*>(quintptr(2));
-    handler.m_GamepadState[1].jsId = 71;
-    handler.m_GamepadState[1].index = 1;
-    handler.m_GamepadState[1].buttons = A_FLAG;
-    handler.m_RemoteInputState.keySent(12, true);
-    handler.m_RemoteInputState.mouseButtonSent(BUTTON_RIGHT, true);
+    handler.m_GamepadState[0].mouseEmulationTimer = SDL_TimerID(1);
+    handler.sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
     DeckInputRouter router;
     const Uint8 chord[] = {
         SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
@@ -364,21 +538,10 @@ void InputIntegrationTest::statsChordRoutesBeforeTheRemoteHandlerAndConsumesRele
         event.cbutton.button = button;
         event.cbutton.state = SDL_PRESSED;
         const auto result = router.route(event);
-        if (result.disposition == DeckInputRouter::Disposition::Passthrough) {
-            handler.handleControllerButtonEvent(&event.cbutton);
-        }
-        else {
-            QCOMPARE(result.action, DeckInputRouter::Action::ToggleStats);
-            QCOMPARE(result.controllerId, SDL_JoystickID(70));
-            QVERIFY(handler.sendNeutralControllerInput(result.controllerId));
-        }
+        QCOMPARE(result.disposition, DeckInputRouter::Disposition::Passthrough);
+        handler.handleControllerButtonEvent(&event.cbutton);
     }
 
-    QCOMPARE(handler.m_GamepadState[0].buttons, 0);
-    QCOMPARE(handler.m_GamepadState[1].buttons, A_FLAG);
-    QVERIFY(handler.m_RemoteInputState.hasKeysDown());
-    QVERIFY(handler.m_RemoteInputState.hasMouseButtonsDown());
-    const int recordsBeforeTails = InputIntegrationStubs::controllers().size();
     for (Uint8 button : chord) {
         SDL_Event event {};
         event.type = SDL_CONTROLLERBUTTONUP;
@@ -387,12 +550,30 @@ void InputIntegrationTest::statsChordRoutesBeforeTheRemoteHandlerAndConsumesRele
         event.cbutton.button = button;
         event.cbutton.state = SDL_RELEASED;
         QCOMPARE(router.route(event).disposition,
-                 DeckInputRouter::Disposition::Consumed);
+                 DeckInputRouter::Disposition::Passthrough);
+        handler.handleControllerButtonEvent(&event.cbutton);
     }
-    QCOMPARE(InputIntegrationStubs::controllers().size(), recordsBeforeTails);
 
+    const auto mouseButtons = InputIntegrationStubs::mouseButtons();
+    QCOMPARE(mouseButtons.size(), 7);
+    QCOMPARE(mouseButtons.at(0).button, BUTTON_RIGHT);
+    QCOMPARE(mouseButtons.at(0).action, int(BUTTON_ACTION_PRESS));
+    QCOMPARE(mouseButtons.at(1).button, BUTTON_X1);
+    QCOMPARE(mouseButtons.at(1).action, int(BUTTON_ACTION_PRESS));
+    QCOMPARE(mouseButtons.at(2).button, BUTTON_X2);
+    QCOMPARE(mouseButtons.at(2).action, int(BUTTON_ACTION_PRESS));
+    QCOMPARE(mouseButtons.at(3).button, BUTTON_MIDDLE);
+    QCOMPARE(mouseButtons.at(3).action, int(BUTTON_ACTION_PRESS));
+    QCOMPARE(mouseButtons.at(4).button, BUTTON_X1);
+    QCOMPARE(mouseButtons.at(4).action, int(BUTTON_ACTION_RELEASE));
+    QCOMPARE(mouseButtons.at(5).button, BUTTON_X2);
+    QCOMPARE(mouseButtons.at(5).action, int(BUTTON_ACTION_RELEASE));
+    QCOMPARE(mouseButtons.at(6).button, BUTTON_MIDDLE);
+    QCOMPARE(mouseButtons.at(6).action, int(BUTTON_ACTION_RELEASE));
+    QVERIFY(handler.m_RemoteInputState.hasMouseButtonsDown());
+
+    handler.m_GamepadState[0].mouseEmulationTimer = 0;
     handler.m_GamepadState[0].controller = nullptr;
-    handler.m_GamepadState[1].controller = nullptr;
 }
 
 void InputIntegrationTest::routerRunsBeforeDeviceAndBatteryHousekeeping()
@@ -402,10 +583,17 @@ void InputIntegrationTest::routerRunsBeforeDeviceAndBatteryHousekeeping()
     SdlInputHandler handler(preferences, 1920, 1080);
     handler.m_GamepadMask = 1;
     GamepadState& state = handler.m_GamepadState[0];
-    state.inputHandler = &handler;
     state.jsId = 31;
     state.index = 0;
+    state.lsX = 32767;
     handler.m_RemoteInputState.controllerAllocated(0);
+    handler.startInputTimer(state.mouseEmulationTimer,
+                            state.mouseEmulationTimerToken,
+                            100000,
+                            SdlInputHandler::InputTimerAction::MouseEmulation,
+                            state.jsId,
+                            true);
+    const uint32_t removedTimerToken = state.mouseEmulationTimerToken;
     DeckInputRouter router;
     router.openForKeyboard();
 
@@ -435,6 +623,9 @@ void InputIntegrationTest::routerRunsBeforeDeviceAndBatteryHousekeeping()
     QCOMPARE(InputIntegrationStubs::controllers().size(), 1);
     QCOMPARE(InputIntegrationStubs::controllers().at(0).buttons, 0);
     QCOMPARE(state.jsId, SDL_JoystickID(0));
+    QVERIFY(!handler.m_InputTimerRequests.contains(removedTimerToken));
+    QVERIFY(handler.handleInputTimerEvent(inputTimerEvent(removedTimerToken)));
+    QCOMPARE(InputIntegrationStubs::mouseMoveCount(), 0);
 }
 
 REGISTER_PERIGEE_TEST(InputIntegrationTest);

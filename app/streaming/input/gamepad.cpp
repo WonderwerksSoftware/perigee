@@ -9,15 +9,6 @@
 // How long the Start button must be pressed to toggle mouse emulation
 #define MOUSE_EMULATION_LONG_PRESS_TIME 750
 
-// How long between polling the gamepad to send virtual mouse input
-#define MOUSE_EMULATION_POLLING_INTERVAL 50
-
-// Determines how fast the mouse will move each interval
-#define MOUSE_EMULATION_MOTION_MULTIPLIER 4
-
-// Determines the maximum motion amount before allowing movement
-#define MOUSE_EMULATION_DEADZONE 2
-
 // Haptic capabilities (in addition to those from SDL_HapticQuery())
 #define ML_HAPTIC_GC_RUMBLE         (1U << 16)
 #define ML_HAPTIC_SIMPLE_RUMBLE     (1U << 17)
@@ -155,43 +146,7 @@ void SdlInputHandler::sendGamepadBatteryState(GamepadState* state, SDL_JoystickP
 
 Uint32 SdlInputHandler::mouseEmulationTimerCallback(Uint32 interval, void *param)
 {
-    auto gamepad = reinterpret_cast<GamepadState*>(param);
-    if (gamepad->inputHandler == nullptr) {
-        return interval;
-    }
-    SdlInputHandler* handler = gamepad->inputHandler;
-    std::lock_guard<std::recursive_mutex> lock(handler->m_RemoteInputMutex);
-    if (handler->m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
-        return interval;
-    }
-    int rawX;
-    int rawY;
-
-    // Determine which analog stick is currently receiving the strongest input
-    if (abs(gamepad->lsX) + abs(gamepad->lsY) > abs(gamepad->rsX) + abs(gamepad->rsY)) {
-        rawX = gamepad->lsX;
-        rawY = -gamepad->lsY;
-    }
-    else {
-        rawX = gamepad->rsX;
-        rawY = -gamepad->rsY;
-    }
-
-    float deltaX;
-    float deltaY;
-
-    // Produce a base vector for mouse movement with increased speed as we deviate further from center
-    deltaX = qPow(rawX / 32766.0f * MOUSE_EMULATION_MOTION_MULTIPLIER, 3);
-    deltaY = qPow(rawY / 32766.0f * MOUSE_EMULATION_MOTION_MULTIPLIER, 3);
-
-    // Enforce deadzones
-    deltaX = qAbs(deltaX) > MOUSE_EMULATION_DEADZONE ? deltaX - MOUSE_EMULATION_DEADZONE : 0;
-    deltaY = qAbs(deltaY) > MOUSE_EMULATION_DEADZONE ? deltaY - MOUSE_EMULATION_DEADZONE : 0;
-
-    if (deltaX != 0 || deltaY != 0) {
-        LiSendMouseMoveEvent((short)deltaX, (short)deltaY);
-    }
-
+    pushInputTimerEvent(param);
     return interval;
 }
 
@@ -340,11 +295,8 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         if (event->button == SDL_CONTROLLER_BUTTON_START) {
             if (SDL_GetTicks() - state->lastStartDownTime > MOUSE_EMULATION_LONG_PRESS_TIME) {
                 if (state->mouseEmulationTimer != 0) {
-                    const SDL_TimerID timer = state->mouseEmulationTimer;
-                    state->mouseEmulationTimer = 0;
-                    lock.unlock();
-                    SDL_RemoveTimer(timer);
-                    lock.lock();
+                    cancelInputTimer(state->mouseEmulationTimer,
+                                     state->mouseEmulationTimerToken);
                     if (m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
                         return;
                     }
@@ -357,11 +309,21 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
                     // Send the start button up event to the host, since we won't do it below
                     sendGamepadState(state);
 
-                    state->mouseEmulationTimer = SDL_AddTimer(MOUSE_EMULATION_POLLING_INTERVAL, SdlInputHandler::mouseEmulationTimerCallback, state);
-
-                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                                "Mouse emulation active");
-                    Session::get()->notifyMouseEmulationMode(true);
+                    if (startInputTimer(state->mouseEmulationTimer,
+                                        state->mouseEmulationTimerToken,
+                                        MouseEmulationPollingInterval,
+                                        InputTimerAction::MouseEmulation,
+                                        state->jsId,
+                                        true)) {
+                        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                    "Mouse emulation active");
+                        Session::get()->notifyMouseEmulationMode(true);
+                    }
+                    else {
+                        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                                     "Failed to start mouse emulation timer: %s",
+                                     SDL_GetError());
+                    }
                 }
             }
         }
@@ -406,8 +368,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
                     "Detected stats toggle gamepad combo");
 
         // Toggle the stats overlay
-        Session::get()->getOverlayManager().setOverlayState(Overlay::OverlayDebug,
-                                                            !Session::get()->getOverlayManager().isOverlayEnabled(Overlay::OverlayDebug));
+        Session::get()->toggleStatsOverlay();
 
         // Clear buttons down on this gamepad
         sendNeutralControllerInput(state->jsId);
@@ -594,7 +555,6 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
         }
 
         state->controller = controller;
-        state->inputHandler = this;
         state->jsId = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(state->controller));
         m_RemoteInputState.controllerAllocated(state->index);
 
@@ -761,11 +721,8 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
         if (state != NULL) {
             if (state->mouseEmulationTimer != 0) {
                 Session::get()->notifyMouseEmulationMode(false);
-                const SDL_TimerID timer = state->mouseEmulationTimer;
-                state->mouseEmulationTimer = 0;
-                lock.unlock();
-                SDL_RemoveTimer(timer);
-                lock.lock();
+                cancelInputTimer(state->mouseEmulationTimer,
+                                 state->mouseEmulationTimerToken);
                 state = findStateForGamepad(event->which);
                 if (state == nullptr) {
                     return;

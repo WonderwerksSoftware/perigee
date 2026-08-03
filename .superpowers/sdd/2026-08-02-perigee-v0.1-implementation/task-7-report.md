@@ -23,9 +23,9 @@ Starting HEAD: `732735ebfca30d7323e86bb6fd52a135540af477`
   Opening and closing Deck now neutralize host state idempotently, snapshot and
   restore capture policy, and cancel or gate asynchronous touch/gamepad-mouse
   callbacks that could otherwise recreate remote input after neutralization.
-- Added a dirty-only Deck renderer pump to the SDL loop. It delivers only queued
-  meta-call work, starts/stops SDL text input with search focus, and does not
-  call unrestricted `QCoreApplication::processEvents()`.
+- Added a dirty-only Deck renderer pump to the SDL loop. It drains only the
+  Deck controller's completion inbox, starts/stops SDL text input with search
+  focus, and does not call unrestricted `QCoreApplication::processEvents()`.
 
 ## Changed files
 
@@ -36,8 +36,10 @@ Starting HEAD: `732735ebfca30d7323e86bb6fd52a135540af477`
 - `app/perigee/deck/decksurfacerenderer.{h,cpp}`
 - `app/streaming/input/input.{h,cpp}`
 - `app/streaming/input/remoteinputstate.{h,cpp}`
+- `app/streaming/sdleventcodes.h`
 - `app/streaming/input/{keyboard,gamepad,mouse,abstouch,reltouch}.cpp`
 - `app/streaming/session.{h,cpp}`
+- `app/streaming/video/decoder.h`
 - `app/app.pro`
 - `tests/test_deckinputrouter.cpp`
 - `tests/test_{deckinputdelivery,deckuipump,inputintegration}.cpp`
@@ -233,16 +235,91 @@ This fix round closes all eight:
 
 ### Lock and lifetime audit
 
-- The recursive mutex is required only for same-thread composition: controller
-  handlers call tracked mouse helpers and legacy chords call targeted
-  controller neutralization. Cross-thread timer serialization still behaves as
-  a normal exclusive mutex.
-- No path waits in `SDL_RemoveTimer()` while holding the transaction lock.
-  Controller mouse-timer shutdown clears its timer ID, unlocks, removes the
-  timer, relocks, and rechecks Deck ownership before continuing.
-- Gamepad timer callback parameters point into the fixed-lifetime
-  `m_GamepadState` array. Device removal waits for the timer before clearing its
-  slot; destruction removes timers before the handler storage disappears.
-- Every `RemoteInputState` QSet access and every controller slot mutation that
-  can race a timer callback is protected by the same mutex. The 25-process
-  concurrency stress gate passed without hangs, late sends, or ordering drift.
+- The recursive mutex remains for same-thread tracked-send composition and
+  ownership neutralization. SDL timer callbacks no longer enter that mutex or
+  read handler state; they only enqueue an opaque token.
+- No timer callback parameter points to `SdlInputHandler` or `GamepadState`.
+  Therefore `SDL_RemoveTimer()` does not need to provide callback joining for
+  handler or controller storage to remain safe.
+- The token-to-action `QHash`, touch state, gamepad axes, and remote sends are
+  read or mutated only from the SDL event owner. The timer thread touches only
+  SDL's thread-safe event queue and a by-value 32-bit token.
+- Cancellation and device removal erase the token before timer removal. Deck
+  takeover and release rotate active repeating tokens, and handler replacement
+  uses the process-global token sequence, so already-queued stale events are
+  ignored by the current handler.
+
+## Independent review fix round 2
+
+Review starting HEAD: `286512a7d72bffc61114e98f9ecdadec18a812a0`
+
+The second independent review found a teardown use-after-free boundary, an
+unsynchronized drag callback, a closed-Deck stats-chord release-tail bug, and a
+stale report claim. This round closes all four and audits the surrounding timer
+and SDL-event lifecycle:
+
+1. Every touch and gamepad-mouse timer callback now does exactly one operation:
+   enqueue app-owned `SDL_USEREVENT` code 106 with an opaque 32-bit token.
+   Callbacks never dereference the handler, controller state, or touch state and
+   never send remote input. A blocked real `SDL_AddTimer` callback can remain in
+   `SDL_PushEvent` while the handler destructor completes safely.
+2. The live handler owns the token-to-typed-action table. One-shot dispatch,
+   cancellation, controller removal, destruction, Deck takeover, and Deck
+   release erase or rotate tokens before removal. Old tokens are rejected after
+   takeover, after release, and after complete handler replacement. A filtered
+   or full SDL event queue makes a one-shot timer retry instead of silently
+   losing a required release.
+3. Gamepad-mouse axis selection and movement calculation now run on the SDL
+   event thread from named polling, multiplier, and deadzone constants. Active
+   mode survives a successful Deck token rotation without false UI toggles.
+   `SDL_AddTimer` failure clears the token and does not advertise mouse mode;
+   restart failure removes the previously active notification.
+4. The stats chord is Deck-local only while Deck is open. With Deck closed, all
+   four button-down events and their button-up tails pass through the ordinary
+   `SdlInputHandler`, balancing X1, X2, and middle mouse presses while preserving
+   an unrelated held physical right mouse button.
+5. App-owned SDL user-event codes are centralized in
+   `streaming/sdleventcodes.h`: frame-ready remains 0, existing session codes
+   remain 100 through 105, and the input timer uses 106. SDL2 and sdl2-compat
+   therefore share one explicit, collision-free code namespace.
+6. The report summary now accurately says the UI pump drains only the Deck
+   completion inbox. It does not claim delivery of broad queued MetaCall work.
+
+### Fix-round 2 RED/GREEN evidence
+
+- Timer callback boundary RED: the production callback test blocked in a
+  remote send (`RemoteSend`) instead of the required SDL event enqueue
+  (`InputEventPush`). The teardown variant reproduced the same forbidden side
+  effect. GREEN: every timer callback blocks only at `SDL_PushEvent` and records
+  no mouse send or movement.
+- Closed stats chord RED: the router consumed the final X down and its release
+  tail while closed. GREEN: closed down/up events all pass through; open stats
+  remains local and consumed.
+- Focused final results: `InputIntegrationTest` 17 passed, 0 failed and
+  `DeckInputRouterTest` 13 passed, 0 failed.
+
+### Fix-round 2 audit and verification
+
+- Token map ownership: every `QHash` insertion, lookup, and erasure runs on the
+  SDL owner/destruction path. Timer threads only call `SDL_PushEvent`; there is
+  no cross-thread Qt container access.
+- Lifetime: the Session event loop dispatches input timer events only while its
+  `m_InputHandler` exists. Tokens are nonzero, process-global, and monotonically
+  generated; wrap skips zero and any token active in the current table. The
+  remaining 32-bit wrap assumption is that one queued SDL event cannot survive
+  more than 2^32 later timer generations, which is far beyond the queue's
+  operational lifetime.
+- Debug application link:
+  `CCACHE_DIR="$PWD/build-tests/.ccache" make -C build-tests/app -f Makefile.Debug -j4`
+  — exit 0 and linked `moonlight` after the final source change.
+- Canonical surfaceless full suite:
+  `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=opengl QT_OPENGL=desktop LIBGL_ALWAYS_SOFTWARE=1 EGL_PLATFORM=surfaceless ./build-tests/tests/perigee-tests -silent`
+  — 125 passed, 0 failed.
+- Live Wayland full suite:
+  `QT_QPA_PLATFORM=wayland SDL_VIDEODRIVER=wayland ./build-tests/tests/perigee-tests -silent`
+  — 125 passed, 0 failed.
+- Focused stress: 25 fresh-process repetitions of callback isolation, real
+  callback teardown, ownership ordering, takeover/release token rotation,
+  main-thread gamepad-mouse dispatch, timer-add failure, handler replacement,
+  and closed stats release balance — 250 passed, 0 failed.
+- `git diff --check` — clean.

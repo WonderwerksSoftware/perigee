@@ -220,7 +220,7 @@ DeckInputRouter::Result DeckInputRouter::routeControllerButton(
     }
 
     if (pressed && !wasDown && !m_ChordTriggered.contains(event.which)) {
-        if (down == chordMask(SDL_CONTROLLER_BUTTON_X)) {
+        if (m_Open && down == chordMask(SDL_CONTROLLER_BUTTON_X)) {
             m_ChordTriggered.insert(event.which);
             m_ButtonReleaseTail[event.which] |= down;
             Result result;

@@ -1,6 +1,7 @@
 #include "input_integration_stubs.h"
 
 #include "streaming/session.h"
+#include "streaming/sdleventcodes.h"
 #include "streaming/streamutils.h"
 #include "settings/mappingmanager.h"
 #include "utils.h"
@@ -21,11 +22,16 @@ QVector<InputIntegrationStubs::ControllerRecord> g_Controllers;
 QVector<InputIntegrationStubs::BatteryRecord> g_Batteries;
 QStringList g_Ordering;
 int g_MouseMoveCount = 0;
+QVector<bool> g_MouseEmulationNotifications;
 bool g_RecordOrdering = false;
 bool g_BlockMouseButton = false;
 bool g_BlockMouseMove = false;
+bool g_BlockInputTimerPush = false;
 bool g_SendBlocked = false;
+bool g_InputTimerPushBlocked = false;
 bool g_ReleaseBlockedSend = false;
+bool g_FailNextTimerAdd = false;
+bool g_FailNextInputTimerPush = false;
 QWaitCondition g_SendCondition;
 
 }
@@ -48,6 +54,50 @@ extern "C" int __wrap_SDL_SetRelativeMouseMode(SDL_bool enabled)
     return __real_SDL_SetRelativeMouseMode(enabled);
 }
 
+extern "C" int __real_SDL_PushEvent(SDL_Event* event);
+extern "C" int __wrap_SDL_PushEvent(SDL_Event* event)
+{
+    {
+        QMutexLocker locker(&g_Mutex);
+        if (g_FailNextInputTimerPush && event != nullptr &&
+                event->type == SDL_USEREVENT &&
+                event->user.code == SDL_CODE_INPUT_TIMER) {
+            g_FailNextInputTimerPush = false;
+            return -1;
+        }
+        if (g_BlockInputTimerPush && event != nullptr &&
+                event->type == SDL_USEREVENT &&
+                event->user.code == SDL_CODE_INPUT_TIMER) {
+            g_BlockInputTimerPush = false;
+            g_InputTimerPushBlocked = true;
+            g_SendCondition.wakeAll();
+            while (!g_ReleaseBlockedSend) {
+                g_SendCondition.wait(&g_Mutex);
+            }
+            g_InputTimerPushBlocked = false;
+            g_SendCondition.wakeAll();
+        }
+    }
+    return __real_SDL_PushEvent(event);
+}
+
+extern "C" SDL_TimerID __real_SDL_AddTimer(Uint32 interval,
+                                             SDL_TimerCallback callback,
+                                             void* param);
+extern "C" SDL_TimerID __wrap_SDL_AddTimer(Uint32 interval,
+                                             SDL_TimerCallback callback,
+                                             void* param)
+{
+    {
+        QMutexLocker locker(&g_Mutex);
+        if (g_FailNextTimerAdd) {
+            g_FailNextTimerAdd = false;
+            return 0;
+        }
+    }
+    return __real_SDL_AddTimer(interval, callback, param);
+}
+
 namespace InputIntegrationStubs {
 
 void reset()
@@ -60,11 +110,16 @@ void reset()
     g_Batteries.clear();
     g_Ordering.clear();
     g_MouseMoveCount = 0;
+    g_MouseEmulationNotifications.clear();
     g_RecordOrdering = false;
     g_BlockMouseButton = false;
     g_BlockMouseMove = false;
+    g_BlockInputTimerPush = false;
     g_SendBlocked = false;
+    g_InputTimerPushBlocked = false;
     g_ReleaseBlockedSend = false;
+    g_FailNextTimerAdd = false;
+    g_FailNextInputTimerPush = false;
 }
 
 QVector<MouseButtonRecord> mouseButtons()
@@ -103,6 +158,12 @@ int mouseMoveCount()
     return g_MouseMoveCount;
 }
 
+QVector<bool> mouseEmulationNotifications()
+{
+    QMutexLocker locker(&g_Mutex);
+    return g_MouseEmulationNotifications;
+}
+
 void beginOrderingObservation()
 {
     QMutexLocker locker(&g_Mutex);
@@ -130,6 +191,27 @@ void blockNextMouseMoveSend()
     g_ReleaseBlockedSend = false;
 }
 
+void blockNextTimerCallbackSideEffect()
+{
+    QMutexLocker locker(&g_Mutex);
+    g_BlockMouseButton = true;
+    g_BlockMouseMove = true;
+    g_BlockInputTimerPush = true;
+    g_ReleaseBlockedSend = false;
+}
+
+void failNextTimerAdd()
+{
+    QMutexLocker locker(&g_Mutex);
+    g_FailNextTimerAdd = true;
+}
+
+void failNextInputTimerPush()
+{
+    QMutexLocker locker(&g_Mutex);
+    g_FailNextInputTimerPush = true;
+}
+
 bool waitUntilSendBlocked(int timeoutMs)
 {
     QMutexLocker locker(&g_Mutex);
@@ -137,6 +219,30 @@ bool waitUntilSendBlocked(int timeoutMs)
         g_SendCondition.wait(&g_Mutex, timeoutMs);
     }
     return g_SendBlocked;
+}
+
+TimerCallbackBlock waitUntilTimerCallbackBlocked(int timeoutMs)
+{
+    QMutexLocker locker(&g_Mutex);
+    if (!g_SendBlocked && !g_InputTimerPushBlocked) {
+        g_SendCondition.wait(&g_Mutex, timeoutMs);
+    }
+    if (g_InputTimerPushBlocked) {
+        return TimerCallbackBlock::InputEventPush;
+    }
+    if (g_SendBlocked) {
+        return TimerCallbackBlock::RemoteSend;
+    }
+    return TimerCallbackBlock::None;
+}
+
+bool waitUntilTimerCallbackReleased(int timeoutMs)
+{
+    QMutexLocker locker(&g_Mutex);
+    if (g_InputTimerPushBlocked) {
+        g_SendCondition.wait(&g_Mutex, timeoutMs);
+    }
+    return !g_InputTimerPushBlocked;
 }
 
 void releaseBlockedSend()
@@ -256,6 +362,11 @@ void StreamUtils::scaleSourceToDestinationSurface(SDL_Rect* src, SDL_Rect* dst)
 }
 
 Session* Session::s_ActiveSession = nullptr;
-void Session::notifyMouseEmulationMode(bool) {}
+void Session::notifyMouseEmulationMode(bool enabled)
+{
+    QMutexLocker locker(&g_Mutex);
+    g_MouseEmulationNotifications.append(enabled);
+}
+void Session::toggleStatsOverlay() {}
 void Session::toggleFullscreen() {}
 void Session::setShouldExit(bool) {}

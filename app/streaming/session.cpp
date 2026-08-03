@@ -5,6 +5,7 @@
 #include "perigee/deck/deckcontroller.h"
 #include "perigee/deck/decksurfacerenderer.h"
 #include "perigee/input/deckinputrouter.h"
+#include "streaming/sdleventcodes.h"
 
 #include <Limelight.h>
 #include "SDL_compat.h"
@@ -24,13 +25,6 @@
 #else
 #define ICON_SIZE 64
 #endif
-
-#define SDL_CODE_FLUSH_WINDOW_EVENT_BARRIER 100
-#define SDL_CODE_GAMECONTROLLER_RUMBLE 101
-#define SDL_CODE_GAMECONTROLLER_RUMBLE_TRIGGERS 102
-#define SDL_CODE_GAMECONTROLLER_SET_MOTION_EVENT_STATE 103
-#define SDL_CODE_GAMECONTROLLER_SET_CONTROLLER_LED 104
-#define SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS 105
 
 #include <openssl/rand.h>
 
@@ -1078,9 +1072,7 @@ void Session::applyDeckInputResult(const DeckInputRouter::Result& result)
         break;
     case DeckInputRouter::Action::ToggleStats:
         m_InputHandler->sendNeutralControllerInput(result.controllerId);
-        m_OverlayManager.setOverlayState(
-            Overlay::OverlayDebug,
-            !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
+        toggleStatsOverlay();
         break;
     case DeckInputRouter::Action::Key:
     case DeckInputRouter::Action::TextInput:
@@ -1764,6 +1756,13 @@ void Session::notifyMouseEmulationMode(bool enabled)
     }
 }
 
+void Session::toggleStatsOverlay()
+{
+    m_OverlayManager.setOverlayState(
+        Overlay::OverlayDebug,
+        !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
+}
+
 class AsyncConnectionStartThread : public QThread
 {
 public:
@@ -2254,6 +2253,9 @@ void Session::exec()
             case SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS:
                 m_InputHandler->setAdaptiveTriggers((uint16_t)(uintptr_t)event.user.data1,
                                                     (DualSenseOutputReport *)event.user.data2);
+                break;
+            case SDL_CODE_INPUT_TIMER:
+                m_InputHandler->handleInputTimerEvent(event.user);
                 break;
             default:
                 SDL_assert(false);

@@ -4,7 +4,9 @@ TEMPLATE = app
 TARGET = perigee-tests
 CONFIG += c++17 testcase link_pkgconfig
 QMAKE_LFLAGS += -Wl,--wrap=SDL_GetNumTouchFingers \
-    -Wl,--wrap=SDL_SetRelativeMouseMode
+    -Wl,--wrap=SDL_SetRelativeMouseMode \
+    -Wl,--wrap=SDL_PushEvent \
+    -Wl,--wrap=SDL_AddTimer
 
 include(../globaldefs.pri)
 

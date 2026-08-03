@@ -1,6 +1,7 @@
 #include <Limelight.h>
 #include "SDL_compat.h"
 #include "streaming/session.h"
+#include "streaming/sdleventcodes.h"
 #include "settings/mappingmanager.h"
 #include "path.h"
 #include "utils.h"
@@ -8,6 +9,24 @@
 #include <QtGlobal>
 #include <QDir>
 #include <QGuiApplication>
+#include <QtMath>
+
+#include <atomic>
+
+namespace {
+
+std::atomic_uint32_t s_NextInputTimerToken {1};
+
+uint32_t nextInputTimerToken()
+{
+    uint32_t token;
+    do {
+        token = s_NextInputTimerToken.fetch_add(1, std::memory_order_relaxed);
+    } while (token == 0);
+    return token;
+}
+
+}
 
 SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, int streamHeight)
     : m_Window(nullptr),
@@ -25,14 +44,18 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
       m_CaptureSystemKeysMode(prefs.captureSysKeysMode),
       m_MouseCursorCapturedVisibilityState(SDL_DISABLE),
       m_LongPressTimer(0),
+      m_LongPressTimerToken(0),
       m_StreamWidth(streamWidth),
       m_StreamHeight(streamHeight),
       m_AbsoluteMouseMode(prefs.absoluteMouseMode),
       m_AbsoluteTouchMode(prefs.absoluteTouchMode),
       m_DisabledTouchFeedback(false),
       m_LeftButtonReleaseTimer(0),
+      m_LeftButtonReleaseTimerToken(0),
       m_RightButtonReleaseTimer(0),
+      m_RightButtonReleaseTimerToken(0),
       m_DragTimer(0),
+      m_DragTimerToken(0),
       m_DragButton(0),
       m_NumFingersDown(0)
 {
@@ -222,7 +245,8 @@ SdlInputHandler::~SdlInputHandler()
     for (int i = 0; i < MAX_GAMEPADS; i++) {
         if (m_GamepadState[i].mouseEmulationTimer != 0) {
             Session::get()->notifyMouseEmulationMode(false);
-            SDL_RemoveTimer(m_GamepadState[i].mouseEmulationTimer);
+            cancelInputTimer(m_GamepadState[i].mouseEmulationTimer,
+                             m_GamepadState[i].mouseEmulationTimerToken);
         }
 #if !SDL_VERSION_ATLEAST(2, 0, 9)
         if (m_GamepadState[i].haptic != nullptr) {
@@ -234,10 +258,11 @@ SdlInputHandler::~SdlInputHandler()
         }
     }
 
-    SDL_RemoveTimer(m_LongPressTimer);
-    SDL_RemoveTimer(m_LeftButtonReleaseTimer);
-    SDL_RemoveTimer(m_RightButtonReleaseTimer);
-    SDL_RemoveTimer(m_DragTimer);
+    cancelInputTimer(m_LongPressTimer, m_LongPressTimerToken);
+    cancelInputTimer(m_LeftButtonReleaseTimer, m_LeftButtonReleaseTimerToken);
+    cancelInputTimer(m_RightButtonReleaseTimer, m_RightButtonReleaseTimerToken);
+    cancelInputTimer(m_DragTimer, m_DragTimerToken);
+    m_InputTimerRequests.clear();
 
 #if !SDL_VERSION_ATLEAST(2, 0, 9)
     SDL_QuitSubSystem(SDL_INIT_HAPTIC);
@@ -271,6 +296,145 @@ void SdlInputHandler::setWindow(SDL_Window *window)
     m_Window = window;
 }
 
+bool SdlInputHandler::startInputTimer(SDL_TimerID& timer, uint32_t& token,
+                                      Uint32 interval, InputTimerAction action,
+                                      SDL_JoystickID controllerId,
+                                      bool repeating)
+{
+    cancelInputTimer(timer, token);
+    do {
+        token = nextInputTimerToken();
+    } while (m_InputTimerRequests.contains(token));
+    m_InputTimerRequests.insert(token, {action, controllerId, repeating});
+    const SDL_TimerCallback callback = repeating
+        ? mouseEmulationTimerCallback : longPressTimerCallback;
+    timer = SDL_AddTimer(interval, callback,
+                         reinterpret_cast<void*>(uintptr_t(token)));
+    if (timer == 0) {
+        m_InputTimerRequests.remove(token);
+        token = 0;
+    }
+    return timer != 0;
+}
+
+void SdlInputHandler::cancelInputTimer(SDL_TimerID& timer, uint32_t& token)
+{
+    if (token != 0) {
+        m_InputTimerRequests.remove(token);
+        token = 0;
+    }
+    if (timer != 0) {
+        const SDL_TimerID cancelledTimer = timer;
+        timer = 0;
+        SDL_RemoveTimer(cancelledTimer);
+    }
+}
+
+bool SdlInputHandler::pushInputTimerEvent(void* param)
+{
+    SDL_Event event {};
+    event.type = SDL_USEREVENT;
+    event.user.type = SDL_USEREVENT;
+    event.user.code = SDL_CODE_INPUT_TIMER;
+    event.user.data1 = param;
+    return SDL_PushEvent(&event) == 1;
+}
+
+bool SdlInputHandler::handleInputTimerEvent(const SDL_UserEvent& event)
+{
+    if (event.type != SDL_USEREVENT || event.code != SDL_CODE_INPUT_TIMER) {
+        return false;
+    }
+
+    const uint32_t token = uint32_t(uintptr_t(event.data1));
+    const auto it = m_InputTimerRequests.constFind(token);
+    if (it == m_InputTimerRequests.cend()) {
+        return true;
+    }
+    const InputTimerRequest request = *it;
+    if (!request.repeating) {
+        m_InputTimerRequests.remove(token);
+        if (m_LongPressTimerToken == token) {
+            m_LongPressTimer = 0;
+            m_LongPressTimerToken = 0;
+        }
+        else if (m_LeftButtonReleaseTimerToken == token) {
+            m_LeftButtonReleaseTimer = 0;
+            m_LeftButtonReleaseTimerToken = 0;
+        }
+        else if (m_RightButtonReleaseTimerToken == token) {
+            m_RightButtonReleaseTimer = 0;
+            m_RightButtonReleaseTimerToken = 0;
+        }
+        else if (m_DragTimerToken == token) {
+            m_DragTimer = 0;
+            m_DragTimerToken = 0;
+        }
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (!m_LocalOverlayInputActive.load(std::memory_order_acquire)) {
+        dispatchInputTimer(request);
+    }
+    return true;
+}
+
+void SdlInputHandler::dispatchInputTimer(const InputTimerRequest& request)
+{
+    switch (request.action) {
+    case InputTimerAction::LongPress:
+        sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+        sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
+        break;
+    case InputTimerAction::ReleaseLeftButton:
+        sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+        break;
+    case InputTimerAction::ReleaseRightButton:
+        sendTrackedMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+        break;
+    case InputTimerAction::Drag:
+        if (m_NumFingersDown == 2) {
+            m_DragButton = BUTTON_RIGHT;
+        }
+        else if (m_NumFingersDown == 1) {
+            m_DragButton = BUTTON_LEFT;
+        }
+        if (m_DragButton != 0) {
+            sendTrackedMouseButtonEvent(BUTTON_ACTION_PRESS, m_DragButton);
+        }
+        break;
+    case InputTimerAction::MouseEmulation: {
+        GamepadState* gamepad = findStateForGamepad(request.controllerId);
+        if (gamepad == nullptr || gamepad->mouseEmulationTimer == 0) {
+            break;
+        }
+        int rawX;
+        int rawY;
+        if (qAbs(gamepad->lsX) + qAbs(gamepad->lsY) >
+                qAbs(gamepad->rsX) + qAbs(gamepad->rsY)) {
+            rawX = gamepad->lsX;
+            rawY = -gamepad->lsY;
+        }
+        else {
+            rawX = gamepad->rsX;
+            rawY = -gamepad->rsY;
+        }
+        float deltaX = qPow(rawX / 32766.0f *
+                                MouseEmulationMotionMultiplier, 3);
+        float deltaY = qPow(rawY / 32766.0f *
+                                MouseEmulationMotionMultiplier, 3);
+        deltaX = qAbs(deltaX) > MouseEmulationDeadzone
+            ? deltaX - MouseEmulationDeadzone : 0;
+        deltaY = qAbs(deltaY) > MouseEmulationDeadzone
+            ? deltaY - MouseEmulationDeadzone : 0;
+        if (deltaX != 0 || deltaY != 0) {
+            LiSendMouseMoveEvent(short(deltaX), short(deltaY));
+        }
+        break;
+    }
+    }
+}
+
 void SdlInputHandler::raiseAllKeys()
 {
     std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
@@ -297,25 +461,36 @@ CaptureSnapshot SdlInputHandler::beginLocalOverlayInput()
     m_DeferredCaptureActive.reset();
     m_LocalOverlayInputActive.store(true, std::memory_order_release);
 
-    // Touch gestures can finish from SDL timer threads after their last event.
-    // Stop those callbacks at the ownership boundary so they cannot recreate
-    // remote button state after the neutral packet has been sent.
-    SDL_RemoveTimer(m_LongPressTimer);
-    SDL_RemoveTimer(m_LeftButtonReleaseTimer);
-    SDL_RemoveTimer(m_RightButtonReleaseTimer);
-    SDL_RemoveTimer(m_DragTimer);
-    m_LongPressTimer = 0;
-    m_LeftButtonReleaseTimer = 0;
-    m_RightButtonReleaseTimer = 0;
-    m_DragTimer = 0;
+    // Rotate or erase every timer token at the ownership boundary. Any timer
+    // event already queued with an old token then becomes harmless.
+    cancelInputTimer(m_LongPressTimer, m_LongPressTimerToken);
+    cancelInputTimer(m_LeftButtonReleaseTimer, m_LeftButtonReleaseTimerToken);
+    cancelInputTimer(m_RightButtonReleaseTimer, m_RightButtonReleaseTimerToken);
+    cancelInputTimer(m_DragTimer, m_DragTimerToken);
+    for (int i = 0; i < MAX_GAMEPADS; ++i) {
+        GamepadState& state = m_GamepadState[i];
+        if (state.mouseEmulationTimer != 0) {
+            const SDL_JoystickID controllerId = state.jsId;
+            cancelInputTimer(state.mouseEmulationTimer,
+                             state.mouseEmulationTimerToken);
+            if (!startInputTimer(state.mouseEmulationTimer,
+                                 state.mouseEmulationTimerToken,
+                                 MouseEmulationPollingInterval,
+                                 InputTimerAction::MouseEmulation,
+                                 controllerId,
+                                 true)) {
+                Session::get()->notifyMouseEmulationMode(false);
+            }
+        }
+    }
     m_DragButton = 0;
     m_NumFingersDown = 0;
     SDL_zero(m_LastTouchDownEvent);
     SDL_zero(m_LastTouchUpEvent);
     SDL_zero(m_TouchDownEvent);
 
-    // Timer removal prevents callbacks that have not started. The synchronized
-    // neutral send waits for any callback already inside a remote-send section.
+    // Timer callbacks only enqueue opaque tokens. All input-state reads and
+    // remote sends happen below on the SDL event thread.
     sendNeutralRemoteInput();
     applyCaptureActive(false);
     return snapshot;
@@ -331,6 +506,24 @@ void SdlInputHandler::endLocalOverlayInput(CaptureSnapshot snapshot,
     if (!keepReleased && snapshot.keyboardCaptured &&
             !m_KeyboardCaptureActive) {
         updateKeyboardGrabState();
+    }
+    // Invalidate mouse events produced while Deck owned input before reopening
+    // the remote-input gate. A fresh timer keeps an already-active mode active.
+    for (int i = 0; i < MAX_GAMEPADS; ++i) {
+        GamepadState& state = m_GamepadState[i];
+        if (state.mouseEmulationTimer != 0) {
+            const SDL_JoystickID controllerId = state.jsId;
+            cancelInputTimer(state.mouseEmulationTimer,
+                             state.mouseEmulationTimerToken);
+            if (!startInputTimer(state.mouseEmulationTimer,
+                                 state.mouseEmulationTimerToken,
+                                 MouseEmulationPollingInterval,
+                                 InputTimerAction::MouseEmulation,
+                                 controllerId,
+                                 true)) {
+                Session::get()->notifyMouseEmulationMode(false);
+            }
+        }
     }
     m_LocalOverlayInputActive.store(false, std::memory_order_release);
 }

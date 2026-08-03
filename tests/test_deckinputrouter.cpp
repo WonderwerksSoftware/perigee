@@ -111,7 +111,7 @@ private slots:
     void controllerOwnerNavigatesAndOtherControllersAreSuppressed();
     void stickNavigationUsesPressAndReleaseDeadzones();
     void mouseMapsViewportAndRejectsOrClampsOutOfBoundsInput();
-    void statsChordWinsWithoutOpeningDeck();
+    void statsChordPassesThroughWhenClosedAndStaysLocalWhenOpen();
     void keyboardChordAcceptsAlternatePressOrderAndIgnoresRepeat();
     void controllerCloseConsumesEveryChordReleaseTail();
     void touchInputIsSuppressedOnlyWhileDeckIsOpen();
@@ -268,12 +268,33 @@ void DeckInputRouterTest::mouseMapsViewportAndRejectsOrClampsOutOfBoundsInput()
     QCOMPARE(wheel.wheelDelta, QPoint(240, -360));
 }
 
-void DeckInputRouterTest::statsChordWinsWithoutOpeningDeck()
+void DeckInputRouterTest::statsChordPassesThroughWhenClosedAndStaysLocalWhenOpen()
 {
     DeckInputRouter router;
+    const auto closedStats = routeChord(router, 12, SDL_CONTROLLER_BUTTON_X);
+    QCOMPARE(closedStats.disposition,
+             DeckInputRouter::Disposition::Passthrough);
+    QCOMPARE(closedStats.action, DeckInputRouter::Action::None);
+    QVERIFY(!router.isDeckOpen());
+    QCOMPARE(router.route(buttonEvent(
+                 SDL_CONTROLLERBUTTONUP, 12, SDL_CONTROLLER_BUTTON_X)).disposition,
+             DeckInputRouter::Disposition::Passthrough);
+    QCOMPARE(router.route(buttonEvent(
+                 SDL_CONTROLLERBUTTONUP, 12, SDL_CONTROLLER_BUTTON_BACK)).disposition,
+             DeckInputRouter::Disposition::Passthrough);
+    QCOMPARE(router.route(buttonEvent(
+                 SDL_CONTROLLERBUTTONUP, 12,
+                 SDL_CONTROLLER_BUTTON_LEFTSHOULDER)).disposition,
+             DeckInputRouter::Disposition::Passthrough);
+    QCOMPARE(router.route(buttonEvent(
+                 SDL_CONTROLLERBUTTONUP, 12,
+                 SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)).disposition,
+             DeckInputRouter::Disposition::Passthrough);
+
+    router.openForKeyboard();
     const auto stats = routeChord(router, 12, SDL_CONTROLLER_BUTTON_X);
     QCOMPARE(stats.action, DeckInputRouter::Action::ToggleStats);
-    QVERIFY(!router.isDeckOpen());
+    QVERIFY(router.isDeckOpen());
 
     QCOMPARE(router.route(buttonEvent(
                  SDL_CONTROLLERBUTTONUP, 12, SDL_CONTROLLER_BUTTON_X)).disposition,

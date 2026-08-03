@@ -4,7 +4,7 @@
 #include "SDL_compat.h"
 #include "settings/streamingpreferences.h"
 
-#define SDL_CODE_FRAME_READY 0
+#include "streaming/sdleventcodes.h"
 
 #define MAX_SLICES 4
 
