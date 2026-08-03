@@ -8,11 +8,6 @@ FocusScope {
     signal searchRequested()
     signal categoriesRequested()
 
-    function revealAction(actionIndex) {
-        actionList.currentIndex = actionIndex
-        actionList.positionViewAtIndex(actionIndex, ListView.Contain)
-    }
-
     width: 820
     height: Math.max(90, Math.min(4, actionList.count) * 68 + 28) +
             (confirmation.visible ? confirmation.height + 10 : 0) + 36
@@ -36,7 +31,12 @@ FocusScope {
         spacing: 6
         clip: true
         interactive: count > 4
-        currentIndex: -1
+        currentIndex: deckController.actionModel.focusedRow
+
+        onCurrentIndexChanged: {
+            if (currentIndex >= 0)
+                Qt.callLater(positionViewAtIndex, currentIndex, ListView.Contain)
+        }
 
         delegate: Item {
             width: actionList.width
@@ -54,16 +54,6 @@ FocusScope {
                 message: model.message
                 actionFocused: model.focused
                 requiresConfirmation: model.requiresConfirmation
-
-                onActionFocusedChanged: {
-                    if (actionFocused)
-                        tray.revealAction(index)
-                }
-
-                Component.onCompleted: {
-                    if (actionFocused)
-                        tray.revealAction(index)
-                }
 
                 onChosen: {
                     deckController.activateAction(actionId)

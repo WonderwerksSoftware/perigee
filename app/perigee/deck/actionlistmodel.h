@@ -10,6 +10,7 @@ class ActionRegistry;
 class ActionListModel final : public QAbstractListModel
 {
     Q_OBJECT
+    Q_PROPERTY(int focusedRow READ focusedRow NOTIFY focusedRowChanged)
 
 public:
     enum Role {
@@ -39,6 +40,7 @@ public:
     void refresh();
 
     QString focusedActionId() const;
+    int focusedRow() const;
     QString focusedActionLabel() const;
     bool focusedActionEnabled() const;
     bool focusedActionRequiresConfirmation() const;
@@ -48,6 +50,9 @@ public:
     bool moveFocus(int delta);
     bool focusAction(const QString& actionId);
     void setAwaitingConfirmation(const QString& actionId);
+
+signals:
+    void focusedRowChanged();
 
 private:
     struct Row {

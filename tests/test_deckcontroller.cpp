@@ -96,6 +96,7 @@ private slots:
     void controllerOpenSkipsAllDisabledDisplayCategory();
     void controllerOpenWithoutEnabledActionsKeepsSearchFocus();
     void inFlightEmptyResourceActionExecutesOnlyOnce();
+    void repeatedActivationDoesNotRedirectFromWorkingActionToPeer();
     void pointerFocusCancelsConfirmationOnlyAfterSuccessfulChange();
 };
 
@@ -366,6 +367,31 @@ void DeckControllerTest::inFlightEmptyResourceActionExecutesOnlyOnce()
              QStringLiteral("working"));
     QVERIFY(!controller.actionModel()->data(
         actionIndex, ActionListModel::EnabledRole).toBool());
+}
+
+void DeckControllerTest::repeatedActivationDoesNotRedirectFromWorkingActionToPeer()
+{
+    MutableHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.first"), availableState());
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.second"), availableState());
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.first"), QStringLiteral("First display"),
+                   ActionCategory::Display),
+        descriptor(QStringLiteral("display.second"), QStringLiteral("Second display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+    QCOMPARE(focusedActionId(controller), QStringLiteral("display.first"));
+
+    controller.activateFocusedAction();
+    controller.activateFocusedAction();
+
+    QCOMPARE(adapter.executedActionIds,
+             QStringList({ QStringLiteral("display.first") }));
+    QCOMPARE(focusedActionId(controller), QStringLiteral("display.first"));
 }
 
 void DeckControllerTest::pointerFocusCancelsConfirmationOnlyAfterSuccessfulChange()

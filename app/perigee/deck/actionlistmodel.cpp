@@ -135,7 +135,9 @@ void ActionListModel::refresh()
     m_FocusedActionId.clear();
 
     const int retainedRow = rowForId(previousFocus);
-    if (retainedRow >= 0 && m_Rows.at(retainedRow).state.enabled) {
+    if (retainedRow >= 0 &&
+            (m_Rows.at(retainedRow).state.enabled ||
+             m_Rows.at(retainedRow).state.phase == ActionPhase::Working)) {
         m_FocusedActionId = previousFocus;
     }
     else if (!previousFocus.isEmpty() && !m_Rows.isEmpty()) {
@@ -149,11 +151,17 @@ void ActionListModel::refresh()
         m_AwaitingConfirmationId.clear();
     }
     endResetModel();
+    emit focusedRowChanged();
 }
 
 QString ActionListModel::focusedActionId() const
 {
     return m_FocusedActionId;
+}
+
+int ActionListModel::focusedRow() const
+{
+    return rowForId(m_FocusedActionId);
 }
 
 QString ActionListModel::focusedActionLabel() const
@@ -286,6 +294,7 @@ void ActionListModel::changeFocusedAction(const QString& actionId)
     if (newRow >= 0) {
         emit dataChanged(index(newRow, 0), index(newRow, 0), { FocusedRole });
     }
+    emit focusedRowChanged();
 }
 
 QString ActionListModel::categoryName(ActionCategory category)

@@ -140,6 +140,7 @@ private slots:
     void disabledRowCannotActivatePreviouslyFocusedAction();
     void realKeysKeepControllerAndQmlFocusInSync();
     void keyboardFocusKeepsFifthActionVisible();
+    void controllerOpenRevealsInitiallyOffscreenFirstEnabledAction();
     void rendersAndPublishesOwnedArgbSurface();
 };
 
@@ -399,6 +400,52 @@ void DeckQmlTest::keyboardFocusKeepsFifthActionVisible()
     QCOMPARE(focusedActionId(controller.actionModel()),
              QStringLiteral("display.4"));
     QTRY_COMPARE(actionList->property("currentIndex").toInt(), 4);
+    QTRY_VERIFY(actionList->property("contentY").toReal() > 0.0);
+}
+
+void DeckQmlTest::controllerOpenRevealsInitiallyOffscreenFirstEnabledAction()
+{
+    DeckQmlHostAdapter adapter;
+    QVector<ActionDescriptor> descriptors;
+    for (int actionIndex = 0; actionIndex < 20; ++actionIndex) {
+        const QString actionId = QStringLiteral("display.disabled.%1").arg(actionIndex);
+        adapter.currentSnapshot.actionStates.insert(
+            actionId,
+            state(false, {}, QStringLiteral("Display is unavailable.")));
+        descriptors.push_back(descriptor(
+            actionId,
+            QStringLiteral("Disabled display %1").arg(actionIndex),
+            ActionCategory::Display));
+    }
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.enabled"), state(true));
+    descriptors.push_back(descriptor(
+        QStringLiteral("display.enabled"),
+        QStringLiteral("Enabled display"),
+        ActionCategory::Display));
+    ActionRegistry registry(descriptors, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+    QCOMPARE(focusedActionId(controller.actionModel()),
+             QStringLiteral("display.enabled"));
+    QQmlEngine engine;
+    DeckSurfaceRenderer renderer;
+    QString error;
+
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    renderer.resize(QSize(960, 540), 1.0);
+    QImage frame;
+    QVERIFY2(renderer.render(&frame, &error), qPrintable(error));
+
+    QQuickItem* actionList = findListViewWithCount(
+        qobject_cast<QQuickItem*>(renderer.rootObject()), 21);
+    QVERIFY(actionList != nullptr);
+    QTRY_COMPARE(actionList->property("currentIndex").toInt(), 20);
     QTRY_VERIFY(actionList->property("contentY").toReal() > 0.0);
 }
 
