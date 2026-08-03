@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer.h"
+#include "drmrenderlifecyclestate.h"
 #include "swframemapper.h"
 
 #ifdef HAVE_EGL
@@ -804,7 +805,7 @@ private:
     AVBufferRef* m_HwContext;
     int m_DrmFd;
     bool m_DrmIsMaster;
-    bool m_DrmStateModified;
+    DrmRenderLifecycleState m_RenderLifecycle;
     bool m_DrmSupportsModifiers;
     bool m_MustCloseDrmFd;
     bool m_SupportsDirectRendering;

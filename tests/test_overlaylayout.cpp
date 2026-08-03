@@ -1,5 +1,6 @@
 #include "test_registry.h"
 
+#include "streaming/video/ffmpeg-renderers/drmrenderlifecyclestate.h"
 #include "streaming/video/overlaymanager.h"
 
 #include <QtTest>
@@ -226,6 +227,7 @@ private slots:
     void defersOverlayConsumptionUntilRendererIsReady();
     void failedSetupDoesNotConsumePendingOverlay_data();
     void failedSetupDoesNotConsumePendingOverlay();
+    void separatesDrmOverlayReadinessFromRestorationLifecycle();
     void singleOverlayArbitratesStatusOverRetainedDeck();
     void deletesManagerOwnedSurfacesExactlyOnce();
     void permitsSurfaceDeleterToReenterPublication();
@@ -451,6 +453,49 @@ void OverlayLayoutTest::failedSetupDoesNotConsumePendingOverlay()
     QCOMPARE(renderer.consumedSurfaces(), QVector<bool>({true}));
     QCOMPARE(renderer.activateAndReplay(true).size(), 0);
     QCOMPARE(renderer.consumedTypes().size(), 1);
+}
+
+void OverlayLayoutTest::separatesDrmOverlayReadinessFromRestorationLifecycle()
+{
+    {
+        DrmRenderLifecycleState lifecycle;
+        Overlay::OverlayRendererReadiness readiness;
+
+        // Decoder testing never enters prepareToRender().
+        QVERIFY(!lifecycle.restorationRequired());
+
+        lifecycle.beginPrepare();
+        lifecycle.recordApplyResult(false);
+
+        QVERIFY(readiness.activateIfReady(false).empty());
+        QVERIFY(readiness.deferIfNotReady(Overlay::OverlayDeck));
+        QVERIFY(lifecycle.restorationRequired());
+
+        // FFmpeg can render a frame after the failed void prepare call. A
+        // successful later apply must not erase the restoration obligation or
+        // make overlays ready.
+        lifecycle.recordApplyResult(true);
+        QVERIFY(readiness.deferIfNotReady(Overlay::OverlayStatusUpdate));
+        QVERIFY(lifecycle.restorationRequired());
+
+        lifecycle.completeRestoration();
+        QVERIFY(!lifecycle.restorationRequired());
+    }
+
+    {
+        DrmRenderLifecycleState lifecycle;
+        Overlay::OverlayRendererReadiness readiness;
+
+        lifecycle.beginPrepare();
+        lifecycle.recordApplyResult(true);
+
+        QVERIFY(readiness.activateIfReady(true).empty());
+        QVERIFY(!readiness.deferIfNotReady(Overlay::OverlayDeck));
+        QVERIFY(lifecycle.restorationRequired());
+
+        lifecycle.completeRestoration();
+        QVERIFY(!lifecycle.restorationRequired());
+    }
 }
 
 void OverlayLayoutTest::singleOverlayArbitratesStatusOverRetainedDeck()

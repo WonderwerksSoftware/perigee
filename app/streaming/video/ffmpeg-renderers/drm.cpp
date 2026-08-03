@@ -151,7 +151,6 @@ DrmRenderer::DrmRenderer(AVHWDeviceType hwDeviceType, IFFmpegRenderer *backendRe
       m_HwContext(nullptr),
       m_DrmFd(-1),
       m_DrmIsMaster(false),
-      m_DrmStateModified(false),
       m_DrmSupportsModifiers(false),
       m_MustCloseDrmFd(false),
       m_SupportsDirectRendering(false),
@@ -174,7 +173,7 @@ DrmRenderer::DrmRenderer(AVHWDeviceType hwDeviceType, IFFmpegRenderer *backendRe
 DrmRenderer::~DrmRenderer()
 {
     // DRM state should be restored by the time we get here
-    SDL_assert(!m_DrmStateModified);
+    SDL_assert(!m_RenderLifecycle.restorationRequired());
 
     {
         std::lock_guard lock { m_OverlayLock };
@@ -256,6 +255,11 @@ bool DrmRenderer::prepareDecoderContextInGetFormat(AVCodecContext*, AVPixelForma
 
 void DrmRenderer::prepareToRender()
 {
+    // FFmpeg starts rendering after this void method returns regardless of
+    // whether the initial atomic apply succeeds. From this point onward,
+    // cleanup must restore properties and release any later frame buffers.
+    m_RenderLifecycle.beginPrepare();
+
     bool overlayOutputReady = false;
     {
         std::lock_guard lock { m_OverlayLock };
@@ -426,10 +430,7 @@ void DrmRenderer::prepareToRender()
     }
 
     const bool initialApplySucceeded = m_PropSetter.apply();
-
-    // A successful apply may have changed state that must be restored. A
-    // failed atomic commit frees its pending buffers and changes no DRM state.
-    m_DrmStateModified = initialApplySucceeded;
+    m_RenderLifecycle.recordApplyResult(initialApplySucceeded);
 
     if (!initialApplySucceeded) {
         std::lock_guard lock { m_OverlayLock };
@@ -497,7 +498,7 @@ void DrmRenderer::cleanupRenderContext()
     }
 
     // We might be called without prepareToRender() if we fail during decoder testing
-    if (!m_DrmStateModified) {
+    if (!m_RenderLifecycle.restorationRequired()) {
         return;
     }
 
@@ -532,9 +533,9 @@ void DrmRenderer::cleanupRenderContext()
         m_PropSetter.restorePlane(plane.second);
     }
 
-    m_PropSetter.apply();
-
-    m_DrmStateModified = false;
+    const bool restorationApplySucceeded = m_PropSetter.apply();
+    m_RenderLifecycle.recordApplyResult(restorationApplySucceeded);
+    m_RenderLifecycle.completeRestoration();
 }
 
 bool DrmRenderer::initialize(PDECODER_PARAMETERS params)
@@ -2079,7 +2080,7 @@ bool DrmRenderer::addFbForFrame(AVFrame *frame, uint32_t* newFbId, bool testMode
         StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
 
         // Temporarily take DRM master if we dropped it after initialization
-        if (!m_DrmStateModified) {
+        if (!m_RenderLifecycle.restorationRequired()) {
 #ifdef HAVE_DRM_MASTER_HOOKS
             lockDrmMaster();
 #endif
@@ -2093,7 +2094,7 @@ bool DrmRenderer::addFbForFrame(AVFrame *frame, uint32_t* newFbId, bool testMode
                                                  0, 0,
                                                  frame->width << 16,
                                                  frame->height << 16);
-        if (!m_DrmStateModified) {
+        if (!m_RenderLifecycle.restorationRequired()) {
             drmDropMaster(m_DrmFd);
 #ifdef HAVE_DRM_MASTER_HOOKS
             unlockDrmMaster();
@@ -2218,7 +2219,7 @@ void DrmRenderer::renderFrame(AVFrame* frame)
     m_PropSetter.flipPlane(m_VideoPlane, fbId, 0);
 
     // Apply pending atomic transaction (if in atomic mode)
-    m_PropSetter.apply();
+    m_RenderLifecycle.recordApplyResult(m_PropSetter.apply());
 }
 
 bool DrmRenderer::testRenderFrame(AVFrame* frame) {
