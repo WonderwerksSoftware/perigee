@@ -1,175 +1,204 @@
 # Task 8 Report: Make Deck Bindings Configurable
 
-Status: implementation complete; live display qualification deferred because the
-current desktop/Xwayland environment is unresponsive
-
-Commit: `feat: make Deck bindings configurable` (this commit)
+Status: implementation and two hardening rounds complete. Live display and
+physical-controller qualification remain deferred because the current
+headless environment cannot create the required OpenGL or SDL windows.
 
 Starting HEAD: `a67744e8553a95e4e456af1fad76589cdfc40883`
 
-## Summary
+Task 8 commits:
 
-- Added one `DeckBindings` value authority for defaults, validation, fallback,
+- `86eb605615b6d39d09540577a94844cee928dde9` — configurable Deck bindings
+- `6d2e4c7c` — first input and capture hardening round
+- `fix: harden configurable Deck input` — second hardening round (this commit)
+
+## Implemented behavior
+
+- `DeckBindings` is the single authority for defaults, validation, fallback,
   persistence, display formatting, and controller-chord capture.
-- Persisted the keyboard binding as Qt modifier bits plus one SDL scancode and
-  the controller binding as an SDL controller-button bitmask. Invalid keyboard
-  and controller fields independently fall back to safe defaults.
-- Added the exact `StreamingPreferences` properties and durable `QSettings`
-  keys required by the Task 8 contract.
-- Fed a validated binding snapshot into the existing `DeckInputRouter`; there
-  is no second in-stream chord detector. Configured physical chords preserve
-  the existing ownership, release-tail, stats, and neutralization behavior.
-- Added a controller-navigable **Perigee Deck** settings section with keyboard
-  and raw-controller capture, reset, explicit cancel/Escape, single-B controller
-  cancellation, legacy direct disconnect, and inline stats-chord conflict text.
-- Captured controller events are handled before face-button swapping or Qt
-  navigation and are swallowed, including events from non-owning controllers.
+- Keyboard bindings persist Qt shortcut modifiers plus one physical SDL
+  scancode. Controller bindings persist an SDL controller-button bitmask.
+- The settings page provides keyboard and controller capture, explicit cancel,
+  reset, inline conflict feedback, controller navigation, and the legacy
+  direct-disconnect toggle.
+- Wayland keyboard capture uses Qt's native scan code, converts the Wayland
+  `key + 8` value back to evdev, and maps evdev to SDL. Unsupported platforms
+  fail closed without changing the saved binding.
+- Classification-only Qt modifier flags, including `KeypadModifier`, are
+  removed before validation and persistence. `Ctrl+KP Enter` is accepted as a
+  physical shortcut; keypad-only input still fails the modifier requirement.
+- Controller capture records the largest simultaneously held chord, not a
+  rolled union. Focus loss, disable, owner removal, hide, and destruction all
+  cancel capture without leaking input.
+- The Deck router tracks viable configured-Deck, performance-statistics, and
+  reserved-quit targets per physical controller. There is no timer and no
+  second detector outside the router.
+- With legacy direct disconnect disabled, the original
+  `LB+RB+Back+Start` chord is suppressed even when the configured Deck chord is
+  different. Exact completion cannot reach Moonlight's old `SDL_QUIT` path.
+- With legacy direct disconnect enabled, the original quit sequence reaches
+  Moonlight unchanged. Controller Deck capture is disabled; the keyboard
+  shortcut remains available.
+- Closed-Deck statistics input is order independent. On the final down event,
+  the router consumes that physical event and immediately replays the complete
+  four-event sequence once to the real Moonlight handler. Later physical
+  releases pass through and remain balanced in gamepad-mouse mode.
+- Open-Deck statistics input remains local and side-effect-free for both face
+  swap states and both face-first and shared-button-first orders.
+- Candidate aborts replay the prefix before routing the current event. The
+  current event is represented explicitly and is not applied to held-input
+  state until replay finishes. Session routes it once against the resulting
+  Deck state without recursive event dispatch.
+- External Deck open and close transitions discard pending candidates, retain
+  the needed release tails, and leave the next fresh keyboard or controller
+  tap available to the new target.
 
-## Changed files
+## Validation rules
 
-- `app/perigee/input/deckbindings.{h,cpp}`
-- `app/perigee/input/deckinputrouter.{h,cpp}`
-- `app/gui/perigee/DeckBindingSettings.qml`
-- `app/gui/sdlgamepadkeynavigation.{h,cpp}`
-- `app/gui/SettingsView.qml`
-- `app/settings/streamingpreferences.{h,cpp}`
-- `app/streaming/session.cpp`
-- `app/app.pro`
-- `app/qml.qrc`
-- `tests/test_deckbindings.cpp`
-- `tests/test_deckbindingsqml.cpp`
-- `tests/test_sdlgamepadkeynavigation.cpp`
-- `tests/test_deckinputrouter.cpp`
-- `tests/test_inputintegration.cpp`
-- `tests/perigee-tests.pro`
-
-Task 9 actions, Polaris adapters, and host integration are untouched.
-
-## Binding authority and validation
-
-`DeckBindings` owns the exact defaults:
+The exact defaults remain:
 
 - keyboard: `Ctrl+Alt+Shift+Space`
 - controller: `LB+RB+Back+Start`
 - legacy direct disconnect: disabled
 
-Keyboard bindings require at least one supported Qt modifier and one supported,
-non-modifier SDL scancode. Controller bindings require at least two supported
-SDL controller buttons. Empty masks, unsupported high bits, single-button
-chords, and the exact `LB+RB+Back+X` performance-statistics chord are rejected.
-Construction and `QSettings` loading retain the safe default for each invalid
-field rather than allowing a malformed persisted binding into the router.
+Keyboard bindings require at least one of Shift, Control, Alt, or Meta and one
+supported non-modifier SDL scancode. Controller bindings require at least two
+supported buttons and reject:
 
-The durable keys are:
+- unsupported bits or empty/single-button masks,
+- the statistics chord and its prefixes or supersets for physical X and Y,
+- strict supersets of the original quit chord,
+- opposite D-pad directions that cannot be pressed on a normal controller.
+
+The durable settings keys are:
 
 - `deckKeyModifiers`
 - `deckKeyScancode`
 - `deckControllerButtons`
 - `legacyGamepadDisconnect`
 
-The router receives one normalized `DeckBindings` snapshot when a Session is
-initialized. With legacy mode disabled, the configured controller chord toggles
-Deck. With legacy mode enabled, controller Deck interception is disabled so
-Moonlight's original `LB+RB+Back+Start` path remains responsible for direct
-disconnect; the configured keyboard chord still opens Deck.
+Invalid stored keyboard and controller values fall back independently to safe
+defaults.
 
 ## TDD evidence
 
-### Initial RED
+### Initial implementation RED
 
-The new test sources and manifests were registered before the implementation:
-
-`qmake6 .. CONFIG+=debug CONFIG+=perigee-tests`
-
-Result: exit 0.
-
-`make -j2 sub-tests`
-
-Result: exit 2 at the expected missing production seam:
+The new test sources and manifests were registered before production code.
+The first build stopped at the intended missing seam:
 
 `No rule to make target '../app/perigee/input/deckbindings.cpp'`
 
-### Edge RED/GREEN
+Additional test-first failures covered F13-F24's non-contiguous SDL ranges,
+controller capture cancellation, and deterministic physical-controller
+ownership.
 
-Extended physical function-key mapping and controller-capture cancellation were
-added as tests first. The build failed because
-`controllerBindingCaptureCancelled` did not yet exist. After implementing the
-signal and capture path, the tests passed.
+### Hardening round 1
 
-A mixed-controller SDL queue test initially captured mask 13 instead of mask 9.
-Systematic isolation showed that `SDL_PushEvent` rewrites an unregistered fake
-controller instance ID to `-1`, so the event queue cannot deterministically
-model two distinct physical controllers. A direct test of the production raw
-button seam was then added first; it failed to compile until the seam existed.
-The final suite keeps a real SDL queue test for raw-before-swap/no-leak behavior
-and uses the narrow seam only for deterministic controller ownership.
+Tests first exposed permissive controller validation, logical-key capture on
+Wayland, capture lifecycle leaks, rolled controller unions, face-swap
+navigation drift, and replay that did not reach the real Moonlight handler.
 
-An audit test also exposed the false assumption that SDL F1 through F24
-scancodes are contiguous. The mapper now handles F1-F12 and F13-F24 as their
-two real SDL ranges.
+Fresh GREEN counts after that round were:
 
-## Focused GREEN results
+- `DeckBindingsTest`: 14 passed, 0 failed.
+- `DeckBindingsQmlTest`: 7 passed, 0 failed.
+- `DeckInputRouterTest`: 24 passed, 0 failed.
+- `SdlGamepadKeyNavigationTest`: 9 passed, 0 failed.
+- `StreamingPreferencesTest`: 5 passed, 0 failed.
+- focused router-to-real-handler integration: 5 passed, 0 failed.
 
-Each focused class was run in a fresh process with:
+### Hardening round 2 RED
 
-`QT_QPA_PLATFORM=offscreen SDL_VIDEODRIVER=dummy ./build-tests/tests/perigee-tests <class> -silent`
+The second review cases were added before production changes. The observed RED
+results matched the intended missing branches:
 
-- `DeckBindingsTest`: 10 passed, 0 failed.
-- `DeckBindingsQmlTest`: 5 passed, 0 failed.
-- `DeckInputRouterTest`: 15 passed, 0 failed.
-- `SdlGamepadKeyNavigationTest`: 5 passed, 0 failed.
-- `InputIntegrationTest`: 18 passed, 0 failed.
+- router: 6 targeted failures — reserved quit leaked with a custom chord,
+  closed stats completed incorrectly, external sync retained keyboard and
+  controller buffers, and controller/keyboard aborts returned stale actions;
+- QML: 2 targeted failures — `KeypadModifier` was persisted and keypad-only
+  input satisfied the modifier check;
+- real-handler integration: 3 targeted failures — closed stats and reserved
+  quit events reached the wrong destination.
 
-These focused gates cover exact defaults, isolated save/reload, legacy
-persistence, invalid persisted values, the stats conflict, malformed masks,
-F13/F24 mapping, reset, controller capture completion/cancellation/ownership,
-raw capture before face swapping, non-default router chords, legacy passthrough,
-and all existing input-integration behavior.
+The monolithic run then exposed one additional isolation failure: Qt had cached
+the default `QSettings` path before the preferences class changed
+`XDG_CONFIG_HOME`. The save/reload test now runs in a fresh child process with
+the temporary config root present before `QGuiApplication` starts. The parent
+test snapshots and restores organization name, application name, default
+format, and `XDG_CONFIG_HOME`; a following test class verifies the restoration
+in monolithic order.
 
-## Build, stress, and source verification
+## Current GREEN results
 
-- Debug application:
-  `CCACHE_DIR="$PWD/build-tests/.ccache" make -C build-tests/app qmake_all`
-  followed by
-  `CCACHE_DIR="$PWD/build-tests/.ccache" make -C build-tests/app -f Makefile.Debug -j1`
-  — both exit 0; `moonlight` linked.
-- Fresh-process stress: 25 independent invocations of each of
-  `DeckBindingsTest`, `DeckBindingsQmlTest`, `DeckInputRouterTest`, and
-  `SdlGamepadKeyNavigationTest` — 100 processes, 875 pass records, 0 failures.
-- `git diff --check` — clean.
-- No temporary comparison worktree, test process, Xvfb process, build process,
-  or diagnostic logging remains after the environment investigation.
+Fresh focused runs:
 
-## Full-suite platform qualification
+- `DeckBindingsTest`: 14 passed, 0 failed.
+- `DeckBindingsQmlTest`: 9 passed, 0 failed.
+- `DeckInputRouterTest`: 30 passed, 0 failed.
+- `SdlGamepadKeyNavigationTest`: 9 passed, 0 failed.
+- `StreamingPreferencesTest`: 5 passed, 0 failed.
+- `StreamingPreferencesIsolationTest`: 3 passed, 0 failed in monolithic order.
+- `InputIntegrationTest` with dummy SDL: 23 passed, 0 failed.
+- `InputIntegrationTest` with offscreen Qt but no dummy SDL: 21 passed; the two
+  SDL hidden-window cases fail before Task 8 logic because the environment
+  cannot create a window.
 
-The required full-suite commands were attempted, bounded, and not reported as
-passes:
+The real-handler coverage includes both face-swap states, shared-first and
+face-first statistics input, exact reserved-quit suppression, legacy
+`SDL_QUIT`, aborted candidate replay, and replayed Back followed by one
+balanced host face-button press/release.
 
-- The restricted canonical surfaceless command could not create required OpenGL
-  contexts or SDL windows. All focused Task 8 classes in that run were green.
-- The normal-device canonical command completed Deck QML 11/0, Deck surface
-  renderer 6/0, Deck bindings 10/0, binding QML 5/0, router 15/0, delivery 3/0,
-  and neutralization 5/0, then stalled in the existing InputIntegration SDL
-  window creation path.
-- The exact isolated InputIntegration case stalled inside `SDL_CreateWindow()`
-  before Task 8 logic. A clean detached Task 7 baseline at starting HEAD
-  `a67744e8` reproduced the same stall with the same command.
-- The live Wayland full-suite invocation produced no runner output within its
-  60-second bound and was terminated.
-- A dummy-SDL fallback stack trace showed Qt's offscreen GL path blocked in
-  X11 connection setup (`xcb_connect` / `XOpenDisplay`). Unsetting `DISPLAY`
-  changed the symptom to the expected immediate GL-context failure.
+## Build and stress
 
-The current compositor/Xwayland display path is therefore the remaining
-qualification blocker. Per the Task 8 execution instruction, no further retries
-were made against that unchanged environment.
+- Full Debug application compile and link:
+  `CCACHE_DIR=build-tests/.ccache make -C build-tests -j2` — exit 0.
+- Round 1 fresh-process stress: 100 router runs, 100 router-to-handler runs,
+  100 binding runs, and 100 capture runs — no failures.
+- Round 2 fresh-process stress: 100 full router runs, 100 focused real-handler
+  runs, 50 full binding-QML runs, and 50 real preferences runs — no failures.
+- `git diff --check` — clean before commit.
+
+## Full-suite environment result
+
+The canonical headless run used offscreen Qt and dummy SDL. Every non-renderer
+class passed, including all 23 real input-integration records and the global
+settings-isolation sentinel. The only failures were:
+
+- `DeckQmlTest`: 8 OpenGL-context creation failures;
+- `DeckSurfaceRendererTest`: 3 OpenGL-context creation failures.
+
+Without dummy SDL, the two existing hidden-window integration cases also fail
+at `SDL_CreateWindow()` before Task 8 routing. These are environment
+limitations and are not claimed as passing.
+
+## SettingsView seam
+
+The test executable constructs the real resource component at
+`qrc:/gui/perigee/DeckBindingSettings.qml`, and the linked application embeds
+both that component and `SettingsView.qml`. A full no-display construction of
+`SettingsView.qml` is not feasible in this test target without replacing real
+application dependencies: `StreamingPreferences`, `ComputerManager`,
+`SdlGamepadKeyNavigation`, and `SystemProperties` are registered as singleton
+QML modules only in `app/main.cpp`; the test executable does not link the full
+`ComputerManager` or `SystemProperties` graphs. Direct `qmllint` reports those
+four missing module registrations. No fake singleton graph was added merely to
+make the component instantiate.
+
+## Source verification
+
+The native-scancode implementation was checked against current Qt 6 source:
+
+- Qt Wayland assigns `code = key + 8` and forwards it as the native scan code:
+  <https://codebrowser.dev/qt6/qtbase/src/plugins/platforms/wayland/qwaylandinputdevice.cpp.html#1342>
+- Qt Quick documents that `KeyEvent.nativeScanCode` is passed through unchanged:
+  <https://codebrowser.dev/qt6/qtdeclarative/src/quick/items/qquickevents.cpp.html#69>
 
 ## Residual concerns
 
-- Re-run both full-suite commands when the Wayland/Xwayland desktop is
-  responsive; they are not claimed as passing in this report.
-- The raw controller capture is covered through SDL events plus a deterministic
-  physical-controller ownership seam, but final hardware acceptance should
-  exercise the intended controllers on a live settings page.
-- Bidirectional Polaris/10G host testing belongs to the later host-integration
-  task and was not started here.
+- Re-run the renderer and live SettingsView cases on a responsive Wayland
+  desktop with real OpenGL.
+- Exercise physical keyboard and controller capture in the live settings page.
+- Bidirectional Polaris acceptance over the ww-DevBox 10 Gb path belongs to the
+  later host-integration task and was not started in Task 8.
+- Task 9 actions and Polaris adapters remain untouched.

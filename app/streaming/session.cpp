@@ -1035,22 +1035,47 @@ bool Session::routeDeckInputEvent(const SDL_Event& event)
         return false;
     }
     updateDeckPointerMapping();
-    const DeckInputRouter::Result result = m_DeckInputRouter->route(event);
-    for (SDL_Event replayEvent : result.replayEvents) {
-        if (result.replayToDeck) {
-            applyDeckInputResult(m_DeckInputRouter->routeReplay(replayEvent));
+    DeckInputRouter::Result result = m_DeckInputRouter->route(event);
+    const bool originalConsumed =
+        result.disposition == DeckInputRouter::Disposition::Consumed;
+    while (true) {
+        for (SDL_Event replayEvent : result.replayEvents) {
+            if (result.replayToDeck) {
+                applyDeckInputResult(
+                    m_DeckInputRouter->routeReplay(replayEvent));
+            }
+            else if (replayEvent.type == SDL_KEYDOWN ||
+                     replayEvent.type == SDL_KEYUP) {
+                m_InputHandler->handleKeyEvent(&replayEvent.key);
+            }
+            else if (replayEvent.type == SDL_CONTROLLERBUTTONDOWN ||
+                     replayEvent.type == SDL_CONTROLLERBUTTONUP) {
+                m_InputHandler->handleControllerButtonEvent(
+                    &replayEvent.cbutton);
+            }
         }
-        else if (replayEvent.type == SDL_KEYDOWN ||
-                 replayEvent.type == SDL_KEYUP) {
-            m_InputHandler->handleKeyEvent(&replayEvent.key);
+        applyDeckInputResult(result);
+        if (!result.deferredEvent.has_value()) {
+            break;
         }
-        else if (replayEvent.type == SDL_CONTROLLERBUTTONDOWN ||
-                 replayEvent.type == SDL_CONTROLLERBUTTONUP) {
-            m_InputHandler->handleControllerButtonEvent(&replayEvent.cbutton);
+
+        SDL_Event deferredEvent = *result.deferredEvent;
+        result = m_DeckInputRouter->routeDeferred(deferredEvent);
+        if (result.disposition ==
+                DeckInputRouter::Disposition::Passthrough) {
+            if (deferredEvent.type == SDL_KEYDOWN ||
+                    deferredEvent.type == SDL_KEYUP) {
+                m_InputHandler->handleKeyEvent(&deferredEvent.key);
+            }
+            else if (deferredEvent.type == SDL_CONTROLLERBUTTONDOWN ||
+                     deferredEvent.type == SDL_CONTROLLERBUTTONUP) {
+                m_InputHandler->handleControllerButtonEvent(
+                    &deferredEvent.cbutton);
+            }
+            break;
         }
     }
-    applyDeckInputResult(result);
-    return result.disposition == DeckInputRouter::Disposition::Consumed;
+    return originalConsumed;
 }
 
 void Session::applyDeckInputResult(const DeckInputRouter::Result& result)

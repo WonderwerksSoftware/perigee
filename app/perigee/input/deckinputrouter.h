@@ -13,6 +13,8 @@
 #include <Qt>
 #include <QVector>
 
+#include <optional>
+
 class DeckInputRouter final
 {
 public:
@@ -63,10 +65,12 @@ public:
         QPoint wheelDelta;
         QVector<SDL_Event> replayEvents;
         bool replayToDeck = false;
+        std::optional<SDL_Event> deferredEvent;
     };
 
     Result route(const SDL_Event& event);
     Result routeReplay(const SDL_Event& event) const;
+    Result routeDeferred(const SDL_Event& event);
 
     bool isDeckOpen() const;
     SDL_JoystickID controllerOwner() const;
@@ -92,7 +96,8 @@ private:
     bool isKeyboardChordMember(SDL_Scancode scancode) const;
     quint32 controllerMask(SDL_JoystickID controller) const;
     quint32 statsControllerMask() const;
-    void armChordReleaseTails();
+    quint8 viableControllerTargets(quint32 down,
+                                   SDL_JoystickID controller) const;
     void beginReleaseTails();
     void setOpen(bool open, SDL_JoystickID owner);
     QPointF mapPointer(int x, int y, bool clamp, bool* accepted) const;

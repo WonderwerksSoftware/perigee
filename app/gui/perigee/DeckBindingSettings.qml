@@ -66,12 +66,15 @@ GroupBox {
                 isModifierKey(logicalKey)) {
             return
         }
-        if (modifiers === Qt.NoModifier) {
+        var shortcutModifiers = modifiers &
+            (Qt.ShiftModifier | Qt.ControlModifier |
+             Qt.AltModifier | Qt.MetaModifier)
+        if (shortcutModifiers === Qt.NoModifier) {
             conflictMessage = qsTr("Hold one or more modifiers, then press a physical key.")
             return
         }
         if (!preferences ||
-                !preferences.setDeckKeyboardBindingFromNative(modifiers,
+                !preferences.setDeckKeyboardBindingFromNative(shortcutModifiers,
                                                                nativeScanCode)) {
             conflictMessage = qsTr("Perigee cannot map this physical key on the current platform. The existing shortcut was not changed.")
             return

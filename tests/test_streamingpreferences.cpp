@@ -8,12 +8,20 @@
 
 #include <QCoreApplication>
 #include <QMetaProperty>
+#include <QProcess>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest>
 
 namespace {
+
+QString g_OriginalOrganizationName;
+QString g_OriginalApplicationName;
+QSettings::Format g_OriginalSettingsFormat = QSettings::NativeFormat;
+QByteArray g_OriginalConfigHome;
+bool g_HadOriginalConfigHome = false;
+bool g_StreamingPreferencesGlobalsRestored = false;
 
 quint32 buttonMask(std::initializer_list<SDL_GameControllerButton> buttons)
 {
@@ -32,6 +40,7 @@ class StreamingPreferencesTest : public QObject
 
 private slots:
     void initTestCase();
+    void cleanupTestCase();
     void init();
     void actualPropertiesExposeAndEmitTheirNotifySignals();
     void actualSaveAndReloadRoundTripValidatedDeckBindings();
@@ -44,15 +53,42 @@ private:
 void StreamingPreferencesTest::initTestCase()
 {
     QVERIFY(m_SettingsDirectory.isValid());
+    g_OriginalOrganizationName = QCoreApplication::organizationName();
+    g_OriginalApplicationName = QCoreApplication::applicationName();
+    g_OriginalSettingsFormat = QSettings::defaultFormat();
+    g_HadOriginalConfigHome = qEnvironmentVariableIsSet("XDG_CONFIG_HOME");
+    g_OriginalConfigHome = qgetenv("XDG_CONFIG_HOME");
+
+    if (qEnvironmentVariableIsEmpty(
+            "PERIGEE_STREAMING_PREFERENCES_CHILD")) {
+        QVERIFY(qputenv("XDG_CONFIG_HOME",
+                        m_SettingsDirectory.path().toUtf8()));
+    }
     QCoreApplication::setOrganizationName(QStringLiteral("PerigeeTests"));
     QCoreApplication::setApplicationName(QStringLiteral("StreamingPreferences"));
     QSettings::setDefaultFormat(QSettings::IniFormat);
-    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
-                       m_SettingsDirectory.path());
+}
+
+void StreamingPreferencesTest::cleanupTestCase()
+{
+    QCoreApplication::setOrganizationName(g_OriginalOrganizationName);
+    QCoreApplication::setApplicationName(g_OriginalApplicationName);
+    QSettings::setDefaultFormat(g_OriginalSettingsFormat);
+    if (g_HadOriginalConfigHome) {
+        QVERIFY(qputenv("XDG_CONFIG_HOME", g_OriginalConfigHome));
+    }
+    else {
+        QVERIFY(qunsetenv("XDG_CONFIG_HOME"));
+    }
+    g_StreamingPreferencesGlobalsRestored = true;
 }
 
 void StreamingPreferencesTest::init()
 {
+    if (qEnvironmentVariableIsEmpty(
+            "PERIGEE_STREAMING_PREFERENCES_CHILD")) {
+        return;
+    }
     QSettings settings;
     settings.clear();
     settings.sync();
@@ -98,6 +134,34 @@ void StreamingPreferencesTest::actualPropertiesExposeAndEmitTheirNotifySignals()
 
 void StreamingPreferencesTest::actualSaveAndReloadRoundTripValidatedDeckBindings()
 {
+    if (qEnvironmentVariableIsEmpty(
+            "PERIGEE_STREAMING_PREFERENCES_CHILD")) {
+        QProcess child;
+        QProcessEnvironment environment =
+            QProcessEnvironment::systemEnvironment();
+        environment.insert(
+            QStringLiteral("PERIGEE_STREAMING_PREFERENCES_CHILD"),
+            QStringLiteral("1"));
+        environment.insert(QStringLiteral("XDG_CONFIG_HOME"),
+                           m_SettingsDirectory.path());
+        child.setProcessEnvironment(environment);
+        child.setProgram(QCoreApplication::applicationFilePath());
+        child.setArguments({
+            QStringLiteral("StreamingPreferencesTest"),
+            QStringLiteral(
+                "actualSaveAndReloadRoundTripValidatedDeckBindings"),
+        });
+        child.start();
+        QVERIFY2(child.waitForStarted(), qPrintable(child.errorString()));
+        QVERIFY2(child.waitForFinished(30000),
+                 qPrintable(child.errorString()));
+        const QByteArray output = child.readAllStandardOutput() +
+            child.readAllStandardError();
+        QCOMPARE(child.exitStatus(), QProcess::NormalExit);
+        QVERIFY2(child.exitCode() == 0, output.constData());
+        return;
+    }
+
     const quint32 controller = buttonMask({
         SDL_CONTROLLER_BUTTON_A,
         SDL_CONTROLLER_BUTTON_B,
@@ -131,5 +195,30 @@ void StreamingPreferencesTest::unsupportedPlatformRejectsNativeCaptureWithoutCha
 }
 
 REGISTER_PERIGEE_TEST(StreamingPreferencesTest);
+
+class StreamingPreferencesIsolationTest : public QObject
+{
+    Q_OBJECT
+
+private slots:
+    void priorPreferenceTestsRestoredProcessGlobals();
+};
+
+void StreamingPreferencesIsolationTest::priorPreferenceTestsRestoredProcessGlobals()
+{
+    if (!g_StreamingPreferencesGlobalsRestored) {
+        QSKIP("This sentinel verifies ordering in the monolithic test run.");
+    }
+    QCOMPARE(QCoreApplication::organizationName(),
+             g_OriginalOrganizationName);
+    QCOMPARE(QCoreApplication::applicationName(),
+             g_OriginalApplicationName);
+    QCOMPARE(QSettings::defaultFormat(), g_OriginalSettingsFormat);
+    QCOMPARE(qEnvironmentVariableIsSet("XDG_CONFIG_HOME"),
+             g_HadOriginalConfigHome);
+    QCOMPARE(qgetenv("XDG_CONFIG_HOME"), g_OriginalConfigHome);
+}
+
+REGISTER_PERIGEE_TEST(StreamingPreferencesIsolationTest);
 
 #include "test_streamingpreferences.moc"

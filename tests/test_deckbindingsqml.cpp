@@ -24,6 +24,7 @@ public:
     bool legacyGamepadDisconnect = false;
     int logicalKeyboardCaptureCalls = 0;
     int nativeKeyboardCaptureCalls = 0;
+    int lastNativeModifiers = 0;
     quint32 lastNativeScanCode = 0;
 
     Q_INVOKABLE QString formatDeckKeyboardBinding(int, int) const
@@ -50,9 +51,11 @@ public:
         return true;
     }
 
-    Q_INVOKABLE bool setDeckKeyboardBindingFromNative(int, quint32 nativeScanCode)
+    Q_INVOKABLE bool setDeckKeyboardBindingFromNative(int modifiers,
+                                                       quint32 nativeScanCode)
     {
         ++nativeKeyboardCaptureCalls;
+        lastNativeModifiers = modifiers;
         lastNativeScanCode = nativeScanCode;
         emit deckBindingsChanged();
         return true;
@@ -111,6 +114,8 @@ private slots:
     void controllerBackCancelsCapture();
     void statsConflictStaysInCaptureAndExplainsTheProblem();
     void keyboardCaptureUsesNativeScanCodeInsteadOfLogicalKey();
+    void keypadClassificationModifierIsNotStoredAsPartOfShortcut();
+    void keypadClassificationModifierDoesNotSatisfyModifierRequirement();
     void hidingTheSettingsViewCancelsControllerCapture();
 };
 
@@ -205,6 +210,60 @@ void DeckBindingsQmlTest::keyboardCaptureUsesNativeScanCodeInsteadOfLogicalKey()
     QCOMPARE(preferences.logicalKeyboardCaptureCalls, 0);
     QCOMPARE(preferences.lastNativeScanCode, quint32(29));
     QCOMPARE(root->property("captureMode").toString(), QString());
+}
+
+void DeckBindingsQmlTest::keypadClassificationModifierIsNotStoredAsPartOfShortcut()
+{
+    QQmlEngine engine;
+    QQmlComponent component(&engine,
+        QUrl(QStringLiteral("qrc:/gui/perigee/DeckBindingSettings.qml")));
+    FakeDeckPreferences preferences;
+    FakeGamepadNavigation navigation;
+    QScopedPointer<QObject> root(component.createWithInitialProperties({
+        {QStringLiteral("preferences"), QVariant::fromValue(&preferences)},
+        {QStringLiteral("gamepadNavigation"), QVariant::fromValue(&navigation)},
+    }));
+    QVERIFY2(root, qPrintable(component.errorString()));
+    QVERIFY(QMetaObject::invokeMethod(root.data(), "beginKeyboardCapture"));
+
+    QVERIFY(QMetaObject::invokeMethod(
+        root.data(), "handleKeyboardCapture",
+        Q_ARG(QVariant, int(Qt::ControlModifier | Qt::KeypadModifier)),
+        Q_ARG(QVariant, int(Qt::Key_Enter)),
+        Q_ARG(QVariant, quint32(104)),
+        Q_ARG(QVariant, false)));
+
+    QCOMPARE(preferences.nativeKeyboardCaptureCalls, 1);
+    QCOMPARE(preferences.lastNativeModifiers, int(Qt::ControlModifier));
+    QCOMPARE(preferences.lastNativeScanCode, quint32(104));
+    QCOMPARE(root->property("captureMode").toString(), QString());
+}
+
+void DeckBindingsQmlTest::keypadClassificationModifierDoesNotSatisfyModifierRequirement()
+{
+    QQmlEngine engine;
+    QQmlComponent component(&engine,
+        QUrl(QStringLiteral("qrc:/gui/perigee/DeckBindingSettings.qml")));
+    FakeDeckPreferences preferences;
+    FakeGamepadNavigation navigation;
+    QScopedPointer<QObject> root(component.createWithInitialProperties({
+        {QStringLiteral("preferences"), QVariant::fromValue(&preferences)},
+        {QStringLiteral("gamepadNavigation"), QVariant::fromValue(&navigation)},
+    }));
+    QVERIFY2(root, qPrintable(component.errorString()));
+    QVERIFY(QMetaObject::invokeMethod(root.data(), "beginKeyboardCapture"));
+
+    QVERIFY(QMetaObject::invokeMethod(
+        root.data(), "handleKeyboardCapture",
+        Q_ARG(QVariant, int(Qt::KeypadModifier)),
+        Q_ARG(QVariant, int(Qt::Key_Enter)),
+        Q_ARG(QVariant, quint32(104)),
+        Q_ARG(QVariant, false)));
+
+    QCOMPARE(preferences.nativeKeyboardCaptureCalls, 0);
+    QCOMPARE(root->property("captureMode").toString(),
+             QStringLiteral("keyboard"));
+    QVERIFY(!root->property("conflictMessage").toString().isEmpty());
 }
 
 void DeckBindingsQmlTest::hidingTheSettingsViewCancelsControllerCapture()
