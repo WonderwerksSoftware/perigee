@@ -11,6 +11,10 @@
 #include "audio/renderers/renderer.h"
 #include "video/overlaymanager.h"
 
+#include <memory>
+
+class DeckSurfaceRenderer;
+
 class SupportedVideoFormatList : public QList<int>
 {
 public:
@@ -281,6 +285,7 @@ private:
     Uint32 m_DropAudioEndTime;
 
     Overlay::OverlayManager m_OverlayManager;
+    std::unique_ptr<DeckSurfaceRenderer> m_DeckSurfaceRenderer;
 
     static CONNECTION_LISTENER_CALLBACKS k_ConnCallbacks;
     static Session* s_ActiveSession;

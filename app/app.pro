@@ -1,4 +1,4 @@
-QT += core quick network quickcontrols2 svg
+QT += core opengl quick network quickcontrols2 svg
 CONFIG += c++17
 
 !versionAtLeast(QT_VERSION, 6.7.0) {
@@ -204,6 +204,7 @@ SOURCES += \
     streaming/streamutils.cpp \
     backend/autoupdatechecker.cpp \
     perigee/actions/actionregistry.cpp \
+    perigee/deck/decksurfacerenderer.cpp \
     path.cpp \
     settings/mappingmanager.cpp \
     gui/sdlgamepadkeynavigation.cpp \
@@ -245,6 +246,7 @@ HEADERS += \
     perigee/actions/actionregistry.h \
     perigee/actions/actiontypes.h \
     perigee/actions/hostadapter.h \
+    perigee/deck/decksurfacerenderer.h \
     path.h \
     settings/mappingmanager.h \
     gui/sdlgamepadkeynavigation.h \

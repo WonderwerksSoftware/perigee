@@ -13,6 +13,8 @@
 #include <QElapsedTimer>
 #include <QTemporaryFile>
 #include <QRegularExpression>
+#include <QQuickWindow>
+#include <QSGRendererInterface>
 
 #ifdef Q_OS_UNIX
 #include <sys/socket.h>
@@ -754,6 +756,13 @@ int main(int argc, char *argv[])
     }
 
     QGuiApplication app(argc, argv);
+
+#ifdef Q_OS_LINUX
+    // Deck uses QQuickRenderControl with an application-owned OpenGL context.
+    // This selects Qt Quick's API only; Moonlight's SDL renderer preference is
+    // intentionally unchanged. This is before the first QQuickWindow.
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+#endif
 
 #ifdef Q_OS_DARWIN
     // macOS defaults "Keyboard navigation" to text fields and lists only, which

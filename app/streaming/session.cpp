@@ -2,6 +2,7 @@
 #include "settings/streamingpreferences.h"
 #include "streaming/streamutils.h"
 #include "backend/richpresencemanager.h"
+#include "perigee/deck/decksurfacerenderer.h"
 
 #include <Limelight.h>
 #include "SDL_compat.h"
@@ -40,6 +41,7 @@
 #include <QGuiApplication>
 #include <QCursor>
 #include <QScreen>
+#include <QQmlEngine>
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QQuickOpenGLUtils>
@@ -593,12 +595,39 @@ Session::~Session()
     // NB: This may not get destroyed for a long time! Don't put any non-trivial cleanup here.
     // Use Session::exec() or DeferredSessionCleanupTask instead.
 
+    // Session is a QML-owned GUI-thread object. Release Deck's context-bound
+    // QML/GL resources here, before the associated engine and application exit.
+    m_DeckSurfaceRenderer.reset();
     SDL_DestroyMutex(m_DecoderLock);
 }
 
 bool Session::initialize(QQuickWindow* qtWindow)
 {
     m_QtWindow = qtWindow;
+
+#ifdef Q_OS_LINUX
+    QQmlEngine* engine = m_QtWindow != nullptr ? qmlEngine(m_QtWindow) : nullptr;
+    if (engine == nullptr) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Perigee Deck disabled: streaming Qt window has no QML engine");
+    }
+    else {
+        auto deckRenderer = std::make_unique<DeckSurfaceRenderer>();
+        QString deckError;
+        if (!deckRenderer->initialize(
+                engine,
+                QUrl(QStringLiteral(
+                    "qrc:/gui/perigee/PerigeeDeckProbe.qml")),
+                &deckError)) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Perigee Deck initialization failed; streaming will continue: %s",
+                        qUtf8Printable(deckError));
+        }
+        else {
+            m_DeckSurfaceRenderer = std::move(deckRenderer);
+        }
+    }
+#endif
 
 #ifdef Q_OS_DARWIN
     if (qEnvironmentVariableIntValue("I_WANT_BUGGY_FULLSCREEN") == 0) {
