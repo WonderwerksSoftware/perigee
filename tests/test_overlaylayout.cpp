@@ -4,6 +4,10 @@
 
 #include <QtTest>
 
+#include <atomic>
+#include <mutex>
+#include <thread>
+
 class RecordingOverlayRenderer final : public Overlay::IOverlayRenderer
 {
 public:
@@ -15,6 +19,68 @@ public:
     QVector<Overlay::OverlayType> notifications;
 };
 
+class BlockingOverlayRenderer final : public Overlay::IOverlayRenderer
+{
+public:
+    explicit BlockingOverlayRenderer(Overlay::OverlayManager* manager) :
+        m_Manager(manager)
+    {
+    }
+
+    void notifyOverlayUpdated(Overlay::OverlayType type) override
+    {
+        const int callIndex = m_CallCount.fetch_add(1) + 1;
+        const int active = m_ActiveCallbacks.fetch_add(1) + 1;
+        int maximum = m_MaxActiveCallbacks.load();
+        while (active > maximum &&
+               !m_MaxActiveCallbacks.compare_exchange_weak(maximum, active)) {
+        }
+
+        if (callIndex == 1) {
+            firstCallbackEntered.release();
+            releaseFirstCallback.acquire();
+        }
+        else {
+            secondCallbackEntered.release();
+        }
+
+        SDL_Surface* surface = nullptr;
+        Overlay::OverlayPresentation presentation;
+        if (m_Manager->getUpdatedOverlaySurface(type, &surface, &presentation)) {
+            {
+                std::lock_guard<std::mutex> lock(m_ConsumedMutex);
+                m_ConsumedMargins.push_back(presentation.marginPx);
+            }
+            SDL_FreeSurface(surface);
+        }
+
+        m_ActiveCallbacks.fetch_sub(1);
+    }
+
+    int maxActiveCallbacks() const
+    {
+        return m_MaxActiveCallbacks.load();
+    }
+
+    QVector<int> consumedMargins() const
+    {
+        std::lock_guard<std::mutex> lock(m_ConsumedMutex);
+        return m_ConsumedMargins;
+    }
+
+    QSemaphore firstCallbackEntered;
+    QSemaphore secondCallbackEntered;
+    QSemaphore releaseFirstCallback;
+
+private:
+    Overlay::OverlayManager* m_Manager;
+    std::atomic<int> m_CallCount {0};
+    std::atomic<int> m_ActiveCallbacks {0};
+    std::atomic<int> m_MaxActiveCallbacks {0};
+    mutable std::mutex m_ConsumedMutex;
+    QVector<int> m_ConsumedMargins;
+};
+
 class OverlayLayoutTest : public QObject
 {
     Q_OBJECT
@@ -22,6 +88,10 @@ class OverlayLayoutTest : public QObject
 private slots:
     void placesAndConstrainsOverlays_data();
     void placesAndConstrainsOverlays();
+    void layoutStateRecomputesAfterResizeWithoutSurfaceUpdate();
+    void singleOverlayArbitratesStatusOverRetainedDeck();
+    void deletesManagerOwnedSurfacesExactlyOnce();
+    void serializesNotificationsPerOverlayType();
     void replacesPendingSurfaceAndPresentation();
     void representsNullSurfaceAsAConsumableClear();
     void consumedSurfaceOutlivesManager();
@@ -110,6 +180,275 @@ void OverlayLayoutTest::placesAndConstrainsOverlays()
     QVERIFY(qFuzzyCompare(actual.y + 1.0f, expectedY + 1.0f));
     QVERIFY(qFuzzyCompare(actual.w + 1.0f, expectedWidth + 1.0f));
     QVERIFY(qFuzzyCompare(actual.h + 1.0f, expectedHeight + 1.0f));
+}
+
+void OverlayLayoutTest::layoutStateRecomputesAfterResizeWithoutSurfaceUpdate()
+{
+    Overlay::OverlayLayoutState state;
+    state.setSurface(
+        640,
+        360,
+        {Overlay::OverlayAnchor::TopCenter, 0, 0.5f, 1.0f});
+
+    SDL_FRect rect;
+    QVERIFY(state.updateLayout(1920, 1080, false, &rect));
+    QCOMPARE(rect.x, 640.0f);
+    QCOMPARE(rect.y, 0.0f);
+    QCOMPARE(rect.w, 640.0f);
+    QCOMPARE(rect.h, 360.0f);
+
+    QVERIFY(!state.updateLayout(1920, 1080, false, &rect));
+
+    QVERIFY(state.updateLayout(800, 600, false, &rect));
+    QCOMPARE(rect.x, 200.0f);
+    QCOMPARE(rect.y, 0.0f);
+    QCOMPARE(rect.w, 400.0f);
+    QCOMPARE(rect.h, 225.0f);
+}
+
+void OverlayLayoutTest::singleOverlayArbitratesStatusOverRetainedDeck()
+{
+    Overlay::SingleOverlayArbiter arbiter;
+    const Overlay::OverlayPresentation deckPresentation {
+        Overlay::OverlayAnchor::TopCenter, 0, 1.0f, 1.0f};
+    const Overlay::OverlayPresentation statusPresentation {
+        Overlay::OverlayAnchor::BottomLeft, 0, 1.0f, 1.0f};
+
+    SDL_Surface* deck = SDL_CreateRGBSurfaceWithFormat(
+        0, 64, 36, 32, SDL_PIXELFORMAT_ARGB8888);
+    SDL_Surface* status = SDL_CreateRGBSurfaceWithFormat(
+        0, 80, 24, 32, SDL_PIXELFORMAT_ARGB8888);
+    QVERIFY(deck != nullptr);
+    QVERIFY(status != nullptr);
+
+    QVERIFY(arbiter.update(
+        Overlay::OverlayDeck, deck, deckPresentation, true));
+
+    Overlay::OverlayType selectedType = Overlay::OverlayMax;
+    SDL_Surface* selectedSurface = nullptr;
+    Overlay::OverlayPresentation selectedPresentation;
+    QVERIFY(arbiter.getSelection(
+        &selectedType, &selectedSurface, &selectedPresentation));
+    QCOMPARE(selectedType, Overlay::OverlayDeck);
+    QCOMPARE(selectedSurface, deck);
+    QCOMPARE(selectedPresentation.anchor, Overlay::OverlayAnchor::TopCenter);
+
+    QVERIFY(arbiter.update(
+        Overlay::OverlayStatusUpdate, status, statusPresentation, true));
+    QVERIFY(arbiter.getSelection(
+        &selectedType, &selectedSurface, &selectedPresentation));
+    QCOMPARE(selectedType, Overlay::OverlayStatusUpdate);
+    QCOMPARE(selectedSurface, status);
+
+    QVERIFY(arbiter.update(
+        Overlay::OverlayStatusUpdate, nullptr, statusPresentation, false));
+    QVERIFY(arbiter.getSelection(
+        &selectedType, &selectedSurface, &selectedPresentation));
+    QCOMPARE(selectedType, Overlay::OverlayDeck);
+    QCOMPARE(selectedSurface, deck);
+
+    SDL_Surface* secondStatus = SDL_CreateRGBSurfaceWithFormat(
+        0, 96, 28, 32, SDL_PIXELFORMAT_ARGB8888);
+    QVERIFY(secondStatus != nullptr);
+    QVERIFY(arbiter.update(
+        Overlay::OverlayStatusUpdate, secondStatus, statusPresentation, true));
+
+    QVERIFY(!arbiter.update(
+        Overlay::OverlayDeck, nullptr, deckPresentation, false));
+    QVERIFY(arbiter.getSelection(
+        &selectedType, &selectedSurface, &selectedPresentation));
+    QCOMPARE(selectedType, Overlay::OverlayStatusUpdate);
+    QCOMPARE(selectedSurface, secondStatus);
+
+    QVERIFY(arbiter.update(
+        Overlay::OverlayStatusUpdate, nullptr, statusPresentation, false));
+    QVERIFY(!arbiter.getSelection(
+        &selectedType, &selectedSurface, &selectedPresentation));
+
+    SDL_Surface* finalDeck = SDL_CreateRGBSurfaceWithFormat(
+        0, 48, 27, 32, SDL_PIXELFORMAT_ARGB8888);
+    QVERIFY(finalDeck != nullptr);
+    QVERIFY(arbiter.update(
+        Overlay::OverlayDeck, finalDeck, deckPresentation, true));
+    QVERIFY(arbiter.update(
+        Overlay::OverlayDeck, nullptr, deckPresentation, false));
+    QVERIFY(!arbiter.getSelection(
+        &selectedType, &selectedSurface, &selectedPresentation));
+}
+
+void OverlayLayoutTest::deletesManagerOwnedSurfacesExactlyOnce()
+{
+    QVector<SDL_Surface*> deleted;
+    int nullDeletes = 0;
+    const Overlay::OverlaySurfaceDeleter deleter =
+        [&deleted, &nullDeletes](SDL_Surface* surface) {
+            if (surface == nullptr) {
+                nullDeletes++;
+            }
+            else {
+                deleted.push_back(surface);
+            }
+        };
+
+    SDL_Surface* superseded = reinterpret_cast<SDL_Surface*>(quintptr(0x1000));
+    SDL_Surface* cleared = reinterpret_cast<SDL_Surface*>(quintptr(0x2000));
+    SDL_Surface* pendingAtDestruction = reinterpret_cast<SDL_Surface*>(quintptr(0x3000));
+    SDL_Surface* consumed = nullptr;
+    SDL_Surface* transferred = reinterpret_cast<SDL_Surface*>(quintptr(0x4000));
+
+    {
+        Overlay::OverlayManager manager(deleter);
+        manager.updateOverlaySurface(
+            Overlay::OverlayDeck,
+            superseded,
+            {Overlay::OverlayAnchor::TopCenter, 1, 1.0f, 1.0f});
+        manager.updateOverlaySurface(
+            Overlay::OverlayDeck,
+            cleared,
+            {Overlay::OverlayAnchor::TopCenter, 2, 1.0f, 1.0f});
+        QCOMPARE(deleted.count(superseded), 1);
+
+        manager.updateOverlaySurface(
+            Overlay::OverlayDeck,
+            nullptr,
+            {Overlay::OverlayAnchor::TopCenter, 3, 1.0f, 1.0f});
+        QCOMPARE(deleted.count(cleared), 1);
+        QCOMPARE(nullDeletes, 0);
+
+        manager.updateOverlaySurface(
+            Overlay::OverlayStatusUpdate,
+            pendingAtDestruction,
+            {Overlay::OverlayAnchor::BottomLeft, 4, 1.0f, 1.0f});
+        manager.updateOverlaySurface(
+            Overlay::OverlayDebug,
+            transferred,
+            {Overlay::OverlayAnchor::TopLeft, 5, 1.0f, 1.0f});
+
+        Overlay::OverlayPresentation presentation;
+        QVERIFY(manager.getUpdatedOverlaySurface(
+            Overlay::OverlayDebug, &consumed, &presentation));
+        QCOMPARE(consumed, transferred);
+        QCOMPARE(presentation.marginPx, 5);
+    }
+
+    QCOMPARE(deleted.count(pendingAtDestruction), 1);
+    QCOMPARE(deleted.count(transferred), 0);
+    QCOMPARE(nullDeletes, 0);
+
+    deleter(consumed);
+    QCOMPARE(deleted.count(transferred), 1);
+}
+
+void OverlayLayoutTest::serializesNotificationsPerOverlayType()
+{
+    {
+        Overlay::OverlayManager manager;
+        BlockingOverlayRenderer renderer(&manager);
+        manager.setOverlayRenderer(&renderer);
+
+        SDL_Surface* firstSurface = SDL_CreateRGBSurfaceWithFormat(
+            0, 16, 9, 32, SDL_PIXELFORMAT_ARGB8888);
+        SDL_Surface* secondSurface = SDL_CreateRGBSurfaceWithFormat(
+            0, 32, 18, 32, SDL_PIXELFORMAT_ARGB8888);
+        QVERIFY(firstSurface != nullptr);
+        QVERIFY(secondSurface != nullptr);
+
+        std::thread firstProducer([&]() {
+            manager.updateOverlaySurface(
+                Overlay::OverlayDeck,
+                firstSurface,
+                {Overlay::OverlayAnchor::TopCenter, 1, 1.0f, 1.0f});
+        });
+        QVERIFY(renderer.firstCallbackEntered.tryAcquire(1, 1000));
+
+        std::thread secondProducer([&]() {
+            manager.updateOverlaySurface(
+                Overlay::OverlayDeck,
+                secondSurface,
+                {Overlay::OverlayAnchor::TopCenter, 2, 1.0f, 1.0f});
+        });
+        const bool sameTypeCallbacksOverlapped =
+            renderer.secondCallbackEntered.tryAcquire(1, 250);
+
+        renderer.releaseFirstCallback.release();
+        firstProducer.join();
+        secondProducer.join();
+
+        QVERIFY(!sameTypeCallbacksOverlapped);
+        QCOMPARE(renderer.maxActiveCallbacks(), 1);
+        QCOMPARE(renderer.consumedMargins(), QVector<int>({1, 2}));
+    }
+
+    {
+        Overlay::OverlayManager manager;
+        manager.setOverlayState(Overlay::OverlayDeck, true);
+        BlockingOverlayRenderer renderer(&manager);
+        manager.setOverlayRenderer(&renderer);
+
+        SDL_Surface* deckSurface = SDL_CreateRGBSurfaceWithFormat(
+            0, 16, 9, 32, SDL_PIXELFORMAT_ARGB8888);
+        QVERIFY(deckSurface != nullptr);
+
+        std::thread deckProducer([&]() {
+            manager.updateOverlaySurface(
+                Overlay::OverlayDeck,
+                deckSurface,
+                {Overlay::OverlayAnchor::TopCenter, 5, 1.0f, 1.0f});
+        });
+        QVERIFY(renderer.firstCallbackEntered.tryAcquire(1, 1000));
+
+        std::thread clearProducer([&]() {
+            manager.setOverlayState(Overlay::OverlayDeck, false);
+        });
+        const bool clearCallbackOverlapped =
+            renderer.secondCallbackEntered.tryAcquire(1, 250);
+
+        renderer.releaseFirstCallback.release();
+        deckProducer.join();
+        clearProducer.join();
+
+        QVERIFY(!clearCallbackOverlapped);
+        QCOMPARE(renderer.maxActiveCallbacks(), 1);
+        QCOMPARE(renderer.consumedMargins(), QVector<int>({5, 0}));
+        QVERIFY(!manager.isOverlayEnabled(Overlay::OverlayDeck));
+    }
+
+    {
+        Overlay::OverlayManager manager;
+        BlockingOverlayRenderer renderer(&manager);
+        manager.setOverlayRenderer(&renderer);
+
+        SDL_Surface* deckSurface = SDL_CreateRGBSurfaceWithFormat(
+            0, 16, 9, 32, SDL_PIXELFORMAT_ARGB8888);
+        SDL_Surface* statusSurface = SDL_CreateRGBSurfaceWithFormat(
+            0, 24, 12, 32, SDL_PIXELFORMAT_ARGB8888);
+        QVERIFY(deckSurface != nullptr);
+        QVERIFY(statusSurface != nullptr);
+
+        std::thread deckProducer([&]() {
+            manager.updateOverlaySurface(
+                Overlay::OverlayDeck,
+                deckSurface,
+                {Overlay::OverlayAnchor::TopCenter, 3, 1.0f, 1.0f});
+        });
+        QVERIFY(renderer.firstCallbackEntered.tryAcquire(1, 1000));
+
+        std::thread statusProducer([&]() {
+            manager.updateOverlaySurface(
+                Overlay::OverlayStatusUpdate,
+                statusSurface,
+                {Overlay::OverlayAnchor::BottomLeft, 4, 1.0f, 1.0f});
+        });
+        const bool differentTypeCallbacksOverlapped =
+            renderer.secondCallbackEntered.tryAcquire(1, 1000);
+
+        renderer.releaseFirstCallback.release();
+        deckProducer.join();
+        statusProducer.join();
+
+        QVERIFY(differentTypeCallbacksOverlapped);
+        QCOMPARE(renderer.maxActiveCallbacks(), 2);
+    }
 }
 
 void OverlayLayoutTest::replacesPendingSurfaceAndPresentation()

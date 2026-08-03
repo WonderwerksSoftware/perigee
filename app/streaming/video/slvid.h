@@ -5,6 +5,8 @@
 
 #include <SLVideo.h>
 
+#include <mutex>
+
 class SLVideoDecoder : public IVideoDecoder, public Overlay::IOverlayRenderer
 {
 public:
@@ -40,6 +42,8 @@ private:
     CSLVideoContext* m_VideoContext;
     CSLVideoStream* m_VideoStream;
     CSLVideoOverlay* m_Overlay;
+    std::mutex m_OverlayMutex;
+    Overlay::SingleOverlayArbiter m_OverlayArbiter;
 
     int m_ViewportWidth;
     int m_ViewportHeight;

@@ -163,6 +163,7 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
         type, &newSurface, &presentation);
     if (overlayUpdated && (newSurface == nullptr || !overlayEnabled)) {
         SDL_AtomicSet(&m_OverlayHasValidData[type], 0);
+        m_OverlayLayouts[type].clear();
         SDL_FreeSurface(newSurface);
     }
     else if (overlayUpdated) {
@@ -204,16 +205,24 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
             glPixelStorei(GL_UNPACK_ROW_LENGTH_EXT, 0);
         }
 
-        // OpenGL screen space has its origin in the lower-left corner.
-        SDL_FRect overlayRect = Overlay::calculateOverlayRect(
-            presentation,
+        m_OverlayLayouts[type].setSurface(
             newSurface->w,
             newSurface->h,
-            viewportWidth,
-            viewportHeight,
-            true);
+            presentation);
 
         SDL_FreeSurface(newSurface);
+
+        SDL_AtomicSet(&m_OverlayHasValidData[type], 1);
+    }
+
+    SDL_FRect overlayRect;
+    if (SDL_AtomicGet(&m_OverlayHasValidData[type]) &&
+            m_OverlayLayouts[type].updateLayout(
+                viewportWidth,
+                viewportHeight,
+                true,
+                &overlayRect)) {
+        // OpenGL screen space has its origin in the lower-left corner.
 
         // Convert screen space to normalized device coordinates
         StreamUtils::screenSpaceToNormalizedDeviceCoords(&overlayRect, viewportWidth, viewportHeight);
@@ -231,8 +240,6 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
         // Update the VBO for this overlay (already bound to a VAO)
         glBindBuffer(GL_ARRAY_BUFFER, m_OverlayVBOs[type]);
         glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
-
-        SDL_AtomicSet(&m_OverlayHasValidData[type], 1);
     }
 
     if (!overlayEnabled) {

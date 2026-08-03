@@ -3,7 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <new>
+#include <utility>
 
 using namespace Overlay;
 
@@ -56,11 +56,161 @@ SDL_FRect Overlay::calculateOverlayRect(OverlayPresentation presentation,
     return {x, y, width, height};
 }
 
-OverlayManager::OverlayManager() :
-    m_Renderer(nullptr),
-    m_FontData(Path::readDataFile("ModeSeven.ttf"))
+void OverlayLayoutState::setSurface(int surfaceWidth,
+                                    int surfaceHeight,
+                                    OverlayPresentation presentation)
 {
-    memset(m_Overlays, 0, sizeof(m_Overlays));
+    m_HasSurface = surfaceWidth > 0 && surfaceHeight > 0;
+    m_SurfaceWidth = surfaceWidth;
+    m_SurfaceHeight = surfaceHeight;
+    m_Presentation = presentation;
+    m_HasLayout = false;
+}
+
+void OverlayLayoutState::clear()
+{
+    m_HasSurface = false;
+    m_HasLayout = false;
+    m_SurfaceWidth = 0;
+    m_SurfaceHeight = 0;
+    m_Rect = {};
+}
+
+bool OverlayLayoutState::hasSurface() const
+{
+    return m_HasSurface;
+}
+
+bool OverlayLayoutState::updateLayout(int viewportWidth,
+                                      int viewportHeight,
+                                      bool originAtBottomLeft,
+                                      SDL_FRect* rect)
+{
+    SDL_assert(rect != nullptr);
+
+    if (!m_HasSurface) {
+        *rect = {};
+        return false;
+    }
+
+    const bool changed = !m_HasLayout ||
+                         m_ViewportWidth != viewportWidth ||
+                         m_ViewportHeight != viewportHeight ||
+                         m_OriginAtBottomLeft != originAtBottomLeft;
+    if (changed) {
+        m_Rect = calculateOverlayRect(
+            m_Presentation,
+            m_SurfaceWidth,
+            m_SurfaceHeight,
+            viewportWidth,
+            viewportHeight,
+            originAtBottomLeft);
+        m_ViewportWidth = viewportWidth;
+        m_ViewportHeight = viewportHeight;
+        m_OriginAtBottomLeft = originAtBottomLeft;
+        m_HasLayout = true;
+    }
+
+    *rect = m_Rect;
+    return changed;
+}
+
+SingleOverlayArbiter::SingleOverlayArbiter(OverlaySurfaceDeleter surfaceDeleter) :
+    m_SurfaceDeleter(std::move(surfaceDeleter))
+{
+}
+
+SingleOverlayArbiter::~SingleOverlayArbiter()
+{
+    for (RetainedSurface& retained : m_Retained) {
+        freeSurface(retained.surface);
+    }
+}
+
+bool SingleOverlayArbiter::update(OverlayType type,
+                                  SDL_Surface* ownedSurface,
+                                  OverlayPresentation presentation,
+                                  bool enabled)
+{
+    if (type != OverlayStatusUpdate && type != OverlayDeck) {
+        freeSurface(ownedSurface);
+        return false;
+    }
+
+    const OverlayType oldSelectedType = m_SelectedType;
+    const bool replacedSelectedSurface = oldSelectedType == type &&
+                                         enabled &&
+                                         ownedSurface != nullptr;
+
+    RetainedSurface& retained = m_Retained[type];
+    freeSurface(retained.surface);
+    retained.surface = nullptr;
+
+    if (enabled && ownedSurface != nullptr) {
+        retained.surface = ownedSurface;
+        retained.presentation = presentation;
+    }
+    else {
+        freeSurface(ownedSurface);
+    }
+
+    m_SelectedType = selectType();
+    return m_SelectedType != oldSelectedType || replacedSelectedSurface;
+}
+
+bool SingleOverlayArbiter::getSelection(OverlayType* type,
+                                        SDL_Surface** surface,
+                                        OverlayPresentation* presentation) const
+{
+    SDL_assert(type != nullptr);
+    SDL_assert(surface != nullptr);
+    SDL_assert(presentation != nullptr);
+
+    *type = m_SelectedType;
+    if (m_SelectedType == OverlayMax) {
+        *surface = nullptr;
+        *presentation = {};
+        return false;
+    }
+
+    *surface = m_Retained[m_SelectedType].surface;
+    *presentation = m_Retained[m_SelectedType].presentation;
+    return true;
+}
+
+OverlayType SingleOverlayArbiter::selectType() const
+{
+    if (m_Retained[OverlayStatusUpdate].surface != nullptr) {
+        return OverlayStatusUpdate;
+    }
+    if (m_Retained[OverlayDeck].surface != nullptr) {
+        return OverlayDeck;
+    }
+    return OverlayMax;
+}
+
+void SingleOverlayArbiter::freeSurface(SDL_Surface* surface)
+{
+    if (surface != nullptr) {
+        m_SurfaceDeleter(surface);
+    }
+}
+
+OverlayManager::OverlayManager(OverlaySurfaceDeleter surfaceDeleter) :
+    m_Renderer(nullptr),
+    m_FontData(Path::readDataFile("ModeSeven.ttf")),
+    m_SurfaceDeleter(std::move(surfaceDeleter))
+{
+    for (auto& overlay : m_Overlays) {
+        overlay.enabled = false;
+        overlay.fontSize = 0;
+        overlay.color = {};
+        memset(overlay.text, 0, sizeof(overlay.text));
+        overlay.font = nullptr;
+        overlay.hasPendingSurface = false;
+        overlay.pendingSurface = nullptr;
+        overlay.pendingPresentation = {};
+    }
 
     m_Overlays[OverlayType::OverlayDebug].color = {0xD0, 0xD0, 0x00, 0xFF};
     m_Overlays[OverlayType::OverlayDebug].fontSize = 20;
@@ -84,12 +234,16 @@ OverlayManager::OverlayManager() :
 OverlayManager::~OverlayManager()
 {
     for (int i = 0; i < OverlayType::OverlayMax; i++) {
-        PendingSurface* pendingSurface = (PendingSurface*)SDL_AtomicSetPtr(
-            (void**)&m_Overlays[i].pendingSurface, nullptr);
-        if (pendingSurface != nullptr) {
-            SDL_FreeSurface(pendingSurface->surface);
-            delete pendingSurface;
+        SDL_Surface* pendingSurface = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(m_PendingMutexes[i]);
+            if (m_Overlays[i].hasPendingSurface) {
+                pendingSurface = m_Overlays[i].pendingSurface;
+                m_Overlays[i].hasPendingSurface = false;
+                m_Overlays[i].pendingSurface = nullptr;
+            }
         }
+        freeSurface(pendingSurface);
         if (m_Overlays[i].font != nullptr) {
             TTF_CloseFont(m_Overlays[i].font);
         }
@@ -106,7 +260,7 @@ OverlayManager::~OverlayManager()
 
 bool OverlayManager::isOverlayEnabled(OverlayType type)
 {
-    return m_Overlays[type].enabled;
+    return m_Overlays[type].enabled.load();
 }
 
 char* OverlayManager::getOverlayText(OverlayType type)
@@ -116,8 +270,11 @@ char* OverlayManager::getOverlayText(OverlayType type)
 
 void OverlayManager::updateOverlayText(OverlayType type, const char* text)
 {
+    std::lock_guard<std::mutex> notificationLock(m_NotificationMutexes[type]);
     SDL_utf8strlcpy(m_Overlays[type].text, text, sizeof(m_Overlays[0].text));
-    setOverlayTextUpdated(type);
+    if (m_Overlays[type].enabled.load()) {
+        notifyOverlayUpdatedLocked(type);
+    }
 }
 
 int OverlayManager::getOverlayMaxTextLength()
@@ -138,15 +295,15 @@ bool OverlayManager::getUpdatedOverlaySurface(OverlayType type,
     SDL_assert(presentation != nullptr);
 
     *ownedSurface = nullptr;
-    PendingSurface* pendingSurface = (PendingSurface*)SDL_AtomicSetPtr(
-        (void**)&m_Overlays[type].pendingSurface, nullptr);
-    if (pendingSurface == nullptr) {
+    std::lock_guard<std::mutex> lock(m_PendingMutexes[type]);
+    if (!m_Overlays[type].hasPendingSurface) {
         return false;
     }
 
-    *ownedSurface = pendingSurface->surface;
-    *presentation = pendingSurface->presentation;
-    delete pendingSurface;
+    *ownedSurface = m_Overlays[type].pendingSurface;
+    *presentation = m_Overlays[type].pendingPresentation;
+    m_Overlays[type].hasPendingSurface = false;
+    m_Overlays[type].pendingSurface = nullptr;
     return true;
 }
 
@@ -154,44 +311,52 @@ void OverlayManager::updateOverlaySurface(OverlayType type,
                                           SDL_Surface* ownedSurface,
                                           OverlayPresentation presentation)
 {
-    PendingSurface* pendingSurface = new (std::nothrow) PendingSurface {
-        ownedSurface,
-        presentation,
-    };
-    if (pendingSurface == nullptr) {
-        SDL_FreeSurface(ownedSurface);
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "Failed to allocate pending overlay update");
-        return;
-    }
+    // The per-type notification lock serializes publication through renderer
+    // consumption. Renderer callbacks must not synchronously submit another
+    // update for the same type. No pending-state lock is held during callbacks.
+    std::lock_guard<std::mutex> notificationLock(m_NotificationMutexes[type]);
+    updateOverlaySurfaceLocked(type, ownedSurface, presentation);
+}
 
-    PendingSurface* oldPendingSurface = (PendingSurface*)SDL_AtomicSetPtr(
-        (void**)&m_Overlays[type].pendingSurface, pendingSurface);
+void OverlayManager::updateOverlaySurfaceLocked(OverlayType type,
+                                                SDL_Surface* ownedSurface,
+                                                OverlayPresentation presentation)
+{
+    SDL_Surface* oldSurface = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_PendingMutexes[type]);
+        if (m_Overlays[type].hasPendingSurface) {
+            oldSurface = m_Overlays[type].pendingSurface;
+        }
+        m_Overlays[type].hasPendingSurface = true;
+        m_Overlays[type].pendingSurface = ownedSurface;
+        m_Overlays[type].pendingPresentation = presentation;
+    }
 
     if (m_Renderer != nullptr) {
         m_Renderer->notifyOverlayUpdated(type);
     }
 
-    if (oldPendingSurface != nullptr) {
-        SDL_FreeSurface(oldPendingSurface->surface);
-        delete oldPendingSurface;
-    }
+    freeSurface(oldSurface);
 }
 
 void OverlayManager::setOverlayTextUpdated(OverlayType type)
 {
+    std::lock_guard<std::mutex> notificationLock(m_NotificationMutexes[type]);
+
     // Only update the overlay state if it's enabled. If it's not enabled,
     // the renderer has already been notified by setOverlayState().
-    if (m_Overlays[type].enabled) {
-        notifyOverlayUpdated(type);
+    if (m_Overlays[type].enabled.load()) {
+        notifyOverlayUpdatedLocked(type);
     }
 }
 
 void OverlayManager::setOverlayState(OverlayType type, bool enabled)
 {
-    bool stateChanged = m_Overlays[type].enabled != enabled;
+    std::lock_guard<std::mutex> notificationLock(m_NotificationMutexes[type]);
+    const bool stateChanged = m_Overlays[type].enabled.load() != enabled;
 
-    m_Overlays[type].enabled = enabled;
+    m_Overlays[type].enabled.store(enabled);
 
     if (stateChanged) {
         if (!enabled) {
@@ -203,7 +368,7 @@ void OverlayManager::setOverlayState(OverlayType type, bool enabled)
             // Deck is surface-backed rather than text-backed. Enabling waits for
             // the producer's first surface; disabling publishes an explicit clear.
             if (!enabled) {
-                updateOverlaySurface(
+                updateOverlaySurfaceLocked(
                     type,
                     nullptr,
                     {OverlayAnchor::TopCenter, 0, 1.0f, 1.0f});
@@ -211,7 +376,7 @@ void OverlayManager::setOverlayState(OverlayType type, bool enabled)
             return;
         }
 
-        notifyOverlayUpdated(type);
+        notifyOverlayUpdatedLocked(type);
     }
 }
 
@@ -225,7 +390,14 @@ void OverlayManager::setOverlayRenderer(IOverlayRenderer* renderer)
     m_Renderer = renderer;
 }
 
-void OverlayManager::notifyOverlayUpdated(OverlayType type)
+void OverlayManager::freeSurface(SDL_Surface* surface)
+{
+    if (surface != nullptr) {
+        m_SurfaceDeleter(surface);
+    }
+}
+
+void OverlayManager::notifyOverlayUpdatedLocked(OverlayType type)
 {
     if (m_Renderer == nullptr) {
         return;
@@ -258,9 +430,9 @@ void OverlayManager::notifyOverlayUpdated(OverlayType type)
         presentation.anchor = OverlayAnchor::BottomLeft;
     }
 
-    updateOverlaySurface(
+    updateOverlaySurfaceLocked(
         type,
-        m_Overlays[type].enabled ?
+        m_Overlays[type].enabled.load() ?
             // The _Wrapped variant is required for line breaks to work
             RenderTextOutlinedWrapped(m_Overlays[type].font,
                                       m_Overlays[type].text,

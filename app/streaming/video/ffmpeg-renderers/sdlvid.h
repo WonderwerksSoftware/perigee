@@ -34,6 +34,7 @@ private:
     SDL_Texture* m_Texture;
     SDL_Texture* m_OverlayTextures[Overlay::OverlayMax];
     SDL_Rect m_OverlayRects[Overlay::OverlayMax];
+    Overlay::OverlayLayoutState m_OverlayLayouts[Overlay::OverlayMax];
 
     // Used for CPU conversion of YUV to RGB if needed
     bool m_NeedsYuvToRgbConversion;
@@ -46,4 +47,3 @@ private:
     CUDAGLInteropHelper* m_CudaGLHelper;
 #endif
 };
-

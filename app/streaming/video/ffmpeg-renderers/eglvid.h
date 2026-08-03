@@ -38,6 +38,7 @@ private:
     unsigned m_OverlayVBOs[Overlay::OverlayMax];
     unsigned m_OverlayVAOs[Overlay::OverlayMax];
     SDL_atomic_t m_OverlayHasValidData[Overlay::OverlayMax];
+    Overlay::OverlayLayoutState m_OverlayLayouts[Overlay::OverlayMax];
     unsigned m_ShaderProgram;
     unsigned m_OverlayShaderProgram;
     SDL_GLContext m_Context;

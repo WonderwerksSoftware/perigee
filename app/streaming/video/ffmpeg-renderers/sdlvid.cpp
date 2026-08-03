@@ -239,21 +239,10 @@ void SdlRenderer::renderOverlay(Overlay::OverlayType type)
         }
 
         if (newSurface != nullptr && overlayEnabled) {
-            int viewportWidth;
-            int viewportHeight;
-            SDL_GetRendererOutputSize(m_Renderer, &viewportWidth, &viewportHeight);
-            const SDL_FRect overlayRect = Overlay::calculateOverlayRect(
-                presentation,
+            m_OverlayLayouts[type].setSurface(
                 newSurface->w,
                 newSurface->h,
-                viewportWidth,
-                viewportHeight);
-            m_OverlayRects[type] = {
-                static_cast<int>(overlayRect.x),
-                static_cast<int>(overlayRect.y),
-                static_cast<int>(overlayRect.w),
-                static_cast<int>(overlayRect.h),
-            };
+                presentation);
 
             m_OverlayTextures[type] = SDL_CreateTextureFromSurface(m_Renderer, newSurface);
 
@@ -261,12 +250,30 @@ void SdlRenderer::renderOverlay(Overlay::OverlayType type)
                 SDL_SetTextureScaleMode(m_OverlayTextures[type], SDL_ScaleModeNearest);
             }
         }
+        else {
+            m_OverlayLayouts[type].clear();
+        }
 
         SDL_FreeSurface(newSurface);
     }
 
     // If we have an enabled overlay texture, render it too
     if (overlayEnabled && m_OverlayTextures[type] != nullptr) {
+        int viewportWidth;
+        int viewportHeight;
+        SDL_GetRendererOutputSize(m_Renderer, &viewportWidth, &viewportHeight);
+        SDL_FRect overlayRect;
+        m_OverlayLayouts[type].updateLayout(
+            viewportWidth,
+            viewportHeight,
+            false,
+            &overlayRect);
+        m_OverlayRects[type] = {
+            static_cast<int>(overlayRect.x),
+            static_cast<int>(overlayRect.y),
+            static_cast<int>(overlayRect.w),
+            static_cast<int>(overlayRect.h),
+        };
         SDL_RenderCopy(m_Renderer, m_OverlayTextures[type], nullptr, &m_OverlayRects[type]);
     }
 }

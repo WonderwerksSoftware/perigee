@@ -185,7 +185,15 @@ void SLVideoDecoder::notifyOverlayUpdated(Overlay::OverlayType type)
             type, &newSurface, &presentation)) {
         return;
     }
-    bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
+    const bool overlayEnabled = Session::get()->getOverlayManager().isOverlayEnabled(type);
+
+    // Status and Deck callbacks are serialized independently by OverlayManager,
+    // so protect the shared single-overlay hardware and arbitration state here.
+    std::lock_guard<std::mutex> lock(m_OverlayMutex);
+    if (!m_OverlayArbiter.update(
+            type, newSurface, presentation, overlayEnabled)) {
+        return;
+    }
 
     // Hide and free any existing overlay
     if (m_Overlay != nullptr) {
@@ -194,16 +202,20 @@ void SLVideoDecoder::notifyOverlayUpdated(Overlay::OverlayType type)
         m_Overlay = nullptr;
     }
 
-    if (!overlayEnabled || newSurface == nullptr) {
-        SDL_FreeSurface(newSurface);
+    Overlay::OverlayType selectedType;
+    SDL_Surface* selectedSurface;
+    Overlay::OverlayPresentation selectedPresentation;
+    if (!m_OverlayArbiter.getSelection(
+            &selectedType, &selectedSurface, &selectedPresentation)) {
         return;
     }
+    (void)selectedType;
 
-    m_Overlay = SLVideo_CreateOverlay(m_VideoContext, newSurface->w, newSurface->h);
+    m_Overlay = SLVideo_CreateOverlay(
+        m_VideoContext, selectedSurface->w, selectedSurface->h);
     if (m_Overlay == nullptr) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "SLVideo_CreateOverlay() failed");
-        SDL_FreeSurface(newSurface);
         return;
     }
 
@@ -212,13 +224,14 @@ void SLVideoDecoder::notifyOverlayUpdated(Overlay::OverlayType type)
     SLVideo_GetOverlayPixels(m_Overlay, &pixels, &pitch);
 
     // Copy surface pixels into the new overlay
-    SDL_ConvertPixels(newSurface->w, newSurface->h, newSurface->format->format, newSurface->pixels, newSurface->pitch,
+    SDL_ConvertPixels(selectedSurface->w, selectedSurface->h,
+                      selectedSurface->format->format, selectedSurface->pixels, selectedSurface->pitch,
                       SDL_PIXELFORMAT_ARGB8888, pixels, pitch);
 
     const SDL_FRect overlayRect = Overlay::calculateOverlayRect(
-        presentation,
-        newSurface->w,
-        newSurface->h,
+        selectedPresentation,
+        selectedSurface->w,
+        selectedSurface->h,
         m_ViewportWidth,
         m_ViewportHeight);
     const float viewportWidth = SDL_max(1, m_ViewportWidth);
@@ -228,9 +241,6 @@ void SLVideoDecoder::notifyOverlayUpdated(Overlay::OverlayType type)
                                   overlayRect.y / viewportHeight,
                                   overlayRect.w / viewportWidth,
                                   overlayRect.h / viewportHeight);
-
-    // We're done with the surface now
-    SDL_FreeSurface(newSurface);
 
     // Show the overlay
     SLVideo_ShowOverlay(m_Overlay);

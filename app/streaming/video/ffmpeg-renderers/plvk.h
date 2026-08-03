@@ -134,7 +134,9 @@ private:
         // safe for the render thread to read.
         //
         // It is safe for the overlay update thread to write to stagingOverlay outside of the lock,
-        // as long as hasStagingUpdate is false.
+        // as long as hasStagingUpdate is false. OverlayManager also serializes
+        // notifyOverlayUpdated() per type, so there is exactly one staging writer
+        // for this entire unlocked mutation interval.
         bool hasStagingUpdate;
         bool stagingHasOverlay;
         pl_overlay stagingOverlay;
