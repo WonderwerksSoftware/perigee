@@ -33,6 +33,7 @@ public:
         OpenFromController,
         Close,
         ToggleStats,
+        LegacyDisconnect,
         Key,
         TextInput,
         NavigateUp,

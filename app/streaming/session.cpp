@@ -1041,6 +1041,13 @@ bool Session::routeDeckInputEvent(const SDL_Event& event)
     while (true) {
         for (SDL_Event replayEvent : result.replayEvents) {
             if (result.replayToDeck) {
+                // A buffered local prefix remains owned by the Deck surface.
+                // If an early replay (for example Back) closes Deck, discard
+                // the remaining local buffer. Forwarding it to the host would
+                // conflict with the release tails armed by the close.
+                if (!m_DeckInputRouter->isDeckOpen()) {
+                    break;
+                }
                 applyDeckInputResult(
                     m_DeckInputRouter->routeReplay(replayEvent));
             }
@@ -1116,6 +1123,9 @@ void Session::applyDeckInputResult(const DeckInputRouter::Result& result)
     case DeckInputRouter::Action::ToggleStats:
         m_InputHandler->sendNeutralControllerInput(result.controllerId);
         toggleStatsOverlay();
+        break;
+    case DeckInputRouter::Action::LegacyDisconnect:
+        m_InputHandler->handleLegacyGamepadDisconnect(result.controllerId);
         break;
     case DeckInputRouter::Action::Key:
     case DeckInputRouter::Action::TextInput:

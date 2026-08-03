@@ -8,7 +8,7 @@ namespace {
 
 constexpr quint8 ConfiguredTarget = 0x1;
 constexpr quint8 StatsTarget = 0x2;
-constexpr quint8 ReservedQuitTarget = 0x4;
+constexpr quint8 LegacyDisconnectTarget = 0x4;
 
 quint32 buttonBit(Uint8 button)
 {
@@ -87,6 +87,14 @@ DeckInputRouter::Result DeckInputRouter::route(const SDL_Event& event)
 
 DeckInputRouter::Result DeckInputRouter::routeReplay(const SDL_Event& event) const
 {
+    // Buffered replay is Deck-owned. Once an earlier local action closes Deck,
+    // later buffered events are discarded rather than reclassified as host
+    // input. Their physical releases are already covered by release tails.
+    if (!m_Open && (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP ||
+                    event.type == SDL_CONTROLLERBUTTONDOWN ||
+                    event.type == SDL_CONTROLLERBUTTONUP)) {
+        return consumedResult();
+    }
     switch (event.type) {
     case SDL_KEYDOWN:
     case SDL_KEYUP:
@@ -142,6 +150,10 @@ DeckInputRouter::Result DeckInputRouter::routeKey(const SDL_KeyboardEvent& event
 {
     const bool pressed = event.state == SDL_PRESSED;
     const SDL_Scancode scanCode = event.keysym.scancode;
+    const bool wasDown = m_KeysDown.contains(scanCode);
+    if (pressed && event.repeat && m_KeyReleaseTail.contains(scanCode)) {
+        return consumedResult();
+    }
     if (!pressed && m_KeyReleaseTail.remove(scanCode)) {
         m_KeysDown.remove(scanCode);
         if (scanCode == SDL_Scancode(m_Bindings.keyScancode()) ||
@@ -149,6 +161,25 @@ DeckInputRouter::Result DeckInputRouter::routeKey(const SDL_KeyboardEvent& event
             m_KeyboardChordTriggered = false;
         }
         return consumedResult();
+    }
+
+    if (!m_Open) {
+        if (pressed) {
+            m_KeysDown.insert(scanCode);
+        }
+        else {
+            m_KeysDown.remove(scanCode);
+        }
+
+        if (pressed && !event.repeat && keyboardChordHeld(event) &&
+                !m_KeyboardChordTriggered) {
+            m_KeyboardChordTriggered = true;
+            Result result = consumedResult();
+            result.action = Action::OpenFromKeyboard;
+            setOpen(true, -1);
+            return result;
+        }
+        return {};
     }
 
     SDL_Event bufferedEvent {};
@@ -171,11 +202,17 @@ DeckInputRouter::Result DeckInputRouter::routeKey(const SDL_KeyboardEvent& event
         m_KeysDown.remove(scanCode);
     }
     if (chordMember &&
-            (!m_KeyboardCandidate.events.isEmpty() || pressed)) {
+            (!m_KeyboardCandidate.events.isEmpty() ||
+             (pressed && !event.repeat))) {
         if (m_KeyboardCandidate.events.isEmpty()) {
             m_KeyboardCandidate.replayToDeck = m_Open;
         }
-        m_KeyboardCandidate.events.push_back(bufferedEvent);
+        if (!event.repeat && (!pressed || !wasDown)) {
+            m_KeyboardCandidate.events.push_back(bufferedEvent);
+        }
+        else {
+            return consumedResult();
+        }
     }
 
     if (pressed && !event.repeat && keyboardChordHeld(event) &&
@@ -276,7 +313,8 @@ DeckInputRouter::Result DeckInputRouter::routeControllerButton(
 
     // The current event is deliberately not committed before replay. A local
     // replay can close Deck, which changes where the current event belongs.
-    if (candidateIt != m_ControllerCandidates.end() && pressed &&
+    if (m_Open && candidateIt != m_ControllerCandidates.end() && pressed &&
+            !wasDown &&
             viableControllerTargets(proposedDown, event.which) == 0) {
         Candidate aborted = std::move(candidateIt.value());
         m_ControllerCandidates.erase(candidateIt);
@@ -295,6 +333,25 @@ DeckInputRouter::Result DeckInputRouter::routeControllerButton(
         m_ButtonsDown[event.which] = proposedDown;
     }
 
+    // Closed-stream input is never buffered. Prefix holds, repeats, and
+    // releases keep Moonlight's normal timing. On exact configured completion,
+    // only the final event is consumed; overlay takeover neutralizes prefixes
+    // that have already reached the host.
+    if (!m_Open) {
+        if (pressed && !wasDown &&
+                !m_ChordTriggered.contains(event.which) &&
+                !m_Bindings.legacyGamepadDisconnect() &&
+                proposedDown == m_Bindings.controllerButtons()) {
+            m_ChordTriggered.insert(event.which);
+            Result result = consumedResult();
+            result.action = Action::OpenFromController;
+            result.controllerId = event.which;
+            setOpen(true, event.which);
+            return result;
+        }
+        return routeControllerButtonOrdinary(event);
+    }
+
     if (candidateIt != m_ControllerCandidates.end() && !pressed) {
         candidateIt->events.push_back(bufferedEvent);
         Candidate aborted = std::move(candidateIt.value());
@@ -307,7 +364,7 @@ DeckInputRouter::Result DeckInputRouter::routeControllerButton(
 
     const quint8 viableTargets =
         viableControllerTargets(proposedDown, event.which);
-    if (candidateIt == m_ControllerCandidates.end() && pressed &&
+    if (candidateIt == m_ControllerCandidates.end() && pressed && !wasDown &&
             oldDown == 0 && viableTargets != 0) {
         Candidate candidate;
         candidate.replayToDeck = m_Open;
@@ -317,7 +374,8 @@ DeckInputRouter::Result DeckInputRouter::routeControllerButton(
             m_ControllerOwner = event.which;
         }
     }
-    if (candidateIt != m_ControllerCandidates.end()) {
+    if (candidateIt != m_ControllerCandidates.end() &&
+            (!pressed || !wasDown)) {
         candidateIt->events.push_back(bufferedEvent);
     }
 
@@ -331,39 +389,29 @@ DeckInputRouter::Result DeckInputRouter::routeControllerButton(
             Result result;
             result.disposition = Disposition::Consumed;
             result.controllerId = event.which;
-            if (m_Open) {
-                result.action = Action::Close;
-                setOpen(false, -1);
-            }
-            else {
-                result.action = Action::OpenFromController;
-                setOpen(true, event.which);
-            }
+            result.action = Action::Close;
+            setOpen(false, -1);
             return result;
         }
         if ((viableTargets & StatsTarget) != 0 &&
                 proposedDown == statsControllerMask()) {
-            Candidate completed = std::move(candidateIt.value());
             m_ControllerCandidates.erase(candidateIt);
             m_ChordTriggered.insert(event.which);
             Result result = consumedResult();
             result.controllerId = event.which;
-            if (m_Open) {
-                m_ButtonReleaseTail[event.which] |= proposedDown;
-                result.action = Action::ToggleStats;
-            }
-            else {
-                result.replayEvents = std::move(completed.events);
-                result.replayToDeck = false;
-            }
+            m_ButtonReleaseTail[event.which] |= proposedDown;
+            result.action = Action::ToggleStats;
             return result;
         }
-        if ((viableTargets & ReservedQuitTarget) != 0 &&
+        if ((viableTargets & LegacyDisconnectTarget) != 0 &&
                 proposedDown == DeckBindings::defaultControllerButtons()) {
             m_ControllerCandidates.remove(event.which);
             m_ChordTriggered.insert(event.which);
             m_ButtonReleaseTail[event.which] |= proposedDown;
-            return consumedResult();
+            Result result = consumedResult();
+            result.action = Action::LegacyDisconnect;
+            result.controllerId = event.which;
+            return result;
         }
     }
 
@@ -372,10 +420,10 @@ DeckInputRouter::Result DeckInputRouter::routeControllerButton(
         return consumedResult();
     }
 
-    if (m_Open && m_ControllerOwner < 0 && pressed) {
+    if (m_ControllerOwner < 0 && pressed) {
         m_ControllerOwner = event.which;
     }
-    if (m_Open && wasDown) {
+    if (wasDown) {
         return consumedResult();
     }
     return routeControllerButtonOrdinary(event);
@@ -389,27 +437,25 @@ quint8 DeckInputRouter::viableControllerTargets(
     }
 
     quint8 targets = 0;
+    if (!m_Open) {
+        return 0;
+    }
+
     const bool controllerCanOwnDeck =
-        !m_Open || m_ControllerOwner < 0 || m_ControllerOwner == controller;
+        m_ControllerOwner < 0 || m_ControllerOwner == controller;
     if (!m_Bindings.legacyGamepadDisconnect() && controllerCanOwnDeck &&
             (down & ~m_Bindings.controllerButtons()) == 0) {
         targets |= ConfiguredTarget;
     }
 
     const quint32 stats = statsControllerMask();
-    const quint32 statsFace = stats &
-        (buttonBit(SDL_CONTROLLER_BUTTON_X) |
-         buttonBit(SDL_CONTROLLER_BUTTON_Y));
-    const bool legacyClosedAmbiguousPrefix =
-        m_Bindings.legacyGamepadDisconnect() && !m_Open &&
-        (down & statsFace) == 0;
-    if (!legacyClosedAmbiguousPrefix && (down & ~stats) == 0) {
+    if ((down & ~stats) == 0) {
         targets |= StatsTarget;
     }
 
     const quint32 quit = DeckBindings::defaultControllerButtons();
-    if (!m_Bindings.legacyGamepadDisconnect() && (down & ~quit) == 0) {
-        targets |= ReservedQuitTarget;
+    if (m_Bindings.legacyGamepadDisconnect() && (down & ~quit) == 0) {
+        targets |= LegacyDisconnectTarget;
     }
     return targets;
 }

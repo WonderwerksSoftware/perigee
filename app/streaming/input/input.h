@@ -116,6 +116,8 @@ public:
 
     void handleControllerButtonEvent(SDL_ControllerButtonEvent* event);
 
+    bool handleLegacyGamepadDisconnect(SDL_JoystickID id);
+
     void handleControllerDeviceEvent(SDL_ControllerDeviceEvent* event);
 
 #if SDL_VERSION_ATLEAST(2, 0, 14)
@@ -276,6 +278,7 @@ private:
     bool m_SwapMouseButtons;
     bool m_ReverseScrollDirection;
     bool m_SwapFaceButtons;
+    bool m_LegacyGamepadDisconnect;
 
     bool m_NeedsManualCaptureOnLeave;
     bool m_MouseWasInVideoRegion;

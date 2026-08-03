@@ -218,6 +218,31 @@ void SdlInputHandler::handleControllerAxisEvent(SDL_ControllerAxisEvent* event)
     }
 }
 
+bool SdlInputHandler::handleLegacyGamepadDisconnect(SDL_JoystickID id)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    if (!m_LegacyGamepadDisconnect || qgetenv("NO_GAMEPAD_QUIT") == "1") {
+        return false;
+    }
+
+    GamepadState* state = findStateForGamepad(id);
+    if (state == nullptr) {
+        return false;
+    }
+
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Detected quit gamepad button combo");
+    SDL_Event quitEvent {};
+    quitEvent.type = SDL_QUIT;
+    quitEvent.quit.timestamp = SDL_GetTicks();
+    SDL_PushEvent(&quitEvent);
+
+    // This helper is also called while Deck owns ordinary input, so it must
+    // bypass the overlay gate and neutralize only the triggering controller.
+    sendNeutralControllerInput(state->jsId);
+    return true;
+}
+
 void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* event)
 {
     std::unique_lock<std::recursive_mutex> lock(m_RemoteInputMutex);
@@ -347,18 +372,8 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
     }
 
     // Handle Start+Select+L1+R1 as a gamepad quit combo
-    if (state->buttons == (PLAY_FLAG | BACK_FLAG | LB_FLAG | RB_FLAG) && qgetenv("NO_GAMEPAD_QUIT") != "1") {
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Detected quit gamepad button combo");
-
-        // Push a quit event to the main loop
-        SDL_Event event;
-        event.type = SDL_QUIT;
-        event.quit.timestamp = SDL_GetTicks();
-        SDL_PushEvent(&event);
-
-        // Clear buttons down on this gamepad
-        sendNeutralControllerInput(state->jsId);
+    if (state->buttons == (PLAY_FLAG | BACK_FLAG | LB_FLAG | RB_FLAG) &&
+            handleLegacyGamepadDisconnect(state->jsId)) {
         return;
     }
 

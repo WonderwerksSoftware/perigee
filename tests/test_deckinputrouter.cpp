@@ -124,18 +124,21 @@ private slots:
     void configuredPhysicalChordsReplaceTheDefaults();
     void legacyModePassesOriginalControllerDisconnectThrough();
     void incompleteKeyboardChordCannotActivateDeckBeforeCompletion();
-    void incompleteControllerChordCannotReachDeckOrHostBeforeCompletion();
+    void closedControllerPrefixPassesHostWhileOpenPrefixStaysLocal();
     void controllerCandidatesAreIsolatedPerPhysicalController();
-    void abortedKeyboardCandidateReplaysRepeatsExactlyOnceInOrder();
+    void openKeyboardCandidateCoalescesRepeatsBeforeReplay();
     void abortedOpenControllerCandidateReplaysOneLocalAction();
     void nonmemberAbortReplaysPrefixBeforeRoutingCurrentEvent();
-    void controllerRemovalDiscardsOnlyItsPendingCandidate();
-    void disablingLegacyDisconnectSuppressesTheReservedQuitChord();
-    void closedStatsCandidateCompletesImmediatelyInEveryPressOrder();
+    void controllerRemovalDiscardsOnlyItsPhysicalState();
+    void reservedQuitAlwaysPassesThroughWhenDeckClosed();
+    void closedStatsPassesThroughImmediatelyInEveryPressOrder();
     void externalVisibilitySyncClearsKeyboardCandidates();
     void externalVisibilitySyncClearsEveryControllerCandidate();
     void candidateAbortDefersControllerInputUntilAfterReplay();
     void candidateAbortDefersKeyboardInputUntilAfterReplay();
+    void closedOrdinaryHoldsPassThroughImmediatelyWithoutReplay();
+    void closedKeyboardRepeatsStayImmediateAndBounded();
+    void openLegacyDisconnectChordWinsBeforeLocalNavigation();
 };
 
 void DeckInputRouterTest::closedInputPassesThroughAndKeyboardShortcutOwnsReleaseTail()
@@ -320,10 +323,9 @@ void DeckInputRouterTest::statsChordPassesThroughWhenClosedAndStaysLocalWhenOpen
     DeckInputRouter router;
     const auto closedStats = routeChord(router, 12, SDL_CONTROLLER_BUTTON_X);
     QCOMPARE(closedStats.disposition,
-             DeckInputRouter::Disposition::Consumed);
+             DeckInputRouter::Disposition::Passthrough);
     QCOMPARE(closedStats.action, DeckInputRouter::Action::None);
-    QCOMPARE(closedStats.replayEvents.size(), 4);
-    QVERIFY(!closedStats.replayToDeck);
+    QVERIFY(closedStats.replayEvents.isEmpty());
     QVERIFY(!router.isDeckOpen());
     QCOMPARE(router.route(buttonEvent(
                  SDL_CONTROLLERBUTTONUP, 12, SDL_CONTROLLER_BUTTON_X)).disposition,
@@ -527,13 +529,10 @@ void DeckInputRouterTest::configuredPhysicalChordsReplaceTheDefaults()
     const auto oldDefault = router.route(keyEvent(
         SDL_KEYDOWN, SDL_SCANCODE_SPACE, SDLK_SPACE,
         SDL_Keymod(KMOD_CTRL | KMOD_ALT | KMOD_SHIFT)));
-    QCOMPARE(oldDefault.disposition, DeckInputRouter::Disposition::Consumed);
-    QCOMPARE(oldDefault.replayEvents.size(), 2);
-    QVERIFY(oldDefault.deferredEvent.has_value());
-    QCOMPARE(oldDefault.deferredEvent->key.keysym.scancode,
-             SDL_SCANCODE_SPACE);
-    QCOMPARE(router.routeDeferred(*oldDefault.deferredEvent).disposition,
+    QCOMPARE(oldDefault.disposition,
              DeckInputRouter::Disposition::Passthrough);
+    QVERIFY(oldDefault.replayEvents.isEmpty());
+    QVERIFY(!oldDefault.deferredEvent.has_value());
     QVERIFY(!router.isDeckOpen());
     router.route(keyEvent(SDL_KEYUP, SDL_SCANCODE_SPACE, SDLK_SPACE));
 
@@ -612,7 +611,7 @@ void DeckInputRouterTest::incompleteKeyboardChordCannotActivateDeckBeforeComplet
              DeckInputRouter::Disposition::Consumed);
 }
 
-void DeckInputRouterTest::incompleteControllerChordCannotReachDeckOrHostBeforeCompletion()
+void DeckInputRouterTest::closedControllerPrefixPassesHostWhileOpenPrefixStaysLocal()
 {
     const quint32 chord =
         (quint32(1) << SDL_CONTROLLER_BUTTON_A) |
@@ -622,7 +621,8 @@ void DeckInputRouterTest::incompleteControllerChordCannotReachDeckOrHostBeforeCo
 
     const auto prefix = router.route(buttonEvent(
         SDL_CONTROLLERBUTTONDOWN, 71, SDL_CONTROLLER_BUTTON_A));
-    QCOMPARE(prefix.disposition, DeckInputRouter::Disposition::Consumed);
+    QCOMPARE(prefix.disposition,
+             DeckInputRouter::Disposition::Passthrough);
     QCOMPARE(prefix.action, DeckInputRouter::Action::None);
     const auto completed = router.route(buttonEvent(
         SDL_CONTROLLERBUTTONDOWN, 71, SDL_CONTROLLER_BUTTON_B));
@@ -654,10 +654,10 @@ void DeckInputRouterTest::controllerCandidatesAreIsolatedPerPhysicalController()
 
     QCOMPARE(router.route(buttonEvent(
                  SDL_CONTROLLERBUTTONDOWN, 17, SDL_CONTROLLER_BUTTON_A)).disposition,
-             DeckInputRouter::Disposition::Consumed);
+             DeckInputRouter::Disposition::Passthrough);
     QCOMPARE(router.route(buttonEvent(
                  SDL_CONTROLLERBUTTONDOWN, 18, SDL_CONTROLLER_BUTTON_A)).disposition,
-             DeckInputRouter::Disposition::Consumed);
+             DeckInputRouter::Disposition::Passthrough);
     QCOMPARE(router.route(buttonEvent(
                  SDL_CONTROLLERBUTTONDOWN, 17, SDL_CONTROLLER_BUTTON_B)).action,
              DeckInputRouter::Action::OpenFromController);
@@ -667,17 +667,24 @@ void DeckInputRouterTest::controllerCandidatesAreIsolatedPerPhysicalController()
              DeckInputRouter::Action::None);
 }
 
-void DeckInputRouterTest::abortedKeyboardCandidateReplaysRepeatsExactlyOnceInOrder()
+void DeckInputRouterTest::openKeyboardCandidateCoalescesRepeatsBeforeReplay()
 {
     DeckInputRouter router(DeckBindings(
         int(Qt::ControlModifier),
         SDL_SCANCODE_RETURN,
         DeckBindings::defaultControllerButtons(),
         false));
+    router.openForKeyboard();
 
     QCOMPARE(router.route(keyEvent(
                  SDL_KEYDOWN, SDL_SCANCODE_RETURN, SDLK_RETURN)).disposition,
              DeckInputRouter::Disposition::Consumed);
+    for (int duplicate = 0; duplicate < 256; ++duplicate) {
+        QCOMPARE(router.route(keyEvent(
+                     SDL_KEYDOWN, SDL_SCANCODE_RETURN,
+                     SDLK_RETURN, KMOD_NONE, 0)).disposition,
+                 DeckInputRouter::Disposition::Consumed);
+    }
     QCOMPARE(router.route(keyEvent(
                  SDL_KEYDOWN, SDL_SCANCODE_RETURN, SDLK_RETURN,
                  KMOD_NONE, 1)).disposition,
@@ -686,12 +693,10 @@ void DeckInputRouterTest::abortedKeyboardCandidateReplaysRepeatsExactlyOnceInOrd
         SDL_KEYUP, SDL_SCANCODE_RETURN, SDLK_RETURN));
 
     QCOMPARE(aborted.disposition, DeckInputRouter::Disposition::Consumed);
-    QCOMPARE(aborted.replayEvents.size(), 3);
+    QCOMPARE(aborted.replayEvents.size(), 2);
     QCOMPARE(aborted.replayEvents.at(0).type, Uint32(SDL_KEYDOWN));
     QCOMPARE(aborted.replayEvents.at(0).key.repeat, Uint8(0));
-    QCOMPARE(aborted.replayEvents.at(1).type, Uint32(SDL_KEYDOWN));
-    QCOMPARE(aborted.replayEvents.at(1).key.repeat, Uint8(1));
-    QCOMPARE(aborted.replayEvents.at(2).type, Uint32(SDL_KEYUP));
+    QCOMPARE(aborted.replayEvents.at(1).type, Uint32(SDL_KEYUP));
 }
 
 void DeckInputRouterTest::abortedOpenControllerCandidateReplaysOneLocalAction()
@@ -721,6 +726,7 @@ void DeckInputRouterTest::nonmemberAbortReplaysPrefixBeforeRoutingCurrentEvent()
     DeckInputRouter keyboardRouter(DeckBindings(
         int(Qt::ControlModifier), SDL_SCANCODE_RETURN,
         DeckBindings::defaultControllerButtons(), false));
+    keyboardRouter.openForKeyboard();
     QCOMPARE(keyboardRouter.route(keyEvent(
                  SDL_KEYDOWN, SDL_SCANCODE_LCTRL, SDLK_LCTRL, KMOD_CTRL)).action,
              DeckInputRouter::Action::None);
@@ -757,7 +763,7 @@ void DeckInputRouterTest::nonmemberAbortReplaysPrefixBeforeRoutingCurrentEvent()
              DeckInputRouter::Action::FocusSearch);
 }
 
-void DeckInputRouterTest::controllerRemovalDiscardsOnlyItsPendingCandidate()
+void DeckInputRouterTest::controllerRemovalDiscardsOnlyItsPhysicalState()
 {
     const quint32 chord =
         (quint32(1) << SDL_CONTROLLER_BUTTON_A) |
@@ -781,9 +787,9 @@ void DeckInputRouterTest::controllerRemovalDiscardsOnlyItsPendingCandidate()
     QVERIFY(!router.isDeckOpen());
     const auto postRemovalRelease = router.route(buttonEvent(
         SDL_CONTROLLERBUTTONUP, 17, SDL_CONTROLLER_BUTTON_B));
-    QCOMPARE(postRemovalRelease.replayEvents.size(), 2);
-    QCOMPARE(postRemovalRelease.replayEvents.first().cbutton.button,
-             Uint8(SDL_CONTROLLER_BUTTON_B));
+    QCOMPARE(postRemovalRelease.disposition,
+             DeckInputRouter::Disposition::Passthrough);
+    QVERIFY(postRemovalRelease.replayEvents.isEmpty());
     const auto survivingCompletion = router.route(buttonEvent(
         SDL_CONTROLLERBUTTONDOWN, 18, SDL_CONTROLLER_BUTTON_B));
     QCOMPARE(survivingCompletion.action,
@@ -791,7 +797,7 @@ void DeckInputRouterTest::controllerRemovalDiscardsOnlyItsPendingCandidate()
     QCOMPARE(router.controllerOwner(), SDL_JoystickID(18));
 }
 
-void DeckInputRouterTest::disablingLegacyDisconnectSuppressesTheReservedQuitChord()
+void DeckInputRouterTest::reservedQuitAlwaysPassesThroughWhenDeckClosed()
 {
     const quint32 customChord =
         (quint32(1) << SDL_CONTROLLER_BUTTON_A) |
@@ -816,7 +822,7 @@ void DeckInputRouterTest::disablingLegacyDisconnectSuppressesTheReservedQuitChor
             completed = router.route(buttonEvent(
                 SDL_CONTROLLERBUTTONDOWN, 301, button));
             QCOMPARE(completed.disposition,
-                     DeckInputRouter::Disposition::Consumed);
+                     DeckInputRouter::Disposition::Passthrough);
             QCOMPARE(completed.action, DeckInputRouter::Action::None);
             QVERIFY(completed.replayEvents.isEmpty());
         }
@@ -825,7 +831,7 @@ void DeckInputRouterTest::disablingLegacyDisconnectSuppressesTheReservedQuitChor
             const auto released = router.route(buttonEvent(
                 SDL_CONTROLLERBUTTONUP, 301, button));
             QCOMPARE(released.disposition,
-                     DeckInputRouter::Disposition::Consumed);
+                     DeckInputRouter::Disposition::Passthrough);
             QVERIFY(released.replayEvents.isEmpty());
         }
     }
@@ -840,7 +846,7 @@ void DeckInputRouterTest::disablingLegacyDisconnectSuppressesTheReservedQuitChor
     }
 }
 
-void DeckInputRouterTest::closedStatsCandidateCompletesImmediatelyInEveryPressOrder()
+void DeckInputRouterTest::closedStatsPassesThroughImmediatelyInEveryPressOrder()
 {
     const quint32 customChord =
         (quint32(1) << SDL_CONTROLLER_BUTTON_A) |
@@ -867,20 +873,10 @@ void DeckInputRouterTest::closedStatsCandidateCompletesImmediatelyInEveryPressOr
                 completed = router.route(buttonEvent(
                     SDL_CONTROLLERBUTTONDOWN, 303, order.at(i)));
                 QCOMPARE(completed.disposition,
-                         DeckInputRouter::Disposition::Consumed);
-                if (i + 1 < order.size()) {
-                    QVERIFY(completed.replayEvents.isEmpty());
-                }
+                         DeckInputRouter::Disposition::Passthrough);
+                QVERIFY(completed.replayEvents.isEmpty());
             }
             QCOMPARE(completed.action, DeckInputRouter::Action::None);
-            QCOMPARE(completed.replayEvents.size(), 4);
-            QVERIFY(!completed.replayToDeck);
-            for (int i = 0; i < order.size(); ++i) {
-                QCOMPARE(completed.replayEvents.at(i).type,
-                         Uint32(SDL_CONTROLLERBUTTONDOWN));
-                QCOMPARE(completed.replayEvents.at(i).cbutton.button,
-                         Uint8(order.at(i)));
-            }
             QVERIFY(!router.isDeckOpen());
         }
     }
@@ -929,7 +925,7 @@ void DeckInputRouterTest::externalVisibilitySyncClearsEveryControllerCandidate()
         QCOMPARE(router.route(buttonEvent(
                      SDL_CONTROLLERBUTTONDOWN, controller,
                      SDL_CONTROLLER_BUTTON_A)).disposition,
-                 DeckInputRouter::Disposition::Consumed);
+                 DeckInputRouter::Disposition::Passthrough);
     }
 
     router.syncDeckOpen(true);
@@ -1004,7 +1000,7 @@ void DeckInputRouterTest::candidateAbortDefersControllerInputUntilAfterReplay()
     QCOMPARE(router.routeReplay(buttonEvent(
                  SDL_CONTROLLERBUTTONDOWN, 41,
                  SDL_CONTROLLER_BUTTON_A)).disposition,
-             DeckInputRouter::Disposition::Passthrough);
+             DeckInputRouter::Disposition::Consumed);
 }
 
 void DeckInputRouterTest::candidateAbortDefersKeyboardInputUntilAfterReplay()
@@ -1031,7 +1027,113 @@ void DeckInputRouterTest::candidateAbortDefersKeyboardInputUntilAfterReplay()
     router.syncDeckOpen(false);
     QCOMPARE(router.routeReplay(keyEvent(
                  SDL_KEYDOWN, SDL_SCANCODE_RETURN, SDLK_RETURN)).disposition,
+             DeckInputRouter::Disposition::Consumed);
+}
+
+void DeckInputRouterTest::closedOrdinaryHoldsPassThroughImmediatelyWithoutReplay()
+{
+    const quint32 customChord =
+        (quint32(1) << SDL_CONTROLLER_BUTTON_A) |
+        (quint32(1) << SDL_CONTROLLER_BUTTON_B);
+
+    DeckInputRouter keyboardRouter(DeckBindings(
+        int(Qt::ControlModifier), SDL_SCANCODE_SPACE,
+        customChord, false));
+    const auto spaceDown = keyboardRouter.route(keyEvent(
+        SDL_KEYDOWN, SDL_SCANCODE_SPACE, SDLK_SPACE));
+    QCOMPARE(spaceDown.disposition,
              DeckInputRouter::Disposition::Passthrough);
+    QVERIFY(spaceDown.replayEvents.isEmpty());
+    const auto spaceUp = keyboardRouter.route(keyEvent(
+        SDL_KEYUP, SDL_SCANCODE_SPACE, SDLK_SPACE));
+    QCOMPARE(spaceUp.disposition,
+             DeckInputRouter::Disposition::Passthrough);
+    QVERIFY(spaceUp.replayEvents.isEmpty());
+
+    for (SDL_GameControllerButton button : {
+             SDL_CONTROLLER_BUTTON_X,
+             SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+             SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+             SDL_CONTROLLER_BUTTON_BACK,
+             SDL_CONTROLLER_BUTTON_START,
+         }) {
+        DeckInputRouter controllerRouter(DeckBindings(
+            int(Qt::ControlModifier), SDL_SCANCODE_SPACE,
+            customChord, false));
+        const auto down = controllerRouter.route(buttonEvent(
+            SDL_CONTROLLERBUTTONDOWN, 501, button));
+        QCOMPARE(down.disposition,
+                 DeckInputRouter::Disposition::Passthrough);
+        QVERIFY(down.replayEvents.isEmpty());
+        const auto up = controllerRouter.route(buttonEvent(
+            SDL_CONTROLLERBUTTONUP, 501, button));
+        QCOMPARE(up.disposition,
+                 DeckInputRouter::Disposition::Passthrough);
+        QVERIFY(up.replayEvents.isEmpty());
+    }
+}
+
+void DeckInputRouterTest::closedKeyboardRepeatsStayImmediateAndBounded()
+{
+    const quint32 customChord =
+        (quint32(1) << SDL_CONTROLLER_BUTTON_A) |
+        (quint32(1) << SDL_CONTROLLER_BUTTON_B);
+    DeckInputRouter router(DeckBindings(
+        int(Qt::ControlModifier), SDL_SCANCODE_SPACE,
+        customChord, false));
+
+    for (int repeat = 0; repeat < 256; ++repeat) {
+        const auto result = router.route(keyEvent(
+            SDL_KEYDOWN, SDL_SCANCODE_SPACE, SDLK_SPACE,
+            KMOD_NONE, repeat == 0 ? 0 : 1));
+        QCOMPARE(result.disposition,
+                 DeckInputRouter::Disposition::Passthrough);
+        QVERIFY(result.replayEvents.isEmpty());
+    }
+    const auto released = router.route(keyEvent(
+        SDL_KEYUP, SDL_SCANCODE_SPACE, SDLK_SPACE));
+    QCOMPARE(released.disposition,
+             DeckInputRouter::Disposition::Passthrough);
+    QVERIFY(released.replayEvents.isEmpty());
+}
+
+void DeckInputRouterTest::openLegacyDisconnectChordWinsBeforeLocalNavigation()
+{
+    const quint32 customChord =
+        (quint32(1) << SDL_CONTROLLER_BUTTON_A) |
+        (quint32(1) << SDL_CONTROLLER_BUTTON_B);
+    for (bool swapFaceButtons : {false, true}) {
+        DeckInputRouter router(DeckBindings(
+            int(Qt::ControlModifier), SDL_SCANCODE_F8,
+            customChord, true), swapFaceButtons);
+        router.openForKeyboard();
+
+        DeckInputRouter::Result completed;
+        for (SDL_GameControllerButton button : {
+                 SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+                 SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+                 SDL_CONTROLLER_BUTTON_BACK,
+                 SDL_CONTROLLER_BUTTON_START,
+             }) {
+            completed = router.route(buttonEvent(
+                SDL_CONTROLLERBUTTONDOWN, 502, button));
+            QCOMPARE(completed.disposition,
+                     DeckInputRouter::Disposition::Consumed);
+        }
+        QCOMPARE(completed.action,
+                 DeckInputRouter::Action::LegacyDisconnect);
+        QVERIFY(router.isDeckOpen());
+        for (SDL_GameControllerButton button : {
+                 SDL_CONTROLLER_BUTTON_START,
+                 SDL_CONTROLLER_BUTTON_BACK,
+                 SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+                 SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+             }) {
+            QCOMPARE(router.route(buttonEvent(
+                         SDL_CONTROLLERBUTTONUP, 502, button)).disposition,
+                     DeckInputRouter::Disposition::Consumed);
+        }
+    }
 }
 
 REGISTER_PERIGEE_TEST(DeckInputRouterTest);

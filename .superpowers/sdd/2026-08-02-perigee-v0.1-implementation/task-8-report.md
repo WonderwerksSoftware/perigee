@@ -1,6 +1,6 @@
 # Task 8 Report: Make Deck Bindings Configurable
 
-Status: implementation and two hardening rounds complete. Live display and
+Status: implementation and three hardening rounds are complete. Live display and
 physical-controller qualification remain deferred because the current
 headless environment cannot create the required OpenGL or SDL windows.
 
@@ -10,7 +10,8 @@ Task 8 commits:
 
 - `86eb605615b6d39d09540577a94844cee928dde9` — configurable Deck bindings
 - `6d2e4c7c` — first input and capture hardening round
-- `fix: harden configurable Deck input` — second hardening round (this commit)
+- `76376b756257fb1f2d3b20629e6fa7a88686860c` — second input hardening round
+- `fix: preserve immediate closed input` — third hardening round (this commit)
 
 ## Implemented behavior
 
@@ -30,25 +31,36 @@ Task 8 commits:
 - Controller capture records the largest simultaneously held chord, not a
   rolled union. Focus loss, disable, owner removal, hide, and destruction all
   cancel capture without leaking input.
-- The Deck router tracks viable configured-Deck, performance-statistics, and
-  reserved-quit targets per physical controller. There is no timer and no
-  second detector outside the router.
-- With legacy direct disconnect disabled, the original
-  `LB+RB+Back+Start` chord is suppressed even when the configured Deck chord is
-  different. Exact completion cannot reach Moonlight's old `SDL_QUIT` path.
-- With legacy direct disconnect enabled, the original quit sequence reaches
-  Moonlight unchanged. Controller Deck capture is disabled; the keyboard
-  shortcut remains available.
-- Closed-Deck statistics input is order independent. On the final down event,
-  the router consumes that physical event and immediately replays the complete
-  four-event sequence once to the real Moonlight handler. Later physical
-  releases pass through and remain balanced in gamepad-mouse mode.
+- While Deck is closed, ordinary keyboard and controller events pass to the
+  Moonlight handler immediately. The router keeps only physical held state; it
+  does not buffer chord prefixes, repeats, Start holds, statistics input, or
+  the reserved quit chord.
+- A configured Deck chord consumes only its final down event. Deck takeover
+  then neutralizes the prefix state already forwarded to the host. This
+  deliberately permits brief prefix exposure in exchange for preserving
+  zero-delay normal input, holds, repeats, and Start long-press timing.
+- `SdlInputHandler` snapshots the legacy direct-disconnect preference for the
+  session and is the sole authority that may enqueue `SDL_QUIT`. With the
+  preference disabled, the original `LB+RB+Back+Start` chord is ordinary host
+  input regardless of press order, face swap, or unrelated release order.
+- With legacy direct disconnect enabled, the original quit sequence keeps its
+  closed-Deck Moonlight behavior. Controller Deck capture is disabled; the
+  keyboard shortcut remains available.
+- Closed-Deck statistics input passes immediately to Moonlight in every press
+  order and face-swap state. Its releases remain balanced in normal and
+  gamepad-mouse modes.
 - Open-Deck statistics input remains local and side-effect-free for both face
   swap states and both face-first and shared-button-first orders.
-- Candidate aborts replay the prefix before routing the current event. The
-  current event is represented explicitly and is not applied to held-input
-  state until replay finishes. Session routes it once against the resulting
-  Deck state without recursive event dispatch.
+- While Deck is open, the exact physical legacy chord becomes a dedicated
+  router action. Session invokes the same handler helper used by the closed
+  path, so legacy disconnect bypasses the overlay gate without duplicating raw
+  quit or controller-neutralization logic.
+- Open/local candidate storage is bounded by physical held state. Repeats and
+  duplicate down events do not grow the replay buffer. Candidate aborts replay
+  the prefix before routing the current event, without recursive dispatch.
+- Replay events remain Deck-owned. If replayed Back closes Deck, Session
+  discards the remaining local buffer and retains release tails; the deferred
+  current event is then routed to the host exactly once.
 - External Deck open and close transitions discard pending candidates, retain
   the needed release tails, and leave the next fresh keyboard or controller
   tap available to the new target.
@@ -129,25 +141,69 @@ test snapshots and restores organization name, application name, default
 format, and `XDG_CONFIG_HOME`; a following test class verifies the restoration
 in monolithic order.
 
+### Hardening round 3 RED
+
+The third review identified a design error rather than another isolated edge
+case: buffering ambiguous chord prefixes while Deck is closed delays ordinary
+host input. This breaks normal holds, keyboard repeats, and Start long-press
+timing, and it lets a reserved quit chord escape after an unrelated held button
+is released. Legacy disconnect also has no path through the real input handler
+while Deck owns input.
+
+Six behavior tests were added before production changes. The observed RED was:
+
+- router: 3 targeted failures — closed Space was consumed instead of passed
+  through, closed repeats were retained instead of remaining immediate, and an
+  open legacy quit chord completed with no dedicated action;
+- real-handler integration: 3 targeted failures — closed Start was withheld,
+  the first button of a configured chord did not reach the host before Deck
+  takeover, and releasing an unrelated D-pad button exposed the exact legacy
+  quit mask even though legacy disconnect was disabled.
+
+The intended boundary was then named directly in tests. The next build failed
+at the two expected missing interfaces: `DeckInputRouter::Action` had no
+`LegacyDisconnect` value, and `SdlInputHandler` had no
+`handleLegacyGamepadDisconnect(SDL_JoystickID)` helper. This compile RED proves
+that the open-overlay escape hatch is a new production seam rather than test
+logic reusing the existing raw quit implementation.
+
+The approved correction removes all closed-state candidate buffering. Closed
+prefix events pass to Moonlight immediately; successful Deck completion
+consumes only the final event and immediately neutralizes the already-forwarded
+prefix state during overlay takeover. This deliberately accepts the same brief
+prefix-state exposure as Moonlight's existing chords because preserving normal
+gaming holds, repeats, and long-press timing has priority over impossible
+zero-latency disambiguation. Only Deck-local/open candidates may buffer, and
+their replay is bounded by physical state rather than an unbounded event log.
+
+The legacy preference becomes an immutable `SdlInputHandler` session snapshot.
+That handler is the sole authority that may enqueue the old `SDL_QUIT`; the
+router does not suppress the closed quit chord. While Deck is open, the
+router recognizes the exact physical legacy chord and requests the same
+handler helper through a dedicated action, bypassing the ordinary overlay input
+gate without duplicating quit or neutralization logic in `Session`.
+
 ## Current GREEN results
 
 Fresh focused runs:
 
 - `DeckBindingsTest`: 14 passed, 0 failed.
 - `DeckBindingsQmlTest`: 9 passed, 0 failed.
-- `DeckInputRouterTest`: 30 passed, 0 failed.
+- `DeckInputRouterTest`: 33 passed, 0 failed.
 - `SdlGamepadKeyNavigationTest`: 9 passed, 0 failed.
 - `StreamingPreferencesTest`: 5 passed, 0 failed.
 - `StreamingPreferencesIsolationTest`: 3 passed, 0 failed in monolithic order.
-- `InputIntegrationTest` with dummy SDL: 23 passed, 0 failed.
+- `InputIntegrationTest` with dummy SDL: 28 passed, 0 failed.
 - `InputIntegrationTest` with offscreen Qt but no dummy SDL: 21 passed; the two
   SDL hidden-window cases fail before Task 8 logic because the environment
   cannot create a window.
 
 The real-handler coverage includes both face-swap states, shared-first and
-face-first statistics input, exact reserved-quit suppression, legacy
-`SDL_QUIT`, aborted candidate replay, and replayed Back followed by one
-balanced host face-button press/release.
+face-first statistics input, immediate incomplete custom chords, configured
+chord prefix neutralization, Start long-press timing, legacy-off immunity to an
+unrelated release, legacy disconnect through the open-overlay helper, bounded
+local replay, and replayed Back followed by exactly one balanced deferred host
+press/release.
 
 ## Build and stress
 
@@ -157,12 +213,14 @@ balanced host face-button press/release.
   100 binding runs, and 100 capture runs — no failures.
 - Round 2 fresh-process stress: 100 full router runs, 100 focused real-handler
   runs, 50 full binding-QML runs, and 50 real preferences runs — no failures.
+- Round 3 fresh-process stress: 100 full router runs, 100 focused real-handler
+  runs, 50 full binding-QML runs, and 50 real preferences runs — no failures.
 - `git diff --check` — clean before commit.
 
 ## Full-suite environment result
 
 The canonical headless run used offscreen Qt and dummy SDL. Every non-renderer
-class passed, including all 23 real input-integration records and the global
+class passed, including all 28 real input-integration records and the global
 settings-isolation sentinel. The only failures were:
 
 - `DeckQmlTest`: 8 OpenGL-context creation failures;
