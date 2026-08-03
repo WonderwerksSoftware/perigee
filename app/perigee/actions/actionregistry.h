@@ -9,7 +9,12 @@
 class ActionRegistry
 {
 public:
+    // The adapter is non-owning and must outlive this registry.
     ActionRegistry(QVector<ActionDescriptor> descriptors, HostAdapter& adapter);
+    ActionRegistry(const ActionRegistry&) = delete;
+    ActionRegistry& operator=(const ActionRegistry&) = delete;
+    ActionRegistry(ActionRegistry&&) = delete;
+    ActionRegistry& operator=(ActionRegistry&&) = delete;
 
     QVector<ActionDescriptor> actions(ActionCategory category) const;
     QVector<ActionDescriptor> search(const QString& query) const;

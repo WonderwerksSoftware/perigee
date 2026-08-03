@@ -6,7 +6,13 @@
 
 #include <memory>
 #include <optional>
+#include <type_traits>
 #include <utility>
+
+static_assert(!std::is_copy_constructible_v<ActionRegistry>);
+static_assert(!std::is_copy_assignable_v<ActionRegistry>);
+static_assert(!std::is_move_constructible_v<ActionRegistry>);
+static_assert(!std::is_move_assignable_v<ActionRegistry>);
 
 namespace {
 
@@ -50,6 +56,7 @@ public:
     QStringList executedActionIds;
     QVector<QVariantMap> executedParameters;
     QVector<Completion> pendingCompletions;
+    std::optional<ActionResult> synchronousResult;
 
     HostSnapshot snapshot() override
     {
@@ -63,6 +70,10 @@ public:
         ++executeCallCount;
         executedActionIds.push_back(actionId);
         executedParameters.push_back(parameters);
+        if (synchronousResult.has_value()) {
+            completion(*synchronousResult);
+            return;
+        }
         pendingCompletions.push_back(std::move(completion));
     }
 
@@ -96,6 +107,9 @@ private slots:
     void limitsInFlightActionsPerResourceAndTracksCompletion();
     void allowsConcurrentActionsWithoutAResourceKey();
     void ignoresAdapterCompletionAfterRegistryDestruction();
+    void handlesSynchronousAdapterCompletion();
+    void ignoresDuplicateAdapterCompletion();
+    void callerCompletionCanDestroyRegistry();
 };
 
 void ActionRegistryTest::filtersActionsByCategoryInRegistrationOrder()
@@ -402,6 +416,90 @@ void ActionRegistryTest::ignoresAdapterCompletionAfterRegistryDestruction()
     adapter.completeNext({ true, QStringLiteral("Display confirmed"), {}, {} });
 
     QVERIFY(!callerCompletionInvoked);
+}
+
+void ActionRegistryTest::handlesSynchronousAdapterCompletion()
+{
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(QStringLiteral("display.select"), availableState());
+    adapter.synchronousResult = ActionResult {
+        true, QStringLiteral("Display confirmed synchronously"), {}, {}
+    };
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.select"), QStringLiteral("Select display"),
+                   ActionCategory::Display, {}, QStringLiteral("display")),
+    }, adapter);
+    std::optional<ActionResult> completedResult;
+
+    registry.execute(QStringLiteral("display.select"), {},
+                     [&completedResult](const ActionResult& result) {
+        completedResult = result;
+    });
+
+    QVERIFY(completedResult.has_value());
+    QVERIFY(completedResult->ok);
+    QCOMPARE(registry.state(QStringLiteral("display.select")).phase,
+             ActionPhase::Succeeded);
+    QCOMPARE(registry.state(QStringLiteral("display.select")).message,
+             QStringLiteral("Display confirmed synchronously"));
+    registry.execute(QStringLiteral("display.select"), {}, [](const ActionResult&) {});
+    QCOMPARE(adapter.executeCallCount, 2);
+}
+
+void ActionRegistryTest::ignoresDuplicateAdapterCompletion()
+{
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(QStringLiteral("stats.toggle"), availableState());
+    ActionRegistry registry({
+        descriptor(QStringLiteral("stats.toggle"), QStringLiteral("Toggle statistics"),
+                   ActionCategory::Stats, {}, QStringLiteral("stats")),
+    }, adapter);
+    int callerCompletionCount = 0;
+    registry.execute(QStringLiteral("stats.toggle"), {},
+                     [&callerCompletionCount](const ActionResult&) {
+        ++callerCompletionCount;
+    });
+    HostAdapter::Completion adapterCompletion = adapter.pendingCompletions.takeFirst();
+
+    adapterCompletion({ true, QStringLiteral("Statistics enabled"), {}, {} });
+    adapterCompletion({ false, {}, QStringLiteral("late_failure"),
+                        QStringLiteral("Late duplicate failure") });
+
+    QCOMPARE(callerCompletionCount, 1);
+    QCOMPARE(registry.state(QStringLiteral("stats.toggle")).phase,
+             ActionPhase::Succeeded);
+    QCOMPARE(registry.state(QStringLiteral("stats.toggle")).message,
+             QStringLiteral("Statistics enabled"));
+}
+
+void ActionRegistryTest::callerCompletionCanDestroyRegistry()
+{
+    FakeHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(QStringLiteral("display.select"), availableState());
+    auto registry = std::make_unique<ActionRegistry>(
+            QVector<ActionDescriptor> {
+                descriptor(QStringLiteral("display.select"), QStringLiteral("Select display"),
+                           ActionCategory::Display, {}, QStringLiteral("display")),
+            },
+            adapter);
+    int callerCompletionCount = 0;
+    ActionPhase phaseObservedByCaller = ActionPhase::Idle;
+    registry->execute(QStringLiteral("display.select"), {},
+                      [&registry, &callerCompletionCount,
+                       &phaseObservedByCaller](const ActionResult&) {
+        ++callerCompletionCount;
+        phaseObservedByCaller = registry->state(QStringLiteral("display.select")).phase;
+        registry.reset();
+    });
+    HostAdapter::Completion adapterCompletion = adapter.pendingCompletions.takeFirst();
+
+    adapterCompletion({ true, QStringLiteral("Display confirmed"), {}, {} });
+    adapterCompletion({ false, {}, QStringLiteral("duplicate"),
+                        QStringLiteral("Duplicate completion") });
+
+    QCOMPARE(callerCompletionCount, 1);
+    QCOMPARE(phaseObservedByCaller, ActionPhase::Succeeded);
+    QVERIFY(!registry);
 }
 
 REGISTER_PERIGEE_TEST(ActionRegistryTest);
