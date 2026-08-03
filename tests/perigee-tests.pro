@@ -8,11 +8,15 @@ include(../globaldefs.pri)
 
 SOURCES += \
     ../app/perigee/actions/actionregistry.cpp \
+    ../app/perigee/deck/actionlistmodel.cpp \
+    ../app/perigee/deck/deckcontroller.cpp \
     ../app/perigee/deck/decksurfacerenderer.cpp \
     ../app/path.cpp \
     ../app/streaming/video/overlaymanager.cpp \
     test_main.cpp \
     test_actionregistry.cpp \
+    test_deckcontroller.cpp \
+    test_deckqml.cpp \
     test_decksurfacerenderer.cpp \
     test_overlaylayout.cpp \
     test_smoke.cpp
@@ -25,6 +29,8 @@ HEADERS += \
     ../app/perigee/actions/actionregistry.h \
     ../app/perigee/actions/actiontypes.h \
     ../app/perigee/actions/hostadapter.h \
+    ../app/perigee/deck/actionlistmodel.h \
+    ../app/perigee/deck/deckcontroller.h \
     ../app/perigee/deck/decksurfacerenderer.h \
     ../app/path.h \
     ../app/streaming/video/overlaymanager.h \

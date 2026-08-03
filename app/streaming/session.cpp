@@ -2,6 +2,7 @@
 #include "settings/streamingpreferences.h"
 #include "streaming/streamutils.h"
 #include "backend/richpresencemanager.h"
+#include "perigee/deck/deckcontroller.h"
 #include "perigee/deck/decksurfacerenderer.h"
 
 #include <Limelight.h>
@@ -598,6 +599,7 @@ Session::~Session()
     // Session is a QML-owned GUI-thread object. Release Deck's context-bound
     // QML/GL resources here, before the associated engine and application exit.
     m_DeckSurfaceRenderer.reset();
+    m_DeckController.reset();
     SDL_DestroyMutex(m_DecoderLock);
 }
 
@@ -612,18 +614,21 @@ bool Session::initialize(QQuickWindow* qtWindow)
                     "Perigee Deck disabled: streaming Qt window has no QML engine");
     }
     else {
+        auto deckController = std::make_unique<DeckController>();
         auto deckRenderer = std::make_unique<DeckSurfaceRenderer>();
         QString deckError;
         if (!deckRenderer->initialize(
                 engine,
                 QUrl(QStringLiteral(
-                    "qrc:/gui/perigee/PerigeeDeckProbe.qml")),
+                    "qrc:/gui/perigee/PerigeeDeck.qml")),
+                deckController.get(),
                 &deckError)) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                         "Perigee Deck initialization failed; streaming will continue: %s",
                         qUtf8Printable(deckError));
         }
         else {
+            m_DeckController = std::move(deckController);
             m_DeckSurfaceRenderer = std::move(deckRenderer);
         }
     }
@@ -986,6 +991,24 @@ bool Session::initialize(QQuickWindow* qtWindow)
         return false;
     }
 
+    return true;
+}
+
+bool Session::renderAndPublishDeck(QSize logicalSize, qreal devicePixelRatio)
+{
+    if (m_DeckSurfaceRenderer == nullptr) {
+        return false;
+    }
+
+    m_DeckSurfaceRenderer->resize(logicalSize, devicePixelRatio);
+    QString deckError;
+    if (!m_DeckSurfaceRenderer->renderAndPublishDeck(
+            &m_OverlayManager, &deckError)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Perigee Deck render/publication failed; streaming will continue: %s",
+                    qUtf8Printable(deckError));
+        return false;
+    }
     return true;
 }
 

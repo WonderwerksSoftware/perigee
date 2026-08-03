@@ -9,7 +9,13 @@
 
 class QKeyEvent;
 class QMouseEvent;
+class QObject;
 class QQmlEngine;
+class DeckController;
+
+namespace Overlay {
+class OverlayManager;
+}
 
 class DeckSurfaceRenderer final
 {
@@ -23,10 +29,17 @@ public:
     bool initialize(QQmlEngine* engine,
                     const QUrl& componentUrl,
                     QString* error);
+    bool initialize(QQmlEngine* engine,
+                    const QUrl& componentUrl,
+                    DeckController* controller,
+                    QString* error);
     void resize(QSize logicalSize, qreal devicePixelRatio);
     bool render(QImage* premultipliedArgb, QString* error);
+    bool renderAndPublishDeck(Overlay::OverlayManager* overlayManager,
+                              QString* error);
     bool sendKeyEvent(QKeyEvent* event);
     bool sendPointerEvent(QMouseEvent* event);
+    QObject* rootObject() const;
 
 private:
     class Impl;

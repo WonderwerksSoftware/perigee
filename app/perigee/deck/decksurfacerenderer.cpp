@@ -1,5 +1,8 @@
 #include "decksurfacerenderer.h"
 
+#include "deckcontroller.h"
+#include "streaming/video/overlaymanager.h"
+
 #include <QCoreApplication>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -18,7 +21,10 @@
 #include <QSurfaceFormat>
 #include <QThread>
 
+#include <SDL.h>
+
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 namespace {
@@ -156,6 +162,14 @@ bool DeckSurfaceRenderer::initialize(QQmlEngine* engine,
                                      const QUrl& componentUrl,
                                      QString* error)
 {
+    return initialize(engine, componentUrl, nullptr, error);
+}
+
+bool DeckSurfaceRenderer::initialize(QQmlEngine* engine,
+                                     const QUrl& componentUrl,
+                                     DeckController* controller,
+                                     QString* error)
+{
     if (error != nullptr) {
         error->clear();
     }
@@ -188,7 +202,16 @@ bool DeckSurfaceRenderer::initialize(QQmlEngine* engine,
         return false;
     }
 
-    std::unique_ptr<QObject> rootObject(component.create());
+    std::unique_ptr<QObject> rootObject;
+    if (controller != nullptr) {
+        rootObject.reset(component.createWithInitialProperties({
+            { QStringLiteral("deckController"),
+              QVariant::fromValue(controller) },
+        }));
+    }
+    else {
+        rootObject.reset(component.create());
+    }
     if (rootObject == nullptr || component.isError()) {
         QString details = componentErrors(component);
         if (details.isEmpty()) {
@@ -359,6 +382,73 @@ bool DeckSurfaceRenderer::render(QImage* premultipliedArgb, QString* error)
     return true;
 }
 
+bool DeckSurfaceRenderer::renderAndPublishDeck(
+        Overlay::OverlayManager* overlayManager,
+        QString* error)
+{
+    if (error != nullptr) {
+        error->clear();
+    }
+    if (overlayManager == nullptr) {
+        setError(error, QStringLiteral("Deck overlay manager is null"));
+        return false;
+    }
+
+    QImage image;
+    if (!render(&image, error)) {
+        return false;
+    }
+    if (image.format() != QImage::Format_ARGB32_Premultiplied ||
+            image.width() <= 0 || image.height() <= 0 ||
+            image.depth() != 32) {
+        setError(error,
+                 QStringLiteral("Deck render output is not premultiplied 32-bit ARGB"));
+        return false;
+    }
+
+    SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(
+        0, image.width(), image.height(), 32, SDL_PIXELFORMAT_ARGB8888);
+    if (surface == nullptr) {
+        setError(error,
+                 QStringLiteral("Deck SDL surface allocation failed: %1")
+                     .arg(QString::fromLocal8Bit(SDL_GetError())));
+        return false;
+    }
+
+    const qsizetype rowBytes = static_cast<qsizetype>(image.width()) * 4;
+    if (rowBytes <= 0 || image.bytesPerLine() < rowBytes ||
+            surface->pitch < rowBytes || surface->pixels == nullptr) {
+        SDL_FreeSurface(surface);
+        setError(error,
+                 QStringLiteral("Deck SDL surface has an invalid row pitch"));
+        return false;
+    }
+    if (SDL_MUSTLOCK(surface) && SDL_LockSurface(surface) != 0) {
+        const QString lockError = QString::fromLocal8Bit(SDL_GetError());
+        SDL_FreeSurface(surface);
+        setError(error,
+                 QStringLiteral("Deck SDL surface lock failed: %1").arg(lockError));
+        return false;
+    }
+
+    for (int y = 0; y < image.height(); ++y) {
+        std::memcpy(static_cast<uchar*>(surface->pixels) +
+                        static_cast<qsizetype>(y) * surface->pitch,
+                    image.constScanLine(y),
+                    static_cast<std::size_t>(rowBytes));
+    }
+    if (SDL_MUSTLOCK(surface)) {
+        SDL_UnlockSurface(surface);
+    }
+
+    // OverlayManager takes ownership, including when no renderer is active.
+    overlayManager->updateOverlaySurface(
+        Overlay::OverlayDeck,
+        surface,
+        { Overlay::OverlayAnchor::TopCenter, 0, 1.0f, 1.0f });
+    return true;
+}
+
 bool DeckSurfaceRenderer::sendKeyEvent(QKeyEvent* event)
 {
     return event != nullptr && m_Impl->initialized &&
@@ -371,4 +461,9 @@ bool DeckSurfaceRenderer::sendPointerEvent(QMouseEvent* event)
     return event != nullptr && m_Impl->initialized &&
         m_Impl->isOnOwnerThread(nullptr, QStringLiteral("pointer event delivery")) &&
         QCoreApplication::sendEvent(m_Impl->quickWindow.get(), event);
+}
+
+QObject* DeckSurfaceRenderer::rootObject() const
+{
+    return m_Impl->rootItem;
 }

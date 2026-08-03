@@ -14,6 +14,7 @@
 #include <memory>
 
 class DeckSurfaceRenderer;
+class DeckController;
 
 class SupportedVideoFormatList : public QList<int>
 {
@@ -124,6 +125,10 @@ public:
     {
         return m_OverlayManager;
     }
+
+    // A Deck failure is local to the overlay. Callers must leave the stream
+    // running when this returns false.
+    bool renderAndPublishDeck(QSize logicalSize, qreal devicePixelRatio);
 
     void flushWindowEvents();
 
@@ -285,6 +290,7 @@ private:
     Uint32 m_DropAudioEndTime;
 
     Overlay::OverlayManager m_OverlayManager;
+    std::unique_ptr<DeckController> m_DeckController;
     std::unique_ptr<DeckSurfaceRenderer> m_DeckSurfaceRenderer;
 
     static CONNECTION_LISTENER_CALLBACKS k_ConnCallbacks;

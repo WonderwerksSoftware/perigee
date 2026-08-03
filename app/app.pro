@@ -204,6 +204,8 @@ SOURCES += \
     streaming/streamutils.cpp \
     backend/autoupdatechecker.cpp \
     perigee/actions/actionregistry.cpp \
+    perigee/deck/actionlistmodel.cpp \
+    perigee/deck/deckcontroller.cpp \
     perigee/deck/decksurfacerenderer.cpp \
     path.cpp \
     settings/mappingmanager.cpp \
@@ -246,6 +248,8 @@ HEADERS += \
     perigee/actions/actionregistry.h \
     perigee/actions/actiontypes.h \
     perigee/actions/hostadapter.h \
+    perigee/deck/actionlistmodel.h \
+    perigee/deck/deckcontroller.h \
     perigee/deck/decksurfacerenderer.h \
     path.h \
     settings/mappingmanager.h \
