@@ -170,6 +170,10 @@ public:
 
     bool isSystemKeyCaptureActive();
 
+    bool keyboardCaptureEnabled() const;
+
+    bool setKeyboardCaptureEnabled(bool enabled);
+
     void setCaptureActive(bool active);
 
     bool isMouseInVideoRegion(int mouseX, int mouseY, int windowWidth = -1, int windowHeight = -1);

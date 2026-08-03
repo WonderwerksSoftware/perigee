@@ -35,6 +35,7 @@ QVector<BatteryRecord> batteries();
 int mouseMoveCount();
 QVector<MouseMoveRecord> mouseMoves();
 QVector<bool> mouseEmulationNotifications();
+QStringList sessionActions();
 void beginOrderingObservation();
 QStringList ordering();
 void blockNextMouseButtonSend();

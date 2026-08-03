@@ -18,6 +18,7 @@ struct ActionDescriptor {
     QString requiredCapability;
     quint32 requiredPermissions = 0;
     ConfirmationPolicy confirmation = ConfirmationPolicy::Never;
+    QString confirmationMessage;
 };
 
 struct ActionState {

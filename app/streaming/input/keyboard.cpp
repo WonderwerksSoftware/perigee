@@ -20,19 +20,15 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected quit key combo");
 
-        // Push a quit event to the main loop
-        SDL_Event event;
-        event.type = SDL_QUIT;
-        event.quit.timestamp = SDL_GetTicks();
-        SDL_PushEvent(&event);
+        Session::get()->requestClientDisconnect();
         break;
 
     case KeyComboUngrabInput:
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected mouse capture toggle combo");
 
-        // Stop handling future input
-        setCaptureActive(!isCaptureActive());
+        Session::get()->setMouseCaptureEnabled(
+            !Session::get()->mouseCaptureEnabled());
 
         // Force raise all keys to ensure they aren't stuck,
         // since we won't get their key up events.
@@ -42,7 +38,8 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
     case KeyComboToggleFullScreen:
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected full-screen toggle combo");
-        Session::s_ActiveSession->toggleFullscreen();
+        Session::get()->setFullscreenEnabled(
+            !Session::get()->fullscreenEnabled());
 
         // Force raise all keys just be safe across this full-screen/windowed
         // transition just in case key events get lost.
@@ -53,9 +50,8 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected stats toggle combo");
 
-        // Toggle the stats overlay
-        Session::get()->getOverlayManager().setOverlayState(Overlay::OverlayDebug,
-                                                            !Session::get()->getOverlayManager().isOverlayEnabled(Overlay::OverlayDebug));
+        Session::get()->setStatsOverlayEnabled(
+            !Session::get()->statsOverlayEnabled());
         break;
 
     case KeyComboToggleMouseMode:
@@ -143,29 +139,16 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected quitAndExit key combo");
 
-        // Indicate that we want to exit afterwards
+        Session::get()->requestClientDisconnect();
         Session::get()->setShouldExit(true);
-
-        // Push a quit event to the main loop
-        SDL_Event quitExitEvent;
-        quitExitEvent.type = SDL_QUIT;
-        quitExitEvent.quit.timestamp = SDL_GetTicks();
-        SDL_PushEvent(&quitExitEvent);
         break;
 
     case KeyComboToggleKeyboardGrab:
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected keyboard grab toggle combo");
 
-        // Toggle the system key capture mode
-        if (isSystemKeyCaptureActive()) {
-            m_CaptureSystemKeysMode = StreamingPreferences::CSK_OFF;
-        }
-        else {
-            m_CaptureSystemKeysMode = StreamingPreferences::CSK_ALWAYS;
-        }
-
-        updateKeyboardGrabState();
+        Session::get()->setKeyboardCaptureEnabled(
+            !Session::get()->keyboardCaptureEnabled());
         break;
 
     default:

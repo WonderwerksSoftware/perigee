@@ -727,7 +727,7 @@ OverlayManager::~OverlayManager()
     //SDL_assert(TTF_WasInit() == 0);
 }
 
-bool OverlayManager::isOverlayEnabled(OverlayType type)
+bool OverlayManager::isOverlayEnabled(OverlayType type) const
 {
     return m_Overlays[type].enabled.load();
 }

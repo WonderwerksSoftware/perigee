@@ -170,6 +170,12 @@ QString ActionListModel::focusedActionLabel() const
     return row >= 0 ? m_Rows.at(row).descriptor.label : QString();
 }
 
+QString ActionListModel::focusedActionConfirmationMessage() const
+{
+    const int row = rowForId(m_FocusedActionId);
+    return row >= 0 ? m_Rows.at(row).descriptor.confirmationMessage : QString();
+}
+
 bool ActionListModel::focusedActionEnabled() const
 {
     const int row = rowForId(m_FocusedActionId);

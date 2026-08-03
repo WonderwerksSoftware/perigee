@@ -232,10 +232,7 @@ bool SdlInputHandler::handleLegacyGamepadDisconnect(SDL_JoystickID id)
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "Detected quit gamepad button combo");
-    SDL_Event quitEvent {};
-    quitEvent.type = SDL_QUIT;
-    quitEvent.quit.timestamp = SDL_GetTicks();
-    SDL_PushEvent(&quitEvent);
+    Session::get()->requestClientDisconnect();
 
     // This helper is also called while Deck owns ordinary input, so it must
     // bypass the overlay gate and neutralize only the triggering controller.
@@ -383,7 +380,8 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
                     "Detected stats toggle gamepad combo");
 
         // Toggle the stats overlay
-        Session::get()->toggleStatsOverlay();
+        Session::get()->setStatsOverlayEnabled(
+            !Session::get()->statsOverlayEnabled());
 
         // Clear buttons down on this gamepad
         sendNeutralControllerInput(state->jsId);

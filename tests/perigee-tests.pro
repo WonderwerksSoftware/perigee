@@ -12,6 +12,7 @@ include(../globaldefs.pri)
 
 SOURCES += \
     ../app/perigee/actions/actionregistry.cpp \
+    ../app/perigee/actions/gamestreamadapter.cpp \
     ../app/perigee/deck/actionlistmodel.cpp \
     ../app/perigee/deck/deckcontroller.cpp \
     ../app/perigee/deck/deckuipump.cpp \
@@ -32,6 +33,7 @@ SOURCES += \
     ../app/streaming/video/overlaymanager.cpp \
     test_main.cpp \
     test_actionregistry.cpp \
+    test_gamestreamadapter.cpp \
     test_deckcontroller.cpp \
     test_deckuipump.cpp \
     test_deckqml.cpp \
@@ -42,6 +44,7 @@ SOURCES += \
     test_deckinputdelivery.cpp \
     test_inputneutralization.cpp \
     test_inputintegration.cpp \
+    test_sessionexitintent.cpp \
     test_sdlgamepadkeynavigation.cpp \
     test_streamingpreferences.cpp \
     input_integration_stubs.cpp \
@@ -59,7 +62,9 @@ PKGCONFIG += sdl2 SDL2_ttf opus
 HEADERS += \
     ../app/perigee/actions/actionregistry.h \
     ../app/perigee/actions/actiontypes.h \
+    ../app/perigee/actions/gamestreamadapter.h \
     ../app/perigee/actions/hostadapter.h \
+    ../app/perigee/actions/sessionfacade.h \
     ../app/perigee/deck/actionlistmodel.h \
     ../app/perigee/deck/deckcontroller.h \
     ../app/perigee/deck/deckuipump.h \
@@ -68,6 +73,7 @@ HEADERS += \
     ../app/perigee/input/deckinputrouter.h \
     ../app/perigee/input/deckinputdelivery.h \
     ../app/streaming/input/remoteinputstate.h \
+    ../app/streaming/sessionexitintent.h \
     ../app/settings/streamingpreferences.h \
     ../app/gui/sdlgamepadkeynavigation.h \
     input_integration_stubs.h \

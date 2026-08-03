@@ -38,6 +38,11 @@ QStringList g_Ordering;
 int g_MouseMoveCount = 0;
 QVector<InputIntegrationStubs::MouseMoveRecord> g_MouseMoves;
 QVector<bool> g_MouseEmulationNotifications;
+QStringList g_SessionActions;
+bool g_StatsOverlayEnabled = false;
+bool g_MouseCaptureEnabled = false;
+bool g_KeyboardCaptureEnabled = false;
+bool g_FullscreenEnabled = false;
 bool g_RecordOrdering = false;
 bool g_BlockMouseButton = false;
 bool g_BlockMouseMove = false;
@@ -127,6 +132,11 @@ void reset()
     g_MouseMoveCount = 0;
     g_MouseMoves.clear();
     g_MouseEmulationNotifications.clear();
+    g_SessionActions.clear();
+    g_StatsOverlayEnabled = false;
+    g_MouseCaptureEnabled = false;
+    g_KeyboardCaptureEnabled = false;
+    g_FullscreenEnabled = false;
     g_RecordOrdering = false;
     g_BlockMouseButton = false;
     g_BlockMouseMove = false;
@@ -184,6 +194,12 @@ QVector<bool> mouseEmulationNotifications()
 {
     QMutexLocker locker(&g_Mutex);
     return g_MouseEmulationNotifications;
+}
+
+QStringList sessionActions()
+{
+    QMutexLocker locker(&g_Mutex);
+    return g_SessionActions;
 }
 
 void beginOrderingObservation()
@@ -390,6 +406,56 @@ void Session::notifyMouseEmulationMode(bool enabled)
     QMutexLocker locker(&g_Mutex);
     g_MouseEmulationNotifications.append(enabled);
 }
-void Session::toggleStatsOverlay() {}
-void Session::toggleFullscreen() {}
+bool Session::statsOverlayEnabled() const { return g_StatsOverlayEnabled; }
+bool Session::mouseCaptureEnabled() const { return g_MouseCaptureEnabled; }
+bool Session::keyboardCaptureEnabled() const { return g_KeyboardCaptureEnabled; }
+bool Session::fullscreenEnabled() const { return g_FullscreenEnabled; }
+bool Session::setStatsOverlayEnabled(bool enabled)
+{
+    QMutexLocker locker(&g_Mutex);
+    g_StatsOverlayEnabled = enabled;
+    g_SessionActions.append(enabled ? QStringLiteral("stats:on")
+                                    : QStringLiteral("stats:off"));
+    return g_StatsOverlayEnabled;
+}
+bool Session::setMouseCaptureEnabled(bool enabled)
+{
+    QMutexLocker locker(&g_Mutex);
+    g_MouseCaptureEnabled = enabled;
+    g_SessionActions.append(enabled ? QStringLiteral("mouse:on")
+                                    : QStringLiteral("mouse:off"));
+    return g_MouseCaptureEnabled;
+}
+bool Session::setKeyboardCaptureEnabled(bool enabled)
+{
+    QMutexLocker locker(&g_Mutex);
+    g_KeyboardCaptureEnabled = enabled;
+    g_SessionActions.append(enabled ? QStringLiteral("keyboard:on")
+                                    : QStringLiteral("keyboard:off"));
+    return g_KeyboardCaptureEnabled;
+}
+bool Session::setFullscreenEnabled(bool enabled)
+{
+    QMutexLocker locker(&g_Mutex);
+    g_FullscreenEnabled = enabled;
+    g_SessionActions.append(enabled ? QStringLiteral("fullscreen:on")
+                                    : QStringLiteral("fullscreen:off"));
+    return g_FullscreenEnabled;
+}
+void Session::requestClientDisconnect()
+{
+    {
+        QMutexLocker locker(&g_Mutex);
+        g_SessionActions.append(QStringLiteral("disconnect"));
+    }
+    SDL_Event event {};
+    event.type = SDL_QUIT;
+    event.quit.timestamp = SDL_GetTicks();
+    SDL_PushEvent(&event);
+}
+void Session::requestPerigeeQuit()
+{
+    QMutexLocker locker(&g_Mutex);
+    g_SessionActions.append(QStringLiteral("quit"));
+}
 void Session::setShouldExit(bool) {}

@@ -205,6 +205,7 @@ SOURCES += \
     streaming/streamutils.cpp \
     backend/autoupdatechecker.cpp \
     perigee/actions/actionregistry.cpp \
+    perigee/actions/gamestreamadapter.cpp \
     perigee/deck/actionlistmodel.cpp \
     perigee/deck/deckcontroller.cpp \
     perigee/deck/deckuipump.cpp \
@@ -244,6 +245,7 @@ HEADERS += \
     streaming/input/remoteinputstate.h \
     streaming/sdleventcodes.h \
     streaming/session.h \
+    streaming/sessionexitintent.h \
     streaming/audio/renderers/renderer.h \
     streaming/audio/renderers/sdl.h \
     gui/computermodel.h \
@@ -254,7 +256,9 @@ HEADERS += \
     backend/autoupdatechecker.h \
     perigee/actions/actionregistry.h \
     perigee/actions/actiontypes.h \
+    perigee/actions/gamestreamadapter.h \
     perigee/actions/hostadapter.h \
+    perigee/actions/sessionfacade.h \
     perigee/deck/actionlistmodel.h \
     perigee/deck/deckcontroller.h \
     perigee/deck/deckuipump.h \

@@ -72,6 +72,11 @@ QString DeckController::confirmationActionLabel() const
     return m_ConfirmationActionLabel;
 }
 
+QString DeckController::confirmationMessage() const
+{
+    return m_ConfirmationMessage;
+}
+
 void DeckController::openFromKeyboard()
 {
     clearConfirmation();
@@ -226,6 +231,8 @@ void DeckController::activateFocusedAction()
     if (m_ActionModel.focusedActionRequiresConfirmation()) {
         m_ConfirmationActionId = m_ActionModel.focusedActionId();
         m_ConfirmationActionLabel = m_ActionModel.focusedActionLabel();
+        m_ConfirmationMessage =
+            m_ActionModel.focusedActionConfirmationMessage();
         m_ActionModel.setAwaitingConfirmation(m_ConfirmationActionId);
         emit confirmationChanged();
         return;
@@ -245,7 +252,7 @@ void DeckController::acceptConfirmation()
         return;
     }
     clearConfirmation();
-    executeAction(actionId);
+    executeAction(actionId, true);
 }
 
 void DeckController::back()
@@ -331,18 +338,24 @@ void DeckController::clearConfirmation()
     }
     m_ConfirmationActionId.clear();
     m_ConfirmationActionLabel.clear();
+    m_ConfirmationMessage.clear();
     m_ActionModel.setAwaitingConfirmation({});
     emit confirmationChanged();
 }
 
-void DeckController::executeAction(const QString& actionId)
+void DeckController::executeAction(const QString& actionId, bool confirmed)
 {
     if (m_Registry == nullptr || actionId.isEmpty()) {
         return;
     }
 
     std::weak_ptr<std::atomic_bool> pendingRefresh = m_PendingRefresh;
-    m_Registry->execute(actionId, {}, [pendingRefresh](const ActionResult&) {
+    QVariantMap parameters;
+    if (confirmed) {
+        parameters.insert(QStringLiteral("confirmed"), true);
+    }
+    m_Registry->execute(actionId, parameters,
+                        [pendingRefresh](const ActionResult&) {
         if (const auto pending = pendingRefresh.lock()) {
             pending->store(true, std::memory_order_release);
         }

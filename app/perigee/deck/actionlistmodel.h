@@ -42,6 +42,7 @@ public:
     QString focusedActionId() const;
     int focusedRow() const;
     QString focusedActionLabel() const;
+    QString focusedActionConfirmationMessage() const;
     bool focusedActionEnabled() const;
     bool focusedActionRequiresConfirmation() const;
     bool hasEnabledAction() const;

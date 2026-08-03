@@ -87,6 +87,7 @@ FocusScope {
         width: parent.width - 24
         visible: deckController.confirmationVisible
         actionLabel: deckController.confirmationActionLabel
+        message: deckController.confirmationMessage
         onCancelRequested: {
             deckController.cancelConfirmation()
             tray.forceActiveFocus()

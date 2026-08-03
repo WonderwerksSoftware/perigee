@@ -4,6 +4,9 @@
 #include "backend/richpresencemanager.h"
 #include "perigee/deck/deckcontroller.h"
 #include "perigee/deck/decksurfacerenderer.h"
+#include "perigee/actions/actionregistry.h"
+#include "perigee/actions/gamestreamadapter.h"
+#include "perigee/actions/sessionfacade.h"
 #include "perigee/input/deckinputrouter.h"
 #include "streaming/sdleventcodes.h"
 
@@ -44,6 +47,64 @@
 #endif
 
 #define CONN_TEST_SERVER "qt.conntest.moonlight-stream.org"
+
+class GameStreamSessionFacade final : public QObject, public SessionFacade
+{
+public:
+    explicit GameStreamSessionFacade(Session* session)
+        : m_Session(session)
+    {
+    }
+
+    QObject* lifetimeAuthority() override { return this; }
+    bool statsOverlayEnabled() const override
+    {
+        return m_Session && m_Session->statsOverlayEnabled();
+    }
+    bool mouseCaptureEnabled() const override
+    {
+        return m_Session && m_Session->mouseCaptureEnabled();
+    }
+    bool keyboardCaptureEnabled() const override
+    {
+        return m_Session && m_Session->keyboardCaptureEnabled();
+    }
+    bool fullscreenEnabled() const override
+    {
+        return m_Session && m_Session->fullscreenEnabled();
+    }
+    bool setStatsOverlayEnabled(bool enabled) override
+    {
+        return m_Session && m_Session->setStatsOverlayEnabled(enabled);
+    }
+    bool setMouseCaptureEnabled(bool enabled) override
+    {
+        return m_Session && m_Session->setMouseCaptureEnabled(enabled);
+    }
+    bool setKeyboardCaptureEnabled(bool enabled) override
+    {
+        return m_Session && m_Session->setKeyboardCaptureEnabled(enabled);
+    }
+    bool setFullscreenEnabled(bool enabled) override
+    {
+        return m_Session && m_Session->setFullscreenEnabled(enabled);
+    }
+    void requestClientDisconnect() override
+    {
+        if (m_Session) {
+            m_Session->requestClientDisconnect();
+        }
+    }
+    void requestPerigeeQuit() override
+    {
+        if (m_Session) {
+            m_Session->requestPerigeeQuit();
+        }
+    }
+
+private:
+    QPointer<Session> m_Session;
+};
 
 CONNECTION_LISTENER_CALLBACKS Session::k_ConnCallbacks = {
     Session::clStageStarting,
@@ -576,7 +637,6 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_InputHandler(nullptr),
       m_MouseEmulationRefCount(0),
       m_FlushingWindowEventsRef(0),
-      m_ShouldExit(false),
       m_AsyncConnectionSuccess(false),
       m_PortTestResults(0),
       m_OpusDecoder(nullptr),
@@ -596,6 +656,9 @@ Session::~Session()
     m_DeckSurfaceRenderer.reset();
     m_DeckInputRouter.reset();
     m_DeckController.reset();
+    m_ActionRegistry.reset();
+    m_GameStreamAdapter.reset();
+    m_SessionFacade.reset();
     SDL_DestroyMutex(m_DecoderLock);
 }
 
@@ -610,7 +673,13 @@ bool Session::initialize(QQuickWindow* qtWindow)
                     "Perigee Deck disabled: streaming Qt window has no QML engine");
     }
     else {
-        auto deckController = std::make_unique<DeckController>();
+        auto sessionFacade = std::make_unique<GameStreamSessionFacade>(this);
+        auto gameStreamAdapter = std::make_unique<GameStreamAdapter>(
+            sessionFacade.get());
+        auto actionRegistry = std::make_unique<ActionRegistry>(
+            GameStreamAdapter::descriptors(), *gameStreamAdapter);
+        auto deckController = std::make_unique<DeckController>(
+            actionRegistry.get());
         auto deckRenderer = std::make_unique<DeckSurfaceRenderer>();
         QString deckError;
         if (!deckRenderer->initialize(
@@ -624,6 +693,9 @@ bool Session::initialize(QQuickWindow* qtWindow)
                         qUtf8Printable(deckError));
         }
         else {
+            m_SessionFacade = std::move(sessionFacade);
+            m_GameStreamAdapter = std::move(gameStreamAdapter);
+            m_ActionRegistry = std::move(actionRegistry);
             m_DeckController = std::move(deckController);
             m_DeckSurfaceRenderer = std::move(deckRenderer);
             m_DeckInputRouter = std::make_unique<DeckInputRouter>(
@@ -1122,7 +1194,7 @@ void Session::applyDeckInputResult(const DeckInputRouter::Result& result)
         break;
     case DeckInputRouter::Action::ToggleStats:
         m_InputHandler->sendNeutralControllerInput(result.controllerId);
-        toggleStatsOverlay();
+        setStatsOverlayEnabled(!statsOverlayEnabled());
         break;
     case DeckInputRouter::Action::LegacyDisconnect:
         m_InputHandler->handleLegacyGamepadDisconnect(result.controllerId);
@@ -1522,9 +1594,9 @@ private:
     void run() override
     {
         // Only quit the running app if our session terminated gracefully
-        bool shouldQuit =
-                !m_Session->m_UnexpectedTermination &&
-                m_Session->m_Preferences->quitAppAfter;
+        const bool shouldQuit = m_Session->m_ExitIntent.shouldQuitHost(
+                m_Session->m_UnexpectedTermination,
+                m_Session->m_Preferences->quitAppAfter);
 
         // Notify the UI
         if (shouldQuit) {
@@ -1558,7 +1630,7 @@ private:
         }
 
         // Exit the entire program if requested
-        if (m_Session->m_ShouldExit) {
+        if (m_Session->m_ExitIntent.shouldExitPerigee()) {
             QCoreApplication::instance()->quit();
         }
     }
@@ -1753,9 +1825,14 @@ void Session::updateOptimalWindowDisplayMode()
     SDL_SetWindowDisplayMode(m_Window, &bestMode);
 }
 
-void Session::toggleFullscreen()
+bool Session::setFullscreenEnabled(bool enabled)
 {
-    bool fullScreen = !(SDL_GetWindowFlags(m_Window) & m_FullScreenFlag);
+    if (m_Window == nullptr) {
+        return false;
+    }
+    if (fullscreenEnabled() == enabled) {
+        return enabled;
+    }
 
 #if defined(Q_OS_WIN32) || defined(Q_OS_DARWIN)
     // Destroy the video decoder before toggling full-screen because D3D9 can try
@@ -1773,13 +1850,13 @@ void Session::toggleFullscreen()
 #endif
 
     // Actually enter/leave fullscreen
-    SDL_SetWindowFullscreen(m_Window, fullScreen ? m_FullScreenFlag : 0);
+    SDL_SetWindowFullscreen(m_Window, enabled ? m_FullScreenFlag : 0);
 
 #ifdef Q_OS_DARWIN
     // SDL on macOS has a bug that causes the window size to be reset to crazy
     // large dimensions when exiting out of true fullscreen mode. We can work
     // around the issue by manually resetting the position and size here.
-    if (!fullScreen && m_FullScreenFlag == SDL_WINDOW_FULLSCREEN) {
+    if (!enabled && m_FullScreenFlag == SDL_WINDOW_FULLSCREEN) {
         int x, y, width, height;
         getWindowDimensions(x, y, width, height);
         SDL_SetWindowSize(m_Window, width, height);
@@ -1788,10 +1865,15 @@ void Session::toggleFullscreen()
 #endif
 
     // Input handler might need to start/stop keyboard grab after changing modes
-    m_InputHandler->updateKeyboardGrabState();
+    if (m_InputHandler != nullptr) {
+        m_InputHandler->updateKeyboardGrabState();
+    }
 
     // Input handler might need stop/stop mouse grab after changing modes
-    m_InputHandler->updatePointerRegionLock();
+    if (m_InputHandler != nullptr) {
+        m_InputHandler->updatePointerRegionLock();
+    }
+    return fullscreenEnabled();
 }
 
 void Session::notifyMouseEmulationMode(bool enabled)
@@ -1809,11 +1891,82 @@ void Session::notifyMouseEmulationMode(bool enabled)
     }
 }
 
-void Session::toggleStatsOverlay()
+bool Session::statsOverlayEnabled() const
+{
+    return m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug);
+}
+
+bool Session::mouseCaptureEnabled() const
+{
+    if (m_DeckCaptureSnapshot.has_value()) {
+        return m_DeckCaptureSnapshot->mouseCaptured;
+    }
+    return m_InputHandler != nullptr && m_InputHandler->isCaptureActive();
+}
+
+bool Session::keyboardCaptureEnabled() const
+{
+    if (m_DeckCaptureSnapshot.has_value()) {
+        return m_DeckCaptureSnapshot->keyboardCaptured;
+    }
+    return m_InputHandler != nullptr && m_InputHandler->keyboardCaptureEnabled();
+}
+
+bool Session::fullscreenEnabled() const
+{
+    return m_Window != nullptr &&
+        (SDL_GetWindowFlags(m_Window) & m_FullScreenFlag) != 0;
+}
+
+bool Session::setStatsOverlayEnabled(bool enabled)
 {
     m_OverlayManager.setOverlayState(
         Overlay::OverlayDebug,
-        !m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
+        enabled);
+    return statsOverlayEnabled();
+}
+
+bool Session::setMouseCaptureEnabled(bool enabled)
+{
+    if (m_InputHandler == nullptr) {
+        return false;
+    }
+    if (m_DeckCaptureSnapshot.has_value()) {
+        m_DeckCaptureSnapshot->mouseCaptured = enabled;
+        return m_DeckCaptureSnapshot->mouseCaptured;
+    }
+    m_InputHandler->setCaptureActive(enabled);
+    return mouseCaptureEnabled();
+}
+
+bool Session::setKeyboardCaptureEnabled(bool enabled)
+{
+    if (m_InputHandler == nullptr) {
+        return false;
+    }
+    if (m_DeckCaptureSnapshot.has_value()) {
+        m_DeckCaptureSnapshot->keyboardCaptured = enabled;
+    }
+    m_InputHandler->setKeyboardCaptureEnabled(enabled);
+    return keyboardCaptureEnabled();
+}
+
+void Session::requestClientDisconnect()
+{
+    m_ExitIntent.requestClientDisconnect();
+    SDL_Event event {};
+    event.type = SDL_QUIT;
+    event.quit.timestamp = SDL_GetTicks();
+    SDL_PushEvent(&event);
+}
+
+void Session::requestPerigeeQuit()
+{
+    m_ExitIntent.requestPerigeeQuit();
+    SDL_Event event {};
+    event.type = SDL_QUIT;
+    event.quit.timestamp = SDL_GetTicks();
+    SDL_PushEvent(&event);
 }
 
 class AsyncConnectionStartThread : public QThread
@@ -2001,7 +2154,7 @@ void Session::setShouldExit(bool quitHostApp)
         m_Preferences->quitAppAfter = true;
     }
 
-    m_ShouldExit = true;
+    m_ExitIntent.requestPerigeeExit(quitHostApp);
 }
 
 void Session::start()

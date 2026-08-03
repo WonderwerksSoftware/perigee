@@ -26,7 +26,7 @@ ActionDescriptor descriptor(const QString& id,
                             ConfirmationPolicy confirmation = ConfirmationPolicy::Never)
 {
     return { id, label, category, aliases, resourceKey, requiredCapability,
-             requiredPermissions, confirmation };
+             requiredPermissions, confirmation, {} };
 }
 
 QStringList idsOf(const QVector<ActionDescriptor>& descriptors)

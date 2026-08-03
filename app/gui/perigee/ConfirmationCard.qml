@@ -4,6 +4,7 @@ Rectangle {
     id: card
 
     required property string actionLabel
+    required property string message
     signal cancelRequested()
     signal confirmRequested()
 
@@ -27,7 +28,9 @@ Rectangle {
     Text {
         x: 16
         y: 39
-        text: "This action can interrupt the current session."
+        text: message.length > 0
+              ? message
+              : "This action can interrupt the current session."
         color: "#d9b7bc"
         font.pixelSize: 12
     }

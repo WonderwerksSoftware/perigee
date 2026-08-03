@@ -178,7 +178,7 @@ public:
         OverlaySurfaceDeleter surfaceDeleter = SDL_FreeSurface);
     ~OverlayManager();
 
-    bool isOverlayEnabled(OverlayType type);
+    bool isOverlayEnabled(OverlayType type) const;
     char* getOverlayText(OverlayType type);
     void updateOverlayText(OverlayType type, const char* text);
     int getOverlayMaxTextLength();

@@ -156,6 +156,8 @@ private slots:
     void staleTimerTokenIsIgnoredAfterHandlerReplacement();
     void neutralRemoteInputPrecedesPhysicalCaptureRelease();
     void startupCaptureRequestsAreDeferredWhileDeckIsOpen();
+    void keyboardCaptureIntentChangesWithoutGrabbingBehindDeck();
+    void keyboardShortcutsUseSharedSessionActions();
     void statsChordNeutralizesOnlyItsController();
     void statsChordPreservesOtherPhysicalControllerInMergedMode();
     void closedStatsChordUsesRemoteHandlerAndReleasesGamepadMouseButtons();
@@ -578,6 +580,55 @@ void InputIntegrationTest::startupCaptureRequestsAreDeferredWhileDeckIsOpen()
     handler.setCaptureActive(false);
     handler.setWindow(nullptr);
     SDL_DestroyWindow(window);
+}
+
+void InputIntegrationTest::keyboardCaptureIntentChangesWithoutGrabbingBehindDeck()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    SdlInputHandler handler(preferences, 1920, 1080);
+    SDL_Window* window = SDL_CreateWindow("keyboard-capture", 0, 0, 640, 360,
+                                          SDL_WINDOW_HIDDEN);
+    QVERIFY(window != nullptr);
+    handler.setWindow(window);
+
+    const CaptureSnapshot snapshot = handler.beginLocalOverlayInput();
+    QVERIFY(!snapshot.keyboardCaptured);
+    QVERIFY(handler.setKeyboardCaptureEnabled(true));
+    QVERIFY(handler.keyboardCaptureEnabled());
+    QVERIFY(!handler.isSystemKeyCaptureActive());
+    QVERIFY(!SDL_GetWindowKeyboardGrab(window));
+
+    CaptureSnapshot changedIntent = snapshot;
+    changedIntent.keyboardCaptured = true;
+    handler.endLocalOverlayInput(changedIntent, false);
+    QVERIFY(handler.keyboardCaptureEnabled());
+    QVERIFY(!handler.isSystemKeyCaptureActive());
+
+    handler.setKeyboardCaptureEnabled(false);
+    handler.setWindow(nullptr);
+    SDL_DestroyWindow(window);
+}
+
+void InputIntegrationTest::keyboardShortcutsUseSharedSessionActions()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    SdlInputHandler handler(preferences, 1920, 1080);
+
+    handler.performSpecialKeyCombo(SdlInputHandler::KeyComboUngrabInput);
+    handler.performSpecialKeyCombo(SdlInputHandler::KeyComboToggleFullScreen);
+    handler.performSpecialKeyCombo(SdlInputHandler::KeyComboToggleStatsOverlay);
+    handler.performSpecialKeyCombo(SdlInputHandler::KeyComboToggleKeyboardGrab);
+    handler.performSpecialKeyCombo(SdlInputHandler::KeyComboQuit);
+
+    QCOMPARE(InputIntegrationStubs::sessionActions(), QStringList({
+        QStringLiteral("mouse:on"),
+        QStringLiteral("fullscreen:on"),
+        QStringLiteral("stats:on"),
+        QStringLiteral("keyboard:on"),
+        QStringLiteral("disconnect"),
+    }));
 }
 
 void InputIntegrationTest::statsChordNeutralizesOnlyItsController()

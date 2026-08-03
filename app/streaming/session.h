@@ -10,6 +10,7 @@
 #include "video/decoder.h"
 #include "audio/renderers/renderer.h"
 #include "video/overlaymanager.h"
+#include "sessionexitintent.h"
 #include "perigee/input/deckinputrouter.h"
 #include "perigee/deck/deckuipump.h"
 
@@ -18,6 +19,9 @@
 
 class DeckSurfaceRenderer;
 class DeckController;
+class ActionRegistry;
+class GameStreamAdapter;
+class GameStreamSessionFacade;
 
 class SupportedVideoFormatList : public QList<int>
 {
@@ -137,6 +141,17 @@ public:
 
     void setShouldExit(bool quitHostApp = false);
 
+    bool statsOverlayEnabled() const;
+    bool mouseCaptureEnabled() const;
+    bool keyboardCaptureEnabled() const;
+    bool fullscreenEnabled() const;
+    bool setStatsOverlayEnabled(bool enabled);
+    bool setMouseCaptureEnabled(bool enabled);
+    bool setKeyboardCaptureEnabled(bool enabled);
+    bool setFullscreenEnabled(bool enabled);
+    void requestClientDisconnect();
+    void requestPerigeeQuit();
+
 signals:
     void stageStarting(QString stage);
 
@@ -177,11 +192,7 @@ private:
     void getWindowDimensions(int& x, int& y,
                              int& width, int& height);
 
-    void toggleFullscreen();
-
     void notifyMouseEmulationMode(bool enabled);
-
-    void toggleStatsOverlay();
 
     bool routeDeckInputEvent(const SDL_Event& event);
 
@@ -287,7 +298,7 @@ private:
     int m_MouseEmulationRefCount;
     int m_FlushingWindowEventsRef;
     QStringList m_LaunchWarnings;
-    bool m_ShouldExit;
+    SessionExitIntent m_ExitIntent;
 
     bool m_AsyncConnectionSuccess;
     int m_PortTestResults;
@@ -305,6 +316,9 @@ private:
     Uint32 m_DropAudioEndTime;
 
     Overlay::OverlayManager m_OverlayManager;
+    std::unique_ptr<GameStreamSessionFacade> m_SessionFacade;
+    std::unique_ptr<GameStreamAdapter> m_GameStreamAdapter;
+    std::unique_ptr<ActionRegistry> m_ActionRegistry;
     std::unique_ptr<DeckController> m_DeckController;
     std::unique_ptr<DeckSurfaceRenderer> m_DeckSurfaceRenderer;
     std::unique_ptr<DeckInputRouter> m_DeckInputRouter;

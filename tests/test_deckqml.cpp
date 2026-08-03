@@ -50,7 +50,7 @@ ActionDescriptor descriptor(const QString& id,
                             ActionCategory category,
                             ConfirmationPolicy confirmation = ConfirmationPolicy::Never)
 {
-    return { id, label, category, {}, {}, {}, 0, confirmation };
+    return { id, label, category, {}, {}, {}, 0, confirmation, {} };
 }
 
 ActionState state(bool enabled,

@@ -458,7 +458,7 @@ CaptureSnapshot SdlInputHandler::beginLocalOverlayInput()
 {
     const CaptureSnapshot snapshot {
         isCaptureActive(),
-        isSystemKeyCaptureActive(),
+        keyboardCaptureEnabled(),
     };
     m_DeferredCaptureActive.reset();
     m_LocalOverlayInputActive.store(true, std::memory_order_release);
@@ -736,6 +736,23 @@ bool SdlInputHandler::isSystemKeyCaptureActive()
     }
 
     return true;
+}
+
+bool SdlInputHandler::keyboardCaptureEnabled() const
+{
+    return m_CaptureSystemKeysMode != StreamingPreferences::CSK_OFF;
+}
+
+bool SdlInputHandler::setKeyboardCaptureEnabled(bool enabled)
+{
+    m_CaptureSystemKeysMode = enabled
+        ? StreamingPreferences::CSK_ALWAYS
+        : StreamingPreferences::CSK_OFF;
+    if (!m_LocalOverlayInputActive.load(std::memory_order_acquire) &&
+            m_Window != nullptr) {
+        updateKeyboardGrabState();
+    }
+    return keyboardCaptureEnabled();
 }
 
 void SdlInputHandler::setCaptureActive(bool active)

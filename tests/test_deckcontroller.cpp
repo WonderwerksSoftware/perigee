@@ -16,9 +16,11 @@ namespace {
 ActionDescriptor descriptor(const QString& id,
                             const QString& label,
                             ActionCategory category,
-                            ConfirmationPolicy confirmation = ConfirmationPolicy::Never)
+                            ConfirmationPolicy confirmation = ConfirmationPolicy::Never,
+                            const QString& confirmationMessage = {})
 {
-    return { id, label, category, {}, {}, {}, 0, confirmation };
+    return { id, label, category, {}, {}, {}, 0, confirmation,
+             confirmationMessage };
 }
 
 ActionState availableState(const QString& value = {})
@@ -34,6 +36,7 @@ class MutableHostAdapter final : public HostAdapter
 public:
     HostSnapshot currentSnapshot;
     QStringList executedActionIds;
+    QVector<QVariantMap> executedParameters;
     std::optional<ActionResult> synchronousResult;
     Completion pendingCompletion;
 
@@ -43,10 +46,11 @@ public:
     }
 
     void execute(const QString& actionId,
-                 const QVariantMap&,
+                 const QVariantMap& parameters,
                  Completion completion) override
     {
         executedActionIds.push_back(actionId);
+        executedParameters.push_back(parameters);
         if (synchronousResult.has_value()) {
             completion(*synchronousResult);
         }
@@ -198,7 +202,8 @@ void DeckControllerTest::backUnwindsConfirmationActionsSearchAndDeck()
         QStringLiteral("session.end"), availableState());
     ActionRegistry registry({
         descriptor(QStringLiteral("session.end"), QStringLiteral("End host session"),
-                   ActionCategory::Session, ConfirmationPolicy::Always),
+                   ActionCategory::Session, ConfirmationPolicy::Always,
+                   QStringLiteral("End the host session for every connected client?")),
     }, adapter);
     DeckController controller(&registry);
     controller.openFromKeyboard();
@@ -238,7 +243,8 @@ void DeckControllerTest::confirmationCanBeCancelledOrAccepted()
     };
     ActionRegistry registry({
         descriptor(QStringLiteral("session.end"), QStringLiteral("End host session"),
-                   ActionCategory::Session, ConfirmationPolicy::Always),
+                   ActionCategory::Session, ConfirmationPolicy::Always,
+                   QStringLiteral("End the host session for every connected client?")),
     }, adapter);
     DeckController controller(&registry);
     controller.openFromKeyboard();
@@ -248,6 +254,8 @@ void DeckControllerTest::confirmationCanBeCancelledOrAccepted()
     controller.activateFocusedAction();
     QVERIFY(controller.confirmationVisible());
     QCOMPARE(controller.confirmationActionLabel(), QStringLiteral("End host session"));
+    QCOMPARE(controller.confirmationMessage(),
+             QStringLiteral("End the host session for every connected client?"));
     QVERIFY(adapter.executedActionIds.isEmpty());
 
     controller.cancelConfirmation();
@@ -258,6 +266,8 @@ void DeckControllerTest::confirmationCanBeCancelledOrAccepted()
     controller.acceptConfirmation();
     QCOMPARE(adapter.executedActionIds,
              QStringList({ QStringLiteral("session.end") }));
+    QCOMPARE(adapter.executedParameters,
+             QVector<QVariantMap>({{{QStringLiteral("confirmed"), true}}}));
     QVERIFY(!controller.confirmationVisible());
     QCOMPARE(valueForAction(controller, QStringLiteral("session.end")), QString());
 }

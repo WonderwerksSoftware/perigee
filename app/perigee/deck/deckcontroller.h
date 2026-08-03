@@ -23,6 +23,7 @@ class DeckController final : public QObject
     Q_PROPERTY(ActionListModel* actionModel READ actionModel CONSTANT)
     Q_PROPERTY(bool confirmationVisible READ confirmationVisible NOTIFY confirmationChanged)
     Q_PROPERTY(QString confirmationActionLabel READ confirmationActionLabel NOTIFY confirmationChanged)
+    Q_PROPERTY(QString confirmationMessage READ confirmationMessage NOTIFY confirmationChanged)
 
 public:
     enum FocusRegion {
@@ -46,6 +47,7 @@ public:
     const ActionListModel* actionModel() const;
     bool confirmationVisible() const;
     QString confirmationActionLabel() const;
+    QString confirmationMessage() const;
 
     Q_INVOKABLE void openFromKeyboard();
     Q_INVOKABLE void openFromController();
@@ -79,7 +81,7 @@ private:
     static ActionCategory categoryForIndex(int categoryIndex);
     void setFocusRegion(FocusRegion region);
     void clearConfirmation();
-    void executeAction(const QString& actionId);
+    void executeAction(const QString& actionId, bool confirmed = false);
 
     ActionRegistry* m_Registry;
     ActionListModel m_ActionModel;
@@ -89,5 +91,6 @@ private:
     int m_ActiveCategory = 0;
     QString m_ConfirmationActionId;
     QString m_ConfirmationActionLabel;
+    QString m_ConfirmationMessage;
     std::shared_ptr<std::atomic_bool> m_PendingRefresh;
 };
