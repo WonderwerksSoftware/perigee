@@ -110,6 +110,7 @@ private slots:
     void inFlightEmptyResourceActionExecutesOnlyOnce();
     void repeatedActivationDoesNotRedirectFromWorkingActionToPeer();
     void pointerFocusCancelsConfirmationOnlyAfterSuccessfulChange();
+    void verifiedDisabledActionCanBeSelectedButNeverActivated();
     void textInputRequestTracksOpenSearchFocus();
     void deckPumpDrainsOnlyDeckCompletions();
 };
@@ -527,6 +528,39 @@ void DeckControllerTest::pointerFocusCancelsConfirmationOnlyAfterSuccessfulChang
         QStringLiteral("display.confirm"), {},
         [&result](const ActionResult& completed) { result = completed; });
     QCOMPARE(result.errorCode, QStringLiteral("confirmation_required"));
+    QVERIFY(adapter.executedActionIds.isEmpty());
+}
+
+void DeckControllerTest::verifiedDisabledActionCanBeSelectedButNeverActivated()
+{
+    MutableHostAdapter adapter;
+    ActionState current;
+    current.enabled = false;
+    current.disabledCode = QStringLiteral("current_target");
+    current.disabledReason = QStringLiteral("This display is currently active.");
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.current"), current);
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.other"), availableState());
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.current"), QStringLiteral("Current display"),
+                   ActionCategory::Display),
+        descriptor(QStringLiteral("display.other"), QStringLiteral("Other display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+    QCOMPARE(focusedActionId(controller), QStringLiteral("display.other"));
+
+    controller.focusActionWithoutActivation(QStringLiteral("display.current"));
+    QCOMPARE(focusedActionId(controller), QStringLiteral("display.current"));
+    QVERIFY(!controller.actionModel()->focusedActionEnabled());
+    controller.activateFocusedAction();
+    QVERIFY(adapter.executedActionIds.isEmpty());
+
+    controller.refresh();
+    QCOMPARE(focusedActionId(controller), QStringLiteral("display.current"));
+    controller.activateAction(QStringLiteral("display.current"));
     QVERIFY(adapter.executedActionIds.isEmpty());
 }
 

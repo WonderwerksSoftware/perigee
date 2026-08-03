@@ -1,6 +1,7 @@
 #include "polarisadapter.h"
 
 #include "perigee/actions/gamestreamadapter.h"
+#include "perigee/display/sessiontransitioncoordinator.h"
 
 #include <SDL.h>
 
@@ -22,6 +23,27 @@ namespace {
 constexpr auto CapabilitiesRoute = "/polaris/v1/capabilities";
 constexpr auto SessionStatusRoute = "/polaris/v1/session/status";
 constexpr auto ClientSettingsRoute = "/polaris/v1/client-settings";
+constexpr auto DisplayPrefix = "display.target.";
+
+QString displayActionId(const DisplayTarget& target)
+{
+    const QByteArray key = target.stableKey().toUtf8().toBase64(
+        QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+    return QString::fromLatin1(DisplayPrefix) + QString::fromLatin1(key);
+}
+
+QVariantMap displayMetadata(const DisplayTarget& target)
+{
+    return {
+        {QStringLiteral("kind"), target.kind},
+        {QStringLiteral("id"), target.id},
+        {QStringLiteral("label"), target.label},
+        {QStringLiteral("available"), target.available},
+        {QStringLiteral("current"), target.current},
+        {QStringLiteral("requires_reconnect"), target.requiresReconnect},
+        {QStringLiteral("unavailable_reason"), target.unavailableReason},
+    };
+}
 
 ActionDescriptor polarisDescriptor(
     const char* id, const char* label, ActionCategory category,
@@ -269,13 +291,15 @@ struct PolarisAdapter::SharedState
 PolarisAdapter::PolarisAdapter(
     GameStreamAdapter& localAdapter,
     std::unique_ptr<PolarisTransport> transport,
-    std::unique_ptr<PolarisClipboard> clipboard)
+    std::unique_ptr<PolarisClipboard> clipboard,
+    SessionTransitionCoordinator* transitionCoordinator)
     : m_LocalAdapter(localAdapter)
     , m_Transport(std::move(transport))
     , m_Clipboard(clipboard != nullptr
           ? std::shared_ptr<PolarisClipboard>(std::move(clipboard))
           : std::make_shared<SdlClipboard>())
     , m_State(std::make_shared<SharedState>())
+    , m_TransitionCoordinator(transitionCoordinator)
 {
     m_State->sdlThread = QThread::currentThreadId();
     m_State->clipboard = m_Clipboard;
@@ -285,9 +309,11 @@ PolarisAdapter::PolarisAdapter(
 }
 
 PolarisAdapter::PolarisAdapter(GameStreamAdapter& localAdapter,
-                               const NvComputer& computer)
+                               const NvComputer& computer,
+                               SessionTransitionCoordinator* transitionCoordinator)
     : PolarisAdapter(localAdapter,
-                     std::make_unique<ApiClientTransport>(computer))
+                     std::make_unique<ApiClientTransport>(computer), {},
+                     transitionCoordinator)
 {
 }
 
@@ -341,6 +367,9 @@ PolarisAdapter::~PolarisAdapter()
 QVector<ActionDescriptor> PolarisAdapter::descriptors()
 {
     QVector<ActionDescriptor> result = GameStreamAdapter::descriptors();
+    result.push_back(polarisDescriptor(
+        "display.switch", "Select display", ActionCategory::Display,
+        "display.selection", ConfirmationPolicy::Never));
     result.push_back(polarisDescriptor(
         "clipboard.send-local", "Send local clipboard to host",
         ActionCategory::Clipboard, "clipboard",
@@ -634,6 +663,81 @@ PolarisAvailability PolarisAdapter::availability(
     return PolarisModels::availability(discoverySnapshot(), operation);
 }
 
+void PolarisAdapter::postDisplayTarget(
+    const DisplayTarget& target, const QString& sessionToken,
+    quint64 transactionEpoch, DisplayPostCompletion completion)
+{
+    postDisplayTarget(target, sessionToken, transactionEpoch,
+                      discoverySnapshot(), std::move(completion));
+}
+
+void PolarisAdapter::postDisplayTarget(
+    const DisplayTarget& target, const QString& sessionToken,
+    quint64 transactionEpoch,
+    const PolarisDiscoverySnapshot& authorizationSnapshot,
+    DisplayPostCompletion completion)
+{
+    const PolarisDiscoverySnapshot currentDiscovery = discoverySnapshot();
+    const PolarisDiscoverySnapshot& discovery = currentDiscovery.complete
+        ? currentDiscovery : authorizationSnapshot;
+    const PolarisAvailability available = PolarisModels::availability(
+        discovery, PolarisOperation::DisplaySwitch);
+    const auto advertisedTarget = std::find_if(
+        discovery.settings.targets.cbegin(), discovery.settings.targets.cend(),
+        [&target](const DisplayTarget& candidate) {
+            return candidate.stableKey() == target.stableKey();
+        });
+    const auto reject = [&](const QString& code, const QString& message) {
+        if (completion) {
+            completion(transactionEpoch, false, code, message);
+        }
+    };
+    if (!available.enabled) {
+        reject(available.errorCode.isEmpty()
+                   ? QStringLiteral("action_unavailable")
+                   : available.errorCode,
+               available.reason.isEmpty()
+                   ? QStringLiteral("Display switching is unavailable.")
+                   : available.reason);
+        return;
+    }
+    if (transactionEpoch == 0 || sessionToken.isEmpty() ||
+            !discovery.session.tokenValid ||
+            sessionToken != discovery.session.sessionToken) {
+        reject(QStringLiteral("stale_session"),
+               QStringLiteral("The host session changed."));
+        return;
+    }
+    if (advertisedTarget == discovery.settings.targets.cend() ||
+            !advertisedTarget->available ||
+            !discovery.capabilities.clientSettingsEndpoint.usable) {
+        reject(QStringLiteral("stale_catalog"),
+               QStringLiteral("The display target catalog changed."));
+        return;
+    }
+    const QByteArray body = DisplayTransaction::postBody(target, sessionToken);
+    if (body.isEmpty()) {
+        reject(QStringLiteral("invalid_request"),
+               QStringLiteral("Polaris rejected the display target."));
+        return;
+    }
+
+    ActionState authoritativeState = actionState(available);
+    authoritativeState.value = displayMetadata(*advertisedTarget);
+    submitAction(
+        displayActionId(*advertisedTarget), QStringLiteral("display.selection"),
+        discovery.capabilities.clientSettingsEndpoint.advertised, body,
+        std::nullopt, ActionKind::DisplayTarget,
+        std::move(authoritativeState),
+        [transactionEpoch, completion = std::move(completion)](
+            const ActionResult& result) {
+            if (completion) {
+                completion(transactionEpoch, result.ok, result.errorCode,
+                           result.userMessage);
+            }
+        });
+}
+
 HostSnapshot PolarisAdapter::snapshot()
 {
     HostSnapshot result = m_LocalAdapter.snapshot();
@@ -672,10 +776,48 @@ HostSnapshot PolarisAdapter::snapshot()
         QStringLiteral("session.end-host"),
         actionState(PolarisModels::availability(
             discovery, PolarisOperation::StopSession)));
-    result.actionStates.insert(
-        QStringLiteral("display.switch"),
-        actionState(PolarisModels::availability(
-            discovery, PolarisOperation::DisplaySwitch)));
+    ActionState displayTemplate = actionState(PolarisModels::availability(
+        discovery, PolarisOperation::DisplaySwitch));
+    if (m_TransitionCoordinator != nullptr) {
+        displayTemplate =
+            m_TransitionCoordinator->decorateDisplaySelectionState(
+                std::move(displayTemplate));
+    }
+    if (discovery.standardHost) {
+        displayTemplate.visible = false;
+    }
+    else if (!discovery.settings.targets.isEmpty()) {
+        displayTemplate.visible = false;
+        for (const DisplayTarget& target : discovery.settings.targets) {
+            ActionState targetState = actionState(
+                PolarisModels::availability(
+                    discovery, PolarisOperation::DisplaySwitch));
+            targetState.value = displayMetadata(target);
+            targetState.invocationState =
+                DisplayTransaction::catalogIdentity(discovery);
+            if (!target.available) {
+                targetState.enabled = false;
+                targetState.disabledCode = QStringLiteral("target_unavailable");
+                targetState.disabledReason = target.unavailableReason.isEmpty()
+                    ? QStringLiteral("This display is unavailable.")
+                    : target.unavailableReason;
+            }
+            else if (target.current) {
+                targetState.enabled = false;
+                targetState.disabledCode = QStringLiteral("current_target");
+                targetState.disabledReason =
+                    QStringLiteral("This display is currently active.");
+            }
+            if (m_TransitionCoordinator != nullptr) {
+                targetState = m_TransitionCoordinator->decorateTargetState(
+                    target, std::move(targetState));
+            }
+            result.actionStates.insert(displayActionId(target),
+                                       std::move(targetState));
+        }
+    }
+    result.actionStates.insert(QStringLiteral("display.switch"),
+                               std::move(displayTemplate));
     return result;
 }
 
@@ -706,6 +848,57 @@ void PolarisAdapter::execute(const QString& actionId,
         return;
     }
     const PolarisDiscoverySnapshot discovery = discoverySnapshot();
+    if (actionId.startsWith(QString::fromLatin1(DisplayPrefix))) {
+        const PolarisAvailability displayAvailability =
+            PolarisModels::availability(discovery,
+                                        PolarisOperation::DisplaySwitch);
+        const auto target = std::find_if(
+            discovery.settings.targets.cbegin(),
+            discovery.settings.targets.cend(),
+            [&actionId](const DisplayTarget& candidate) {
+                return displayActionId(candidate) == actionId;
+            });
+        const QVariantMap expectedMetadata = parameters.take(
+            QStringLiteral("_perigee.authoritative-state")).toMap();
+        const QVariantMap expectedCatalogIdentity = parameters.take(
+            QStringLiteral("_perigee.authoritative-context")).toMap();
+        if (target == discovery.settings.targets.cend() ||
+                expectedMetadata != displayMetadata(*target) ||
+                expectedCatalogIdentity.isEmpty() ||
+                expectedCatalogIdentity !=
+                    DisplayTransaction::catalogIdentity(discovery)) {
+            if (completion) {
+                ActionResult result = actionFailure(
+                    QStringLiteral("stale_catalog"),
+                    QStringLiteral("The display target catalog changed."));
+                if (target != discovery.settings.targets.cend()) {
+                    ActionState observed = actionState(displayAvailability);
+                    observed.value = displayMetadata(*target);
+                    observed.invocationState =
+                        DisplayTransaction::catalogIdentity(discovery);
+                    result.observedState = std::move(observed);
+                }
+                completion(result);
+            }
+            return;
+        }
+        if (m_TransitionCoordinator == nullptr) {
+            if (completion) {
+                ActionResult result = actionFailure(
+                    QStringLiteral("transition_unavailable"),
+                    QStringLiteral("Display switching is unavailable in this session."));
+                ActionState observed = actionState(displayAvailability);
+                observed.value = expectedMetadata;
+                result.observedState = std::move(observed);
+                completion(result);
+            }
+            return;
+        }
+        m_TransitionCoordinator->selectTarget(
+            expectedMetadata, expectedCatalogIdentity, discovery,
+            std::move(completion));
+        return;
+    }
     if (actionId.startsWith(QStringLiteral("host.command."))) {
         const PolarisAvailability commandAvailability =
             PolarisModels::availability(discovery,
@@ -992,7 +1185,8 @@ void PolarisAdapter::submitAction(
     }
     else {
         requestId = transport->post(
-            endpoint, body, true, std::move(transportCompletion));
+            endpoint, body, kind != ActionKind::DisplayTarget,
+            std::move(transportCompletion));
     }
 
     std::optional<PolarisResponse> earlyResponse;
@@ -1174,6 +1368,17 @@ void PolarisAdapter::handleActionCompletion(
             result = {true, QStringLiteral("Clipboard copied from host"), {}, {}};
         }
         wipeSensitive(text, clipboard.get());
+    }
+    else if (kind == ActionKind::DisplayTarget) {
+        if (status >= 200 && status < 300) {
+            result = {true, QStringLiteral("Display selection accepted by Polaris"),
+                      {}, {}};
+        }
+        else {
+            result = actionFailure(
+                QStringLiteral("malformed_response"),
+                QStringLiteral("Polaris returned an invalid display response."));
+        }
     }
     else if (!response.json.isObject()) {
         result = actionFailure(QStringLiteral("malformed_response"),

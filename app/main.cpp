@@ -56,6 +56,7 @@
 #include "streaming/session.h"
 #include "settings/streamingpreferences.h"
 #include "gui/sdlgamepadkeynavigation.h"
+#include "perigee/display/sessiontransitioncoordinator.h"
 
 #if defined(Q_OS_WIN32)
 #define IS_UNSPECIFIED_HANDLE(x) ((x) == INVALID_HANDLE_VALUE || (x) == NULL)
@@ -992,7 +993,11 @@ int main(int argc, char *argv[])
         qputenv("QT_QUICK_CONTROLS_MATERIAL_PRIMARY", "#3F51B5");
     }
 
+    SessionTransitionCoordinator displayTransitionCoordinator;
+    Session::setTransitionCoordinator(&displayTransitionCoordinator);
     QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(
+        "DisplayTransitionCoordinator", &displayTransitionCoordinator);
     QString initialView;
     bool hasGUI = true;
 

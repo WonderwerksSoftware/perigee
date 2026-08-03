@@ -77,6 +77,7 @@ void ActionListModel::setRegistry(ActionRegistry* registry)
     }
     m_Registry = registry;
     m_FocusedActionId.clear();
+    m_AllowDisabledFocus = false;
     m_AwaitingConfirmationId.clear();
     refresh();
 }
@@ -102,6 +103,7 @@ void ActionListModel::setSearchText(const QString& searchText)
 void ActionListModel::refresh()
 {
     const QString previousFocus = m_FocusedActionId;
+    const bool previousAllowDisabledFocus = m_AllowDisabledFocus;
     const int previousRow = rowForId(previousFocus);
 
     QVector<Row> rows;
@@ -133,12 +135,15 @@ void ActionListModel::refresh()
     beginResetModel();
     m_Rows = std::move(rows);
     m_FocusedActionId.clear();
+    m_AllowDisabledFocus = false;
 
     const int retainedRow = rowForId(previousFocus);
     if (retainedRow >= 0 &&
             (m_Rows.at(retainedRow).state.enabled ||
-             m_Rows.at(retainedRow).state.phase == ActionPhase::Working)) {
+             m_Rows.at(retainedRow).state.phase == ActionPhase::Working ||
+             previousAllowDisabledFocus)) {
         m_FocusedActionId = previousFocus;
+        m_AllowDisabledFocus = previousAllowDisabledFocus;
     }
     else if (!previousFocus.isEmpty() && !m_Rows.isEmpty()) {
         const int fallbackStart = qBound(0, previousRow, m_Rows.size() - 1);
@@ -241,6 +246,15 @@ bool ActionListModel::focusAction(const QString& actionId)
     return true;
 }
 
+bool ActionListModel::focusActionWithoutActivation(const QString& actionId)
+{
+    if (rowForId(actionId) < 0) {
+        return false;
+    }
+    changeFocusedAction(actionId, true);
+    return true;
+}
+
 void ActionListModel::setAwaitingConfirmation(const QString& actionId)
 {
     if (m_AwaitingConfirmationId == actionId) {
@@ -286,14 +300,17 @@ int ActionListModel::nextEnabledRow(int startRow, int delta) const
     return -1;
 }
 
-void ActionListModel::changeFocusedAction(const QString& actionId)
+void ActionListModel::changeFocusedAction(const QString& actionId,
+                                          bool allowDisabled)
 {
-    if (m_FocusedActionId == actionId) {
+    if (m_FocusedActionId == actionId &&
+            m_AllowDisabledFocus == allowDisabled) {
         return;
     }
     const int oldRow = rowForId(m_FocusedActionId);
     const int newRow = rowForId(actionId);
     m_FocusedActionId = actionId;
+    m_AllowDisabledFocus = allowDisabled && newRow >= 0;
     if (oldRow >= 0) {
         emit dataChanged(index(oldRow, 0), index(oldRow, 0), { FocusedRole });
     }

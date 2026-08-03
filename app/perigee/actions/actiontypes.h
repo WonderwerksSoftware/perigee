@@ -32,6 +32,7 @@ struct ActionState {
     QString disabledReason;
     ActionPhase phase = ActionPhase::Idle;
     QString message;
+    QVariantMap invocationState;
 };
 
 struct ActionResult {

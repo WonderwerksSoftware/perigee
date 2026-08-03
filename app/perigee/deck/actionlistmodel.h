@@ -50,6 +50,7 @@ public:
     bool focusFirstEnabled();
     bool moveFocus(int delta);
     bool focusAction(const QString& actionId);
+    bool focusActionWithoutActivation(const QString& actionId);
     void setAwaitingConfirmation(const QString& actionId);
 
 signals:
@@ -64,7 +65,8 @@ private:
 
     int rowForId(const QString& actionId) const;
     int nextEnabledRow(int startRow, int delta) const;
-    void changeFocusedAction(const QString& actionId);
+    void changeFocusedAction(const QString& actionId,
+                             bool allowDisabled = false);
     static QString categoryName(ActionCategory category);
     static QString phaseName(ActionPhase phase);
 
@@ -73,5 +75,6 @@ private:
     QString m_SearchText;
     QVector<Row> m_Rows;
     QString m_FocusedActionId;
+    bool m_AllowDisabledFocus = false;
     QString m_AwaitingConfirmationId;
 };

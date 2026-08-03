@@ -34,6 +34,7 @@
 
 #include <QtEndian>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QThreadPool>
 #include <QSvgRenderer>
 #include <QPainter>
@@ -50,6 +51,8 @@
 #define CONN_TEST_SERVER "qt.conntest.moonlight-stream.org"
 
 namespace {
+
+constexpr qint64 FailedTransitionControlTimeoutMs = 5000;
 
 int enqueueSessionQuitEvent()
 {
@@ -115,6 +118,82 @@ private:
     QPointer<Session> m_Session;
 };
 
+class SessionDisplayTransitionPort final : public DisplayTransitionPort
+{
+public:
+    explicit SessionDisplayTransitionPort(Session* session)
+        : m_Session(session)
+    {
+    }
+
+    void postTarget(const DisplayTarget& target, const QString& sessionToken,
+                    quint64 transactionEpoch,
+                    PostCompletion completion) override
+    {
+        if (m_Session) {
+            m_Session->postDisplayTarget(target, sessionToken,
+                                         transactionEpoch,
+                                         std::move(completion));
+        }
+        else if (completion) {
+            completion(transactionEpoch, false,
+                       QStringLiteral("session_retired"),
+                       QStringLiteral("The streaming session is no longer active."));
+        }
+    }
+
+    void postAuthorizedTarget(
+        const DisplayTarget& target, const QString& sessionToken,
+        quint64 transactionEpoch,
+        const PolarisDiscoverySnapshot& authorizationSnapshot,
+        PostCompletion completion) override
+    {
+        if (m_Session && m_Session->m_PolarisAdapter != nullptr) {
+            m_Session->m_PolarisAdapter->postDisplayTarget(
+                target, sessionToken, transactionEpoch,
+                authorizationSnapshot, std::move(completion));
+        }
+        else if (completion) {
+            completion(transactionEpoch, false,
+                       QStringLiteral("session_retired"),
+                       QStringLiteral("The streaming session is no longer active."));
+        }
+    }
+
+    bool requestLocalDisconnect(quint64 transactionEpoch) override
+    {
+        Q_UNUSED(transactionEpoch);
+        if (!m_Session) {
+            return false;
+        }
+        if (!m_Session->m_ConnectionStartRequested.load(
+                std::memory_order_acquire) &&
+                m_Session->m_TransitionCoordinator != nullptr) {
+            return m_Session->m_TransitionCoordinator->sessionFinished(
+                m_Session->m_DisplaySessionEpoch);
+        }
+        return m_Session->requestClientDisconnect(
+            ClientDisconnectPolicy::KeepHostRunning);
+    }
+
+    void armFirstFrameEvidence(quint64 evidenceEpoch) override
+    {
+        if (m_Session) {
+            m_Session->m_FirstFrameNotificationGate.arm(evidenceEpoch);
+        }
+    }
+
+    void refreshReadback(quint64 transactionEpoch) override
+    {
+        if (m_Session) {
+            m_Session->refreshDisplayTransitionReadback(transactionEpoch);
+        }
+    }
+
+private:
+    QPointer<Session> m_Session;
+};
+
 CONNECTION_LISTENER_CALLBACKS Session::k_ConnCallbacks = {
     Session::clStageStarting,
     nullptr,
@@ -133,6 +212,8 @@ CONNECTION_LISTENER_CALLBACKS Session::k_ConnCallbacks = {
 
 Session* Session::s_ActiveSession;
 QSemaphore Session::s_ActiveSessionSemaphore(1);
+SessionTransitionCoordinator* Session::s_TransitionCoordinator = nullptr;
+std::atomic<quint64> Session::s_NextDisplaySessionEpoch {0};
 
 void Session::clStageStarting(int stage)
 {
@@ -440,6 +521,21 @@ int Session::drSubmitDecodeUnit(PDECODE_UNIT du)
         if (decoder != nullptr) {
             int ret = decoder->submitDecodeUnit(du);
             SDL_UnlockMutex(s_ActiveSession->m_DecoderLock);
+            if (ret == DR_OK) {
+                Session* session = s_ActiveSession;
+                session->m_FirstFrameNotificationGate.notifyAcceptedFrame(
+                    [session](quint64 evidenceEpoch) {
+                        SDL_Event event {};
+                        event.type = SDL_USEREVENT;
+                        event.user.code = SDL_CODE_PERIGEE_FIRST_FRAME;
+                        event.user.data1 = reinterpret_cast<void*>(
+                            static_cast<uintptr_t>(
+                                session->m_DisplaySessionEpoch));
+                        event.user.data2 = reinterpret_cast<void*>(
+                            static_cast<uintptr_t>(evidenceEpoch));
+                        return SDL_PushEvent(&event) == 1;
+                    });
+            }
             return ret;
         }
         else {
@@ -651,7 +747,11 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_OpusDecoder(nullptr),
       m_AudioRenderer(nullptr),
       m_AudioSampleCount(0),
-      m_DropAudioEndTime(0)
+      m_DropAudioEndTime(0),
+      m_TransitionCoordinator(s_TransitionCoordinator),
+      m_DisplaySessionEpoch(
+          s_NextDisplaySessionEpoch.fetch_add(1,
+              std::memory_order_relaxed) + 1)
 {
 }
 
@@ -660,8 +760,14 @@ Session::~Session()
     // NB: This may not get destroyed for a long time! Don't put any non-trivial cleanup here.
     // Use Session::exec() or DeferredSessionCleanupTask instead.
 
+    releaseVideoSubsystem();
+
     // Session is a QML-owned GUI-thread object. Release Deck's context-bound
     // QML/GL resources here, before the associated engine and application exit.
+    if (m_TransitionCoordinator != nullptr) {
+        m_TransitionCoordinator->detachSession(m_DisplaySessionEpoch);
+    }
+    m_DisplayTransitionPort.reset();
     m_DeckSurfaceRenderer.reset();
     m_DeckInputRouter.reset();
     m_DeckController.reset();
@@ -675,6 +781,7 @@ Session::~Session()
 bool Session::initialize(QQuickWindow* qtWindow)
 {
     m_QtWindow = qtWindow;
+    m_FirstFrameNotificationGate.disarm();
 
 #ifdef Q_OS_LINUX
     QQmlEngine* engine = m_QtWindow != nullptr ? qmlEngine(m_QtWindow) : nullptr;
@@ -687,29 +794,30 @@ bool Session::initialize(QQuickWindow* qtWindow)
         auto gameStreamAdapter = std::make_unique<GameStreamAdapter>(
             sessionFacade.get());
         auto polarisAdapter = std::make_unique<PolarisAdapter>(
-            *gameStreamAdapter, *m_Computer);
+            *gameStreamAdapter, *m_Computer, m_TransitionCoordinator);
         auto actionRegistry = std::make_unique<ActionRegistry>(
             PolarisAdapter::descriptors(), *polarisAdapter);
         auto deckController = std::make_unique<DeckController>(
             actionRegistry.get());
         auto deckRenderer = std::make_unique<DeckSurfaceRenderer>();
         QString deckError;
-        if (!deckRenderer->initialize(
+        const bool deckAvailable = deckRenderer->initialize(
                 engine,
                 QUrl(QStringLiteral(
                     "qrc:/gui/perigee/PerigeeDeck.qml")),
                 deckController.get(),
-                &deckError)) {
+                &deckError);
+        if (!deckAvailable) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                         "Perigee Deck initialization failed; streaming will continue: %s",
                         qUtf8Printable(deckError));
         }
-        else {
-            m_SessionFacade = std::move(sessionFacade);
-            m_GameStreamAdapter = std::move(gameStreamAdapter);
-            m_PolarisAdapter = std::move(polarisAdapter);
-            m_ActionRegistry = std::move(actionRegistry);
-            m_DeckController = std::move(deckController);
+        m_SessionFacade = std::move(sessionFacade);
+        m_GameStreamAdapter = std::move(gameStreamAdapter);
+        m_PolarisAdapter = std::move(polarisAdapter);
+        m_ActionRegistry = std::move(actionRegistry);
+        m_DeckController = std::move(deckController);
+        if (deckAvailable) {
             m_DeckSurfaceRenderer = std::move(deckRenderer);
             m_DeckInputRouter = std::make_unique<DeckInputRouter>(
                 DeckBindings(m_Preferences->deckKeyModifiers,
@@ -717,6 +825,19 @@ bool Session::initialize(QQuickWindow* qtWindow)
                              quint32(m_Preferences->deckControllerButtons),
                              m_Preferences->legacyGamepadDisconnect),
                 m_Preferences->swapFaceButtons);
+        }
+        if (m_TransitionCoordinator != nullptr) {
+            m_DisplayTransitionPort =
+                std::make_shared<SessionDisplayTransitionPort>(this);
+            DisplaySessionIdentity identity;
+            identity.computerUuid = m_Computer->uuid;
+            identity.appId = m_App.id;
+            identity.appName = m_App.name;
+            identity.sessionEpoch = m_DisplaySessionEpoch;
+            if (!m_TransitionCoordinator->attachSession(
+                    identity, m_DisplayTransitionPort)) {
+                m_DisplayTransitionPort.reset();
+            }
         }
     }
 #endif
@@ -769,6 +890,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
                      SDL_GetError());
         return false;
     }
+    m_VideoSubsystemInitialized.store(true, std::memory_order_release);
 
     // Stop text input. SDL enables it by default
     // when we initialize the video subsystem, but this
@@ -789,7 +911,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "Failed to create window for hardware decode test: %s",
                      SDL_GetError());
-        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        releaseVideoSubsystem();
         return false;
     }
 
@@ -1074,7 +1196,7 @@ bool Session::initialize(QQuickWindow* qtWindow)
     SDL_DestroyWindow(testWindow);
 
     if (!ret) {
-        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        releaseVideoSubsystem();
         return false;
     }
 
@@ -1188,6 +1310,7 @@ void Session::applyDeckInputResult(const DeckInputRouter::Result& result)
     case DeckInputRouter::Action::OpenFromKeyboard:
     case DeckInputRouter::Action::OpenFromController:
         if (!wasOpen) {
+            m_DisplayDeckExplicitlyClosed = false;
             // Capture is snapshotted and all remote state is neutralized before
             // Deck begins accepting local navigation.
             m_DeckCaptureSnapshot = m_InputHandler->beginLocalOverlayInput();
@@ -1241,6 +1364,10 @@ void Session::applyDeckInputResult(const DeckInputRouter::Result& result)
     }
 
     if (wasOpen && !m_DeckController->isOpen()) {
+        if (m_TransitionCoordinator != nullptr &&
+                m_TransitionCoordinator->displaySelectionBusy()) {
+            m_DisplayDeckExplicitlyClosed = true;
+        }
         closeDeckInput(false);
     }
 }
@@ -1274,15 +1401,58 @@ void Session::closeDeckInput(bool keepReleased)
 
 void Session::pumpDeckUi()
 {
+    if (m_TransitionCoordinator != nullptr) {
+        if (m_PolarisAdapter != nullptr) {
+            m_TransitionCoordinator->observeDiscovery(
+                m_DisplaySessionEpoch,
+                m_PolarisAdapter->discoverySnapshot());
+        }
+        m_TransitionCoordinator->checkDeadline();
+        if (m_TransitionCoordinator->recoveryVisible() &&
+                !m_DisplayRecoveryDisconnectRequested) {
+            m_DisplayRecoveryDisconnectRequested =
+                requestClientDisconnect(
+                    ClientDisconnectPolicy::KeepHostRunning);
+        }
+    }
+
+    const bool discoveryAdvanced = m_PolarisAdapter != nullptr &&
+        m_PolarisAdapter->pumpCompletions(
+            PolarisAdapter::CompletionPumpLimit) > 0;
+
     if (m_DeckController == nullptr || m_DeckSurfaceRenderer == nullptr) {
         return;
     }
 
-    if (m_PolarisAdapter != nullptr &&
-            m_PolarisAdapter->pumpCompletions(
-                PolarisAdapter::CompletionPumpLimit) > 0) {
+    if (discoveryAdvanced) {
         m_DeckController->refresh();
         m_DeckSurfaceRenderer->markDirty();
+    }
+    if (m_TransitionCoordinator != nullptr) {
+        DeckDisplayNavigationState navigation;
+        navigation.deckWasOpen = m_DeckController->isOpen();
+        navigation.explicitlyClosed = m_DisplayDeckExplicitlyClosed;
+        navigation.focusedActionId =
+            m_DeckController->actionModel()->focusedActionId();
+        m_TransitionCoordinator->setDeckNavigationState(
+            m_DisplaySessionEpoch, navigation);
+
+        QString restoredActionId;
+        if (m_TransitionCoordinator->takeDeckRestore(
+                m_DisplaySessionEpoch, &restoredActionId)) {
+            if (!m_DeckController->isOpen() && m_InputHandler != nullptr) {
+                m_DeckCaptureSnapshot =
+                    m_InputHandler->beginLocalOverlayInput();
+                m_DeckController->openFromController();
+                m_OverlayManager.setOverlayState(Overlay::OverlayDeck, true);
+            }
+            m_DeckController->setSearchText({});
+            m_DeckController->selectCategory(0);
+            m_DeckController->refresh();
+            m_DeckController->focusActionWithoutActivation(restoredActionId);
+            m_DeckController->focusActions();
+            m_DeckSurfaceRenderer->markDirty();
+        }
     }
     m_DeckController->pumpPendingWork();
     const DeckUiPump::Decision decision = m_DeckUiPump.plan(
@@ -2002,6 +2172,141 @@ bool Session::requestQuitAndExit()
     return true;
 }
 
+void Session::setTransitionCoordinator(
+    SessionTransitionCoordinator* coordinator)
+{
+    s_TransitionCoordinator = coordinator;
+}
+
+bool Session::displayTransitionHandoff() const
+{
+    return m_DisplayTransitionHandoff.load(std::memory_order_acquire);
+}
+
+Session* Session::createDisplayTransitionReplacement()
+{
+    const bool coordinatorReplacement =
+        m_TransitionCoordinator != nullptr &&
+        m_TransitionCoordinator->replacementPending() &&
+        m_TransitionCoordinator->identityMatches(
+            m_Computer != nullptr ? m_Computer->uuid : QString(), m_App.id);
+    if ((!displayTransitionHandoff() && !coordinatorReplacement) ||
+            m_Computer == nullptr ||
+            m_App.id <= 0 || m_Computer->uuid.isEmpty()) {
+        return nullptr;
+    }
+    return new Session(m_Computer, m_App, m_Preferences);
+}
+
+void Session::pumpDisplayTransitionControl()
+{
+    if (m_PolarisAdapter != nullptr) {
+        m_PolarisAdapter->pumpCompletions(
+            PolarisAdapter::CompletionPumpLimit);
+    }
+    if (m_TransitionCoordinator != nullptr) {
+        if (m_PolarisAdapter != nullptr) {
+            m_TransitionCoordinator->observeDiscovery(
+                m_DisplaySessionEpoch,
+                m_PolarisAdapter->discoverySnapshot());
+        }
+        m_TransitionCoordinator->checkDeadline();
+    }
+}
+
+void Session::displayTransitionInitializationFailed()
+{
+    if (m_TransitionCoordinator == nullptr) {
+        return;
+    }
+    m_TransitionCoordinator->sessionConnectionFailed(
+        m_DisplaySessionEpoch, QStringLiteral("initialization_failed"));
+    pumpFailedDisplayTransitionControl();
+    prepareDisplayTransitionHandoff();
+}
+
+void Session::disposeDormantDisplayTransitionCarrier()
+{
+    if (m_ConnectionStartRequested.load(std::memory_order_acquire)) {
+        return;
+    }
+    releaseVideoSubsystem();
+}
+
+void Session::releaseVideoSubsystem()
+{
+    if (m_VideoSubsystemInitialized.exchange(
+            false, std::memory_order_acq_rel)) {
+        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    }
+}
+
+void Session::postDisplayTarget(
+    const DisplayTarget& target, const QString& sessionToken,
+    quint64 transactionEpoch,
+    DisplayTransitionPort::PostCompletion completion)
+{
+    if (m_PolarisAdapter == nullptr) {
+        if (completion) {
+            completion(transactionEpoch, false,
+                       QStringLiteral("session_retired"),
+                       QStringLiteral("The streaming session is no longer active."));
+        }
+        return;
+    }
+    m_PolarisAdapter->postDisplayTarget(
+        target, sessionToken, transactionEpoch, std::move(completion));
+}
+
+void Session::refreshDisplayTransitionReadback(quint64 transactionEpoch)
+{
+    Q_UNUSED(transactionEpoch);
+    if (m_PolarisAdapter != nullptr) {
+        m_PolarisAdapter->refresh();
+    }
+}
+
+void Session::prepareDisplayTransitionHandoff()
+{
+    if (m_TransitionCoordinator == nullptr) {
+        return;
+    }
+    if (m_UnexpectedTermination &&
+            m_TransitionCoordinator->phase() == DisplayPhase::Verifying) {
+        m_TransitionCoordinator->sessionConnectionFailed(
+            m_DisplaySessionEpoch, QStringLiteral("connection_failed"));
+    }
+    const bool handoff = m_TransitionCoordinator->sessionFinished(
+        m_DisplaySessionEpoch) || m_TransitionCoordinator->recoveryVisible();
+    const bool previous = m_DisplayTransitionHandoff.exchange(
+        handoff, std::memory_order_acq_rel);
+    if (previous != handoff) {
+        emit displayTransitionHandoffChanged();
+    }
+}
+
+void Session::pumpFailedDisplayTransitionControl()
+{
+    if (m_PolarisAdapter == nullptr || m_TransitionCoordinator == nullptr ||
+            m_TransitionCoordinator->phase() != DisplayPhase::RollingBack) {
+        return;
+    }
+
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (m_TransitionCoordinator->phase() == DisplayPhase::RollingBack &&
+            elapsed.elapsed() < FailedTransitionControlTimeoutMs) {
+        QCoreApplication::processEvents(
+            QEventLoop::ExcludeUserInputEvents, 10);
+        m_PolarisAdapter->pumpCompletions(
+            PolarisAdapter::CompletionPumpLimit);
+    }
+    if (m_TransitionCoordinator->phase() == DisplayPhase::RollingBack) {
+        m_TransitionCoordinator->rollbackControlExpired(
+            m_DisplaySessionEpoch);
+    }
+}
+
 class AsyncConnectionStartThread : public QThread
 {
 public:
@@ -2192,12 +2497,16 @@ void Session::setShouldExit(bool quitHostApp)
 
 void Session::start()
 {
+    if (m_ConnectionStartRequested.exchange(
+            true, std::memory_order_acq_rel)) {
+        return;
+    }
+
     // Wait for any old session to finish cleanup
     s_ActiveSessionSemaphore.acquire();
 
     // We're now active
     s_ActiveSession = this;
-
     // Initialize the gamepad code with our preferences
     // NB: m_InputHandler must be initialize before starting the connection.
     m_InputHandler = new SdlInputHandler(*m_Preferences, m_StreamConfig.width, m_StreamConfig.height);
@@ -2225,9 +2534,15 @@ void Session::exec()
 {
     // If the connection failed, clean up and abort the connection.
     if (!m_AsyncConnectionSuccess) {
+        if (m_TransitionCoordinator != nullptr) {
+            m_TransitionCoordinator->sessionConnectionFailed(
+                m_DisplaySessionEpoch, QStringLiteral("connection_failed"));
+        }
+        pumpFailedDisplayTransitionControl();
+        prepareDisplayTransitionHandoff();
         delete m_InputHandler;
         m_InputHandler = nullptr;
-        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        releaseVideoSubsystem();
         QThreadPool::globalInstance()->start(new DeferredSessionCleanupTask(this));
         return;
     }
@@ -2316,9 +2631,16 @@ void Session::exec()
                          "SDL_CreateWindow() failed: %s",
                          SDL_GetError());
 
+            if (m_TransitionCoordinator != nullptr) {
+                m_TransitionCoordinator->sessionConnectionFailed(
+                    m_DisplaySessionEpoch,
+                    QStringLiteral("window_creation_failed"));
+            }
+            pumpFailedDisplayTransitionControl();
+            prepareDisplayTransitionHandoff();
             delete m_InputHandler;
             m_InputHandler = nullptr;
-            SDL_QuitSubSystem(SDL_INIT_VIDEO);
+            releaseVideoSubsystem();
             QThreadPool::globalInstance()->start(new DeferredSessionCleanupTask(this));
             return;
         }
@@ -2469,6 +2791,19 @@ void Session::exec()
                     m_VideoDecoder->renderFrameOnMainThread();
                 }
                 break;
+            case SDL_CODE_PERIGEE_FIRST_FRAME:
+            {
+                const quint64 sessionEpoch = static_cast<quint64>(
+                    reinterpret_cast<uintptr_t>(event.user.data1));
+                const quint64 evidenceEpoch = static_cast<quint64>(
+                    reinterpret_cast<uintptr_t>(event.user.data2));
+                if (sessionEpoch == m_DisplaySessionEpoch &&
+                        m_TransitionCoordinator != nullptr) {
+                    m_TransitionCoordinator->firstFrameDecoded(
+                        m_DisplaySessionEpoch, evidenceEpoch);
+                }
+                break;
+            }
             case SDL_CODE_FLUSH_WINDOW_EVENT_BARRIER:
                 m_FlushingWindowEventsRef--;
                 break;
@@ -2843,7 +3178,9 @@ DispatchDeferredCleanup:
         SDL_FreeSurface(iconSurface);
     }
 
-    SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    releaseVideoSubsystem();
+
+    prepareDisplayTransitionHandoff();
 
     // Cleanup can take a while, so dispatch it to a worker thread.
     // When it is complete, it will release our s_ActiveSessionSemaphore

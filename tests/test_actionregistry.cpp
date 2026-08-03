@@ -59,6 +59,29 @@ ActionState availableState(const QVariant& value = {}, bool disruptive = false)
     return state;
 }
 
+QVariantMap displayMetadata(const QString& kind, const QString& id,
+                            const QString& label, bool available,
+                            bool current, bool reconnect,
+                            const QString& unavailableReason = {})
+{
+    return {
+        {QStringLiteral("kind"), kind},
+        {QStringLiteral("id"), id},
+        {QStringLiteral("label"), label},
+        {QStringLiteral("available"), available},
+        {QStringLiteral("current"), current},
+        {QStringLiteral("requires_reconnect"), reconnect},
+        {QStringLiteral("unavailable_reason"), unavailableReason},
+    };
+}
+
+QString displayActionId(const QString& kind, const QString& id)
+{
+    const QByteArray key = (kind + QLatin1Char(':') + id).toUtf8().toBase64(
+        QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+    return QStringLiteral("display.target.%1").arg(QString::fromLatin1(key));
+}
+
 }
 
 class FakeHostAdapter : public HostAdapter
@@ -115,6 +138,8 @@ private slots:
     void ranksSearchMatchesAndPreservesRegistrationOrderForTies();
     void matchesDisplayAliasesCaseInsensitively_data();
     void matchesDisplayAliasesCaseInsensitively();
+    void resolvesDeterministicDynamicDisplayTargetsAndTruthfulStates();
+    void dynamicDisplayExecutionCarriesAuthoritativeMetadata();
     void disablesActionWhenCapabilityIsNotAdvertised();
     void enablesActionAndPreservesReadbackWhenCapabilityIsAdvertised();
     void disablesActionWhenAnyRequiredPermissionIsMissing();
@@ -225,6 +250,91 @@ void ActionRegistryTest::matchesDisplayAliasesCaseInsensitively()
     ActionRegistry registry(descriptors, adapter);
 
     QCOMPARE(idsOf(registry.search(query)), QStringList({ QStringLiteral("target.select") }));
+}
+
+void ActionRegistryTest::resolvesDeterministicDynamicDisplayTargetsAndTruthfulStates()
+{
+    FakeHostAdapter adapter;
+    ActionState base;
+    base.visible = false;
+    adapter.currentSnapshot.actionStates.insert(QStringLiteral("display.switch"), base);
+
+    const QString currentId = displayActionId(QStringLiteral("output"),
+                                              QStringLiteral("DP-1"));
+    ActionState current = availableState(displayMetadata(
+        QStringLiteral("output"), QStringLiteral("DP-1"),
+        QStringLiteral("Primary"), true, true, true));
+    current.enabled = false;
+    current.disabledCode = QStringLiteral("current_target");
+    current.disabledReason = QStringLiteral("This display is currently active.");
+    adapter.currentSnapshot.actionStates.insert(currentId, current);
+
+    const QString availableId = displayActionId(QStringLiteral("output"),
+                                                QStringLiteral("DP-2"));
+    adapter.currentSnapshot.actionStates.insert(
+        availableId, availableState(displayMetadata(
+            QStringLiteral("output"), QStringLiteral("DP-2"),
+            QStringLiteral("Projector"), true, false, true)));
+
+    const QString unavailableId = displayActionId(
+        QStringLiteral("stream-mode"), QStringLiteral("headless"));
+    ActionState unavailable = availableState(displayMetadata(
+        QStringLiteral("stream-mode"), QStringLiteral("headless"),
+        QStringLiteral("Headless"), false, false, true,
+        QStringLiteral("Virtual driver is unavailable")));
+    unavailable.enabled = false;
+    unavailable.disabledReason = QStringLiteral("Virtual driver is unavailable");
+    adapter.currentSnapshot.actionStates.insert(unavailableId, unavailable);
+
+    ActionRegistry registry({descriptor(
+        QStringLiteral("display.switch"), QStringLiteral("Display target"),
+        ActionCategory::Display, {QStringLiteral("monitor"), QStringLiteral("screen")},
+        QStringLiteral("display.selection"))}, adapter);
+
+    QCOMPARE(idsOf(registry.actions(ActionCategory::Display)),
+             QStringList({currentId, availableId, unavailableId}));
+    QCOMPARE(idsOf(registry.search(QStringLiteral("headless"))),
+             QStringList({unavailableId}));
+    QVERIFY(!registry.state(currentId).enabled);
+    QCOMPARE(registry.state(currentId).disabledCode,
+             QStringLiteral("current_target"));
+    QVERIFY(registry.state(availableId).enabled);
+    QCOMPARE(registry.state(unavailableId).disabledReason,
+             QStringLiteral("Virtual driver is unavailable"));
+}
+
+void ActionRegistryTest::dynamicDisplayExecutionCarriesAuthoritativeMetadata()
+{
+    FakeHostAdapter adapter;
+    const QString actionId = displayActionId(QStringLiteral("output"),
+                                             QStringLiteral("DP-2"));
+    const QVariantMap metadata = displayMetadata(
+        QStringLiteral("output"), QStringLiteral("DP-2"),
+        QStringLiteral("Projector"), true, false, true);
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.switch"), ActionState{});
+    ActionState targetState = availableState(metadata);
+    const QVariantMap catalogIdentity {
+        {QStringLiteral("generation"), QStringLiteral("17")},
+        {QStringLiteral("order_sha256"), QStringLiteral("safe-fingerprint")},
+    };
+    targetState.invocationState = catalogIdentity;
+    adapter.currentSnapshot.actionStates.insert(actionId,
+                                                std::move(targetState));
+    ActionRegistry registry({descriptor(
+        QStringLiteral("display.switch"), QStringLiteral("Display target"),
+        ActionCategory::Display, {}, QStringLiteral("display.selection"))}, adapter);
+
+    registry.execute(actionId, {}, {});
+
+    QCOMPARE(adapter.executedActionIds, QStringList({actionId}));
+    QCOMPARE(adapter.executedParameters.size(), 1);
+    QCOMPARE(adapter.executedParameters[0].value(
+                 QStringLiteral("_perigee.authoritative-state")).toMap(),
+             metadata);
+    QCOMPARE(adapter.executedParameters[0].value(
+                 QStringLiteral("_perigee.authoritative-context")).toMap(),
+             catalogIdentity);
 }
 
 void ActionRegistryTest::disablesActionWhenCapabilityIsNotAdvertised()

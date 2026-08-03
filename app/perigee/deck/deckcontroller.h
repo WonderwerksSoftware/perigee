@@ -60,6 +60,7 @@ public:
     Q_INVOKABLE void focusCategories();
     Q_INVOKABLE void focusActions();
     Q_INVOKABLE void focusAction(const QString& actionId);
+    Q_INVOKABLE void focusActionWithoutActivation(const QString& actionId);
     Q_INVOKABLE void moveActionFocus(int delta);
     Q_INVOKABLE void activateAction(const QString& actionId);
     Q_INVOKABLE void activateFocusedAction();

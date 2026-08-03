@@ -205,6 +205,17 @@ void DeckController::focusAction(const QString& actionId)
     }
 }
 
+void DeckController::focusActionWithoutActivation(const QString& actionId)
+{
+    const QString previousActionId = m_ActionModel.focusedActionId();
+    if (m_ActionModel.focusActionWithoutActivation(actionId)) {
+        if (previousActionId != actionId) {
+            clearConfirmation();
+        }
+        setFocusRegion(ActionsRegion);
+    }
+}
+
 void DeckController::moveActionFocus(int delta)
 {
     clearConfirmation();

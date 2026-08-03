@@ -7,10 +7,12 @@
 #include <QUrl>
 #include <QVector>
 
+#include <functional>
 #include <memory>
 
 class GameStreamAdapter;
 class NvComputer;
+class SessionTransitionCoordinator;
 
 class PolarisClipboard
 {
@@ -53,9 +55,11 @@ public:
 
     PolarisAdapter(GameStreamAdapter& localAdapter,
                    std::unique_ptr<PolarisTransport> transport,
-                   std::unique_ptr<PolarisClipboard> clipboard = {});
+                   std::unique_ptr<PolarisClipboard> clipboard = {},
+                   SessionTransitionCoordinator* transitionCoordinator = nullptr);
     PolarisAdapter(GameStreamAdapter& localAdapter,
-                   const NvComputer& computer);
+                   const NvComputer& computer,
+                   SessionTransitionCoordinator* transitionCoordinator = nullptr);
     ~PolarisAdapter() override;
 
     PolarisAdapter(const PolarisAdapter&) = delete;
@@ -69,6 +73,19 @@ public:
     bool hasPendingDiscovery() const;
     PolarisDiscoverySnapshot discoverySnapshot() const;
     PolarisAvailability availability(PolarisOperation operation) const;
+
+    using DisplayPostCompletion = std::function<void(
+        quint64 transactionEpoch, bool accepted,
+        const QString& errorCode, const QString& userMessage)>;
+    void postDisplayTarget(const DisplayTarget& target,
+                           const QString& sessionToken,
+                           quint64 transactionEpoch,
+                           DisplayPostCompletion completion);
+    void postDisplayTarget(
+        const DisplayTarget& target, const QString& sessionToken,
+        quint64 transactionEpoch,
+        const PolarisDiscoverySnapshot& authorizationSnapshot,
+        DisplayPostCompletion completion);
 
     HostSnapshot snapshot() override;
     void cancel(const QString& resourceKey) override;
@@ -106,6 +123,7 @@ private:
         StopSession,
         ClipboardSend,
         ClipboardFetch,
+        DisplayTarget,
     };
     void submitAction(const QString& actionId, const QString& resourceKey,
                       const QString& endpoint, QByteArray body,
@@ -123,4 +141,6 @@ private:
     std::shared_ptr<PolarisTransport> m_Transport;
     std::shared_ptr<PolarisClipboard> m_Clipboard;
     std::shared_ptr<SharedState> m_State;
+    // Application-owned and longer-lived than every streaming Session.
+    SessionTransitionCoordinator* m_TransitionCoordinator = nullptr;
 };
