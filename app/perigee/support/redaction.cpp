@@ -76,6 +76,46 @@ bool isSafeQueryName(const QString& name)
     }
     return true;
 }
+
+bool isSensitivePathLabel(const QString& label)
+{
+    static const QSet<QString> sensitiveTerms = {
+        QStringLiteral("authorization"),
+        QStringLiteral("certificate"),
+        QStringLiteral("certificates"),
+        QStringLiteral("clipboard"),
+        QStringLiteral("clipboards"),
+        QStringLiteral("command"),
+        QStringLiteral("commands"),
+        QStringLiteral("key"),
+        QStringLiteral("keys"),
+        QStringLiteral("private-key"),
+        QStringLiteral("session"),
+        QStringLiteral("sessions"),
+        QStringLiteral("token"),
+        QStringLiteral("tokens"),
+    };
+    const QString lower = label.toLower();
+    if (sensitiveTerms.contains(lower)) {
+        return true;
+    }
+
+    QString component;
+    for (const QChar character : lower) {
+        if (character == QLatin1Char('-') ||
+                character == QLatin1Char('_') ||
+                character == QLatin1Char('.')) {
+            if (sensitiveTerms.contains(component)) {
+                return true;
+            }
+            component.clear();
+        }
+        else {
+            component.append(character);
+        }
+    }
+    return sensitiveTerms.contains(component);
+}
 }
 
 QString PerigeeRedaction::pathForLog(const QString& input)
@@ -110,22 +150,6 @@ QString PerigeeRedaction::pathForLog(const QString& input)
         return QStringLiteral("<redacted>");
     }
     QStringList segments = rawPath.split(QLatin1Char('/'));
-    static const QSet<QString> sensitiveSegments = {
-        QStringLiteral("authorization"),
-        QStringLiteral("certificate"),
-        QStringLiteral("certificates"),
-        QStringLiteral("clipboard"),
-        QStringLiteral("clipboards"),
-        QStringLiteral("command"),
-        QStringLiteral("commands"),
-        QStringLiteral("key"),
-        QStringLiteral("keys"),
-        QStringLiteral("private-key"),
-        QStringLiteral("session"),
-        QStringLiteral("sessions"),
-        QStringLiteral("token"),
-        QStringLiteral("tokens"),
-    };
     bool redactNext = false;
     for (QString& segment : segments) {
         if (redactNext && !segment.isEmpty()) {
@@ -133,7 +157,7 @@ QString PerigeeRedaction::pathForLog(const QString& input)
             redactNext = false;
             continue;
         }
-        redactNext = sensitiveSegments.contains(segment.toLower());
+        redactNext = isSensitivePathLabel(segment);
     }
 
     QString result = segments.join(QLatin1Char('/'));

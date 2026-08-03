@@ -232,3 +232,49 @@ Final local results for this fix round:
   TSan pass is claimed and no package was installed.
 - No live network, display, Xvfb, Polaris, Sunshine, ww-DevBox, 10G, push,
   merge, or release operation was used.
+
+## Fix round 3: compound sensitive path labels
+
+Base commit: `8b9512d98c9ba718decb7e62dea00f7a42e08002`
+
+A data-driven regression was compiled and run before production changes. The
+isolated RED result was 6 passed and 4 failed:
+
+- `session-token`, `authorization_key`, mixed-case `CLIENT.CERTIFICATE`, and
+  `clipboard-command` each left the following canary value verbatim.
+- The encoded compound-label row already failed closed as `<redacted>`.
+- The negative `keyboard-layout`, `hockey-score`, and `monkey` rows already
+  remained unchanged.
+
+Source tracing confirmed that the path sanitizer lowercased each complete path
+segment and compared it only with a set of complete sensitive labels. It did
+not recognize sensitive words delimited inside a compound label.
+
+The sanitizer now lowercases each label and recognizes a sensitive term only
+when the complete label matches or when a complete component delimited by
+hyphen, underscore, or dot matches. It does not use substring matching, so
+`keyboard-layout`, `hockey-score`, and `monkey` remain benign. The prior
+fail-closed rejection of encoded path material is unchanged, and the helper
+does not log input values.
+
+The final data table contains all four exact reviewer reproductions plus
+underscore, dot, and mixed-case variants, an encoded fail-closed row, and the
+three false-positive guards.
+
+Final local results for this fix round:
+
+- Debug application and test compile/link: exit 0; the application and test
+  redaction objects were compiled and both binaries linked after the production
+  change.
+- Focused compound-label table: 12 passed, 0 failed, 0 skipped.
+- `RedactionTest`: 18 passed, 0 failed, 0 skipped.
+- `PolarisApiClientTest`: 56 passed, 0 failed, 0 skipped, with no canary output.
+- Fresh-process focused repetition: 20 of 20 runs exited 0, for 240 test cases.
+  No failure or canary output was observed.
+- Canonical headless run: 337 passed, 11 failed, 0 skipped. The failures remain
+  exactly eight `DeckQmlTest` and three `DeckSurfaceRendererTest` instances of
+  the established `Deck OpenGL context creation failed` environment gate.
+- `libtsan` remains uninstalled. No TSan run or pass is claimed and no package
+  was installed.
+- No live network, display, Xvfb, Polaris, Sunshine, ww-DevBox, 10G, push,
+  merge, or release operation was used.
