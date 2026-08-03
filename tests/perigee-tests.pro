@@ -1,4 +1,4 @@
-QT += core gui opengl qml quick testlib
+QT += core gui network opengl qml quick testlib
 
 TEMPLATE = app
 TARGET = perigee-tests
@@ -20,6 +20,10 @@ SOURCES += \
     ../app/perigee/input/deckbindings.cpp \
     ../app/perigee/input/deckinputrouter.cpp \
     ../app/perigee/input/deckinputdelivery.cpp \
+    ../app/perigee/polaris/polarisapiclient.cpp \
+    ../app/perigee/support/redaction.cpp \
+    ../app/backend/nvaddress.cpp \
+    ../app/backend/identitymanager.cpp \
     ../app/streaming/input/abstouch.cpp \
     ../app/streaming/input/gamepad.cpp \
     ../app/streaming/input/input.cpp \
@@ -49,6 +53,8 @@ SOURCES += \
     test_streamingpreferences.cpp \
     input_integration_stubs.cpp \
     test_overlaylayout.cpp \
+    test_polarisapiclient.cpp \
+    test_redaction.cpp \
     test_smoke.cpp
 
 INCLUDEPATH += \
@@ -57,7 +63,7 @@ INCLUDEPATH += \
     $$PWD/../qmdnsengine/qmdnsengine/src/include \
     $$PWD/../qmdnsengine
 
-PKGCONFIG += sdl2 SDL2_ttf opus
+PKGCONFIG += sdl2 SDL2_ttf opus openssl
 
 HEADERS += \
     ../app/perigee/actions/actionregistry.h \
@@ -72,6 +78,9 @@ HEADERS += \
     ../app/perigee/input/deckbindings.h \
     ../app/perigee/input/deckinputrouter.h \
     ../app/perigee/input/deckinputdelivery.h \
+    ../app/perigee/polaris/polarisapiclient.h \
+    ../app/perigee/polaris/polarisresponse.h \
+    ../app/perigee/support/redaction.h \
     ../app/streaming/input/remoteinputstate.h \
     ../app/streaming/sessionexitintent.h \
     ../app/settings/streamingpreferences.h \

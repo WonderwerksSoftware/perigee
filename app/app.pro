@@ -213,6 +213,8 @@ SOURCES += \
     perigee/input/deckbindings.cpp \
     perigee/input/deckinputrouter.cpp \
     perigee/input/deckinputdelivery.cpp \
+    perigee/polaris/polarisapiclient.cpp \
+    perigee/support/redaction.cpp \
     path.cpp \
     settings/mappingmanager.cpp \
     gui/sdlgamepadkeynavigation.cpp \
@@ -266,6 +268,9 @@ HEADERS += \
     perigee/input/deckbindings.h \
     perigee/input/deckinputrouter.h \
     perigee/input/deckinputdelivery.h \
+    perigee/polaris/polarisapiclient.h \
+    perigee/polaris/polarisresponse.h \
+    perigee/support/redaction.h \
     path.h \
     settings/mappingmanager.h \
     gui/sdlgamepadkeynavigation.h \
