@@ -17,79 +17,6 @@
 #include "perigee/input/deckinputrouter.h"
 #undef private
 
-StreamingPreferences::StreamingPreferences(QQmlEngine* engine)
-    : m_QmlEngine(engine)
-{
-}
-
-int StreamingPreferences::getDefaultBitrate(int, int, int, bool)
-{
-    return 0;
-}
-
-void StreamingPreferences::save()
-{
-}
-
-bool StreamingPreferences::setDeckKeyboardBindingFromQt(int keyModifiers,
-                                                         int qtKey)
-{
-    DeckBindings bindings(deckKeyModifiers, deckKeyScancode,
-                          quint32(deckControllerButtons),
-                          legacyGamepadDisconnect);
-    if (!bindings.setKeyboardBinding(
-            keyModifiers, DeckBindings::sdlScancodeForQtKey(qtKey))) {
-        return false;
-    }
-    deckKeyModifiers = bindings.keyModifiers();
-    deckKeyScancode = bindings.keyScancode();
-    return true;
-}
-
-bool StreamingPreferences::setDeckControllerBinding(int controllerButtons)
-{
-    DeckBindings bindings(deckKeyModifiers, deckKeyScancode,
-                          quint32(deckControllerButtons),
-                          legacyGamepadDisconnect);
-    if (!bindings.setControllerBinding(quint32(controllerButtons))) {
-        return false;
-    }
-    deckControllerButtons = int(bindings.controllerButtons());
-    return true;
-}
-
-void StreamingPreferences::resetDeckBindings()
-{
-    DeckBindings defaults;
-    deckKeyModifiers = defaults.keyModifiers();
-    deckKeyScancode = defaults.keyScancode();
-    deckControllerButtons = int(defaults.controllerButtons());
-    legacyGamepadDisconnect = defaults.legacyGamepadDisconnect();
-}
-
-QString StreamingPreferences::formatDeckKeyboardBinding(
-        int keyModifiers, int keyScancode) const
-{
-    return DeckBindings::formatKeyboardBinding(keyModifiers, keyScancode);
-}
-
-QString StreamingPreferences::formatDeckControllerBinding(
-        int controllerButtons) const
-{
-    return DeckBindings::formatControllerBinding(quint32(controllerButtons));
-}
-
-QString StreamingPreferences::deckControllerConflictReason(
-        int controllerButtons) const
-{
-    return DeckBindings::controllerConflictReason(quint32(controllerButtons));
-}
-
-bool StreamingPreferences::retranslate()
-{
-    return false;
-}
-
 namespace {
 
 void initializePreferences(StreamingPreferences& preferences)
@@ -136,6 +63,55 @@ bool dispatchNextInputTimerEvent(SdlInputHandler& handler, int timeoutMs = 1000)
     return false;
 }
 
+SDL_Event controllerButtonEvent(Uint32 type, SDL_JoystickID controller,
+                                Uint8 button)
+{
+    SDL_Event event {};
+    event.type = type;
+    event.cbutton.type = type;
+    event.cbutton.which = controller;
+    event.cbutton.button = button;
+    event.cbutton.state = type == SDL_CONTROLLERBUTTONDOWN
+        ? SDL_PRESSED : SDL_RELEASED;
+    return event;
+}
+
+DeckInputRouter::Result routeThroughRealHandler(
+        DeckInputRouter& router, SdlInputHandler& handler, SDL_Event event)
+{
+    const DeckInputRouter::Result result = router.route(event);
+    for (SDL_Event replay : result.replayEvents) {
+        if (result.replayToDeck) {
+            router.routeReplay(replay);
+        }
+        else if (replay.type == SDL_CONTROLLERBUTTONDOWN ||
+                 replay.type == SDL_CONTROLLERBUTTONUP) {
+            handler.handleControllerButtonEvent(&replay.cbutton);
+        }
+        else if (replay.type == SDL_KEYDOWN || replay.type == SDL_KEYUP) {
+            handler.handleKeyEvent(&replay.key);
+        }
+    }
+
+    if (result.action == DeckInputRouter::Action::OpenFromController ||
+            result.action == DeckInputRouter::Action::OpenFromKeyboard) {
+        handler.beginLocalOverlayInput();
+    }
+    else if (result.action == DeckInputRouter::Action::ToggleStats) {
+        handler.sendNeutralControllerInput(result.controllerId);
+    }
+    if (result.disposition == DeckInputRouter::Disposition::Passthrough) {
+        if (event.type == SDL_CONTROLLERBUTTONDOWN ||
+                event.type == SDL_CONTROLLERBUTTONUP) {
+            handler.handleControllerButtonEvent(&event.cbutton);
+        }
+        else if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) {
+            handler.handleKeyEvent(&event.key);
+        }
+    }
+    return result;
+}
+
 }
 
 class InputIntegrationTest : public QObject
@@ -160,6 +136,8 @@ private slots:
     void statsChordPreservesOtherPhysicalControllerInMergedMode();
     void closedStatsChordUsesRemoteHandlerAndReleasesGamepadMouseButtons();
     void routerRunsBeforeDeviceAndBatteryHousekeeping();
+    void safeDeckChordNeverReachesLegacyQuitAcrossSwapAndPressOrders();
+    void abortedCustomChordReplaysExactlyOnceThroughRealHandler();
 };
 
 void InputIntegrationTest::init()
@@ -657,28 +635,23 @@ void InputIntegrationTest::closedStatsChordUsesRemoteHandlerAndReleasesGamepadMo
         SDL_CONTROLLER_BUTTON_X,
     };
 
-    for (Uint8 button : chord) {
-        SDL_Event event {};
-        event.type = SDL_CONTROLLERBUTTONDOWN;
-        event.cbutton.type = SDL_CONTROLLERBUTTONDOWN;
-        event.cbutton.which = 70;
-        event.cbutton.button = button;
-        event.cbutton.state = SDL_PRESSED;
-        const auto result = router.route(event);
-        QCOMPARE(result.disposition, DeckInputRouter::Disposition::Passthrough);
-        handler.handleControllerButtonEvent(&event.cbutton);
+    for (int i = 0; i < int(SDL_arraysize(chord)); ++i) {
+        const auto result = routeThroughRealHandler(
+            router, handler,
+            controllerButtonEvent(
+                SDL_CONTROLLERBUTTONDOWN, 70, chord[i]));
+        QCOMPARE(result.disposition,
+                 i + 1 == int(SDL_arraysize(chord))
+                     ? DeckInputRouter::Disposition::Passthrough
+                     : DeckInputRouter::Disposition::Consumed);
     }
 
     for (Uint8 button : chord) {
-        SDL_Event event {};
-        event.type = SDL_CONTROLLERBUTTONUP;
-        event.cbutton.type = SDL_CONTROLLERBUTTONUP;
-        event.cbutton.which = 70;
-        event.cbutton.button = button;
-        event.cbutton.state = SDL_RELEASED;
-        QCOMPARE(router.route(event).disposition,
+        QCOMPARE(routeThroughRealHandler(
+                     router, handler,
+                     controllerButtonEvent(
+                         SDL_CONTROLLERBUTTONUP, 70, button)).disposition,
                  DeckInputRouter::Disposition::Passthrough);
-        handler.handleControllerButtonEvent(&event.cbutton);
     }
 
     const auto mouseButtons = InputIntegrationStubs::mouseButtons();
@@ -753,6 +726,105 @@ void InputIntegrationTest::routerRunsBeforeDeviceAndBatteryHousekeeping()
     QVERIFY(!handler.m_InputTimerRequests.contains(removedTimerToken));
     QVERIFY(handler.handleInputTimerEvent(inputTimerEvent(removedTimerToken)));
     QCOMPARE(InputIntegrationStubs::mouseMoveCount(), 0);
+}
+
+void InputIntegrationTest::safeDeckChordNeverReachesLegacyQuitAcrossSwapAndPressOrders()
+{
+    const QList<QList<Uint8>> pressOrders {
+        {SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+         SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+         SDL_CONTROLLER_BUTTON_BACK,
+         SDL_CONTROLLER_BUTTON_START},
+        {SDL_CONTROLLER_BUTTON_START,
+         SDL_CONTROLLER_BUTTON_BACK,
+         SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+         SDL_CONTROLLER_BUTTON_LEFTSHOULDER},
+    };
+
+    for (bool swapFaceButtons : {false, true}) {
+        for (const auto& order : pressOrders) {
+            SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
+            InputIntegrationStubs::reset();
+            StreamingPreferences preferences(nullptr);
+            initializePreferences(preferences);
+            preferences.swapFaceButtons = swapFaceButtons;
+            SdlInputHandler handler(preferences, 1920, 1080);
+            GamepadState& state = handler.m_GamepadState[0];
+            state.controller = reinterpret_cast<SDL_GameController*>(quintptr(1));
+            state.jsId = 90;
+            state.index = 0;
+            handler.m_GamepadMask = 1;
+            DeckInputRouter router(DeckBindings(), swapFaceButtons);
+
+            DeckInputRouter::Result result;
+            for (Uint8 button : order) {
+                result = routeThroughRealHandler(
+                    router, handler,
+                    controllerButtonEvent(
+                        SDL_CONTROLLERBUTTONDOWN, state.jsId, button));
+            }
+            QCOMPARE(result.action,
+                     DeckInputRouter::Action::OpenFromController);
+            QVERIFY(router.isDeckOpen());
+            for (const auto& record : InputIntegrationStubs::controllers()) {
+                QCOMPARE(record.buttons, 0);
+            }
+
+            bool sawQuit = false;
+            SDL_Event queued {};
+            while (SDL_PollEvent(&queued)) {
+                sawQuit |= queued.type == SDL_QUIT;
+            }
+            QVERIFY(!sawQuit);
+            state.controller = nullptr;
+        }
+    }
+}
+
+void InputIntegrationTest::abortedCustomChordReplaysExactlyOnceThroughRealHandler()
+{
+    const quint32 chord =
+        (quint32(1) << SDL_CONTROLLER_BUTTON_A) |
+        (quint32(1) << SDL_CONTROLLER_BUTTON_B);
+    for (bool swapFaceButtons : {false, true}) {
+        InputIntegrationStubs::reset();
+        StreamingPreferences preferences(nullptr);
+        initializePreferences(preferences);
+        preferences.swapFaceButtons = swapFaceButtons;
+        SdlInputHandler handler(preferences, 1920, 1080);
+        GamepadState& state = handler.m_GamepadState[0];
+        state.controller = reinterpret_cast<SDL_GameController*>(quintptr(1));
+        state.jsId = 91;
+        state.index = 0;
+        state.mouseEmulationTimer = SDL_TimerID(1);
+        handler.m_GamepadMask = 1;
+        DeckInputRouter router(DeckBindings(
+            int(Qt::ControlModifier), SDL_SCANCODE_F8, chord, false),
+            swapFaceButtons);
+
+        QCOMPARE(routeThroughRealHandler(
+                     router, handler,
+                     controllerButtonEvent(
+                         SDL_CONTROLLERBUTTONDOWN, state.jsId,
+                         SDL_CONTROLLER_BUTTON_A)).action,
+                 DeckInputRouter::Action::None);
+        const auto aborted = routeThroughRealHandler(
+            router, handler,
+            controllerButtonEvent(
+                SDL_CONTROLLERBUTTONUP, state.jsId,
+                SDL_CONTROLLER_BUTTON_A));
+        QCOMPARE(aborted.replayEvents.size(), 2);
+        const auto mouse = InputIntegrationStubs::mouseButtons();
+        QCOMPARE(mouse.size(), 2);
+        QCOMPARE(mouse.at(0).action, int(BUTTON_ACTION_PRESS));
+        QCOMPARE(mouse.at(1).action, int(BUTTON_ACTION_RELEASE));
+        const int expectedButton = swapFaceButtons ? BUTTON_RIGHT : BUTTON_LEFT;
+        QCOMPARE(mouse.at(0).button, expectedButton);
+        QCOMPARE(mouse.at(1).button, expectedButton);
+
+        state.mouseEmulationTimer = 0;
+        state.controller = nullptr;
+    }
 }
 
 REGISTER_PERIGEE_TEST(InputIntegrationTest);

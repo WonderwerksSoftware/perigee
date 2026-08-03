@@ -3,6 +3,10 @@
 #include <QSettings>
 #include <QStringList>
 
+#ifdef Q_OS_LINUX
+#include <linux/input-event-codes.h>
+#endif
+
 namespace {
 
 constexpr auto KeyModifiersSetting = "deckKeyModifiers";
@@ -33,6 +37,122 @@ int populationCount(quint32 value)
     }
     return count;
 }
+
+bool masksHavePrefixRelationship(quint32 left, quint32 right)
+{
+    return (left & right) == left || (left & right) == right;
+}
+
+quint32 statsControllerButtonsWithPhysicalY()
+{
+    return buttonBit(SDL_CONTROLLER_BUTTON_LEFTSHOULDER) |
+        buttonBit(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) |
+        buttonBit(SDL_CONTROLLER_BUTTON_BACK) |
+        buttonBit(SDL_CONTROLLER_BUTTON_Y);
+}
+
+bool conflictsWithLegacyQuitOrdering(quint32 buttons)
+{
+    const quint32 quit = DeckBindings::defaultControllerButtons();
+    return buttons != quit && (buttons & quit) == quit;
+}
+
+bool hasOppositeDpadDirections(quint32 buttons)
+{
+    const quint32 vertical =
+        buttonBit(SDL_CONTROLLER_BUTTON_DPAD_UP) |
+        buttonBit(SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+    const quint32 horizontal =
+        buttonBit(SDL_CONTROLLER_BUTTON_DPAD_LEFT) |
+        buttonBit(SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+    return (buttons & vertical) == vertical ||
+        (buttons & horizontal) == horizontal;
+}
+
+#ifdef Q_OS_LINUX
+int sdlScancodeForLinuxEvdev(quint32 code)
+{
+    struct Mapping {
+        quint32 evdev;
+        SDL_Scancode sdl;
+    };
+    static const Mapping mappings[] = {
+        {KEY_ESC, SDL_SCANCODE_ESCAPE},
+        {KEY_1, SDL_SCANCODE_1}, {KEY_2, SDL_SCANCODE_2},
+        {KEY_3, SDL_SCANCODE_3}, {KEY_4, SDL_SCANCODE_4},
+        {KEY_5, SDL_SCANCODE_5}, {KEY_6, SDL_SCANCODE_6},
+        {KEY_7, SDL_SCANCODE_7}, {KEY_8, SDL_SCANCODE_8},
+        {KEY_9, SDL_SCANCODE_9}, {KEY_0, SDL_SCANCODE_0},
+        {KEY_MINUS, SDL_SCANCODE_MINUS}, {KEY_EQUAL, SDL_SCANCODE_EQUALS},
+        {KEY_BACKSPACE, SDL_SCANCODE_BACKSPACE}, {KEY_TAB, SDL_SCANCODE_TAB},
+        {KEY_Q, SDL_SCANCODE_Q}, {KEY_W, SDL_SCANCODE_W},
+        {KEY_E, SDL_SCANCODE_E}, {KEY_R, SDL_SCANCODE_R},
+        {KEY_T, SDL_SCANCODE_T}, {KEY_Y, SDL_SCANCODE_Y},
+        {KEY_U, SDL_SCANCODE_U}, {KEY_I, SDL_SCANCODE_I},
+        {KEY_O, SDL_SCANCODE_O}, {KEY_P, SDL_SCANCODE_P},
+        {KEY_LEFTBRACE, SDL_SCANCODE_LEFTBRACKET},
+        {KEY_RIGHTBRACE, SDL_SCANCODE_RIGHTBRACKET},
+        {KEY_ENTER, SDL_SCANCODE_RETURN}, {KEY_LEFTCTRL, SDL_SCANCODE_LCTRL},
+        {KEY_A, SDL_SCANCODE_A}, {KEY_S, SDL_SCANCODE_S},
+        {KEY_D, SDL_SCANCODE_D}, {KEY_F, SDL_SCANCODE_F},
+        {KEY_G, SDL_SCANCODE_G}, {KEY_H, SDL_SCANCODE_H},
+        {KEY_J, SDL_SCANCODE_J}, {KEY_K, SDL_SCANCODE_K},
+        {KEY_L, SDL_SCANCODE_L}, {KEY_SEMICOLON, SDL_SCANCODE_SEMICOLON},
+        {KEY_APOSTROPHE, SDL_SCANCODE_APOSTROPHE},
+        {KEY_GRAVE, SDL_SCANCODE_GRAVE}, {KEY_LEFTSHIFT, SDL_SCANCODE_LSHIFT},
+        {KEY_BACKSLASH, SDL_SCANCODE_BACKSLASH},
+        {KEY_Z, SDL_SCANCODE_Z}, {KEY_X, SDL_SCANCODE_X},
+        {KEY_C, SDL_SCANCODE_C}, {KEY_V, SDL_SCANCODE_V},
+        {KEY_B, SDL_SCANCODE_B}, {KEY_N, SDL_SCANCODE_N},
+        {KEY_M, SDL_SCANCODE_M}, {KEY_COMMA, SDL_SCANCODE_COMMA},
+        {KEY_DOT, SDL_SCANCODE_PERIOD}, {KEY_SLASH, SDL_SCANCODE_SLASH},
+        {KEY_RIGHTSHIFT, SDL_SCANCODE_RSHIFT},
+        {KEY_KPASTERISK, SDL_SCANCODE_KP_MULTIPLY},
+        {KEY_LEFTALT, SDL_SCANCODE_LALT}, {KEY_SPACE, SDL_SCANCODE_SPACE},
+        {KEY_CAPSLOCK, SDL_SCANCODE_CAPSLOCK},
+        {KEY_F1, SDL_SCANCODE_F1}, {KEY_F2, SDL_SCANCODE_F2},
+        {KEY_F3, SDL_SCANCODE_F3}, {KEY_F4, SDL_SCANCODE_F4},
+        {KEY_F5, SDL_SCANCODE_F5}, {KEY_F6, SDL_SCANCODE_F6},
+        {KEY_F7, SDL_SCANCODE_F7}, {KEY_F8, SDL_SCANCODE_F8},
+        {KEY_F9, SDL_SCANCODE_F9}, {KEY_F10, SDL_SCANCODE_F10},
+        {KEY_F11, SDL_SCANCODE_F11}, {KEY_F12, SDL_SCANCODE_F12},
+        {KEY_NUMLOCK, SDL_SCANCODE_NUMLOCKCLEAR},
+        {KEY_SCROLLLOCK, SDL_SCANCODE_SCROLLLOCK},
+        {KEY_KP7, SDL_SCANCODE_KP_7}, {KEY_KP8, SDL_SCANCODE_KP_8},
+        {KEY_KP9, SDL_SCANCODE_KP_9}, {KEY_KPMINUS, SDL_SCANCODE_KP_MINUS},
+        {KEY_KP4, SDL_SCANCODE_KP_4}, {KEY_KP5, SDL_SCANCODE_KP_5},
+        {KEY_KP6, SDL_SCANCODE_KP_6}, {KEY_KPPLUS, SDL_SCANCODE_KP_PLUS},
+        {KEY_KP1, SDL_SCANCODE_KP_1}, {KEY_KP2, SDL_SCANCODE_KP_2},
+        {KEY_KP3, SDL_SCANCODE_KP_3}, {KEY_KP0, SDL_SCANCODE_KP_0},
+        {KEY_KPDOT, SDL_SCANCODE_KP_PERIOD},
+        {KEY_102ND, SDL_SCANCODE_NONUSBACKSLASH},
+        {KEY_KPENTER, SDL_SCANCODE_KP_ENTER},
+        {KEY_RIGHTCTRL, SDL_SCANCODE_RCTRL},
+        {KEY_KPSLASH, SDL_SCANCODE_KP_DIVIDE},
+        {KEY_SYSRQ, SDL_SCANCODE_PRINTSCREEN},
+        {KEY_RIGHTALT, SDL_SCANCODE_RALT},
+        {KEY_HOME, SDL_SCANCODE_HOME}, {KEY_UP, SDL_SCANCODE_UP},
+        {KEY_PAGEUP, SDL_SCANCODE_PAGEUP}, {KEY_LEFT, SDL_SCANCODE_LEFT},
+        {KEY_RIGHT, SDL_SCANCODE_RIGHT}, {KEY_END, SDL_SCANCODE_END},
+        {KEY_DOWN, SDL_SCANCODE_DOWN}, {KEY_PAGEDOWN, SDL_SCANCODE_PAGEDOWN},
+        {KEY_INSERT, SDL_SCANCODE_INSERT}, {KEY_DELETE, SDL_SCANCODE_DELETE},
+        {KEY_LEFTMETA, SDL_SCANCODE_LGUI}, {KEY_RIGHTMETA, SDL_SCANCODE_RGUI},
+        {KEY_MENU, SDL_SCANCODE_APPLICATION},
+        {KEY_F13, SDL_SCANCODE_F13}, {KEY_F14, SDL_SCANCODE_F14},
+        {KEY_F15, SDL_SCANCODE_F15}, {KEY_F16, SDL_SCANCODE_F16},
+        {KEY_F17, SDL_SCANCODE_F17}, {KEY_F18, SDL_SCANCODE_F18},
+        {KEY_F19, SDL_SCANCODE_F19}, {KEY_F20, SDL_SCANCODE_F20},
+        {KEY_F21, SDL_SCANCODE_F21}, {KEY_F22, SDL_SCANCODE_F22},
+        {KEY_F23, SDL_SCANCODE_F23}, {KEY_F24, SDL_SCANCODE_F24},
+    };
+    for (const Mapping& mapping : mappings) {
+        if (mapping.evdev == code) {
+            return mapping.sdl;
+        }
+    }
+    return SDL_SCANCODE_UNKNOWN;
+}
+#endif
 
 bool isModifierScancode(int scancode)
 {
@@ -188,19 +308,32 @@ bool DeckBindings::isValidControllerBinding(quint32 controllerButtons)
     return controllerButtons != 0 &&
         (controllerButtons & ~supportedControllerButtons()) == 0 &&
         populationCount(controllerButtons) >= 2 &&
-        !conflictsWithStatsChord(controllerButtons);
+        !conflictsWithStatsChord(controllerButtons) &&
+        !conflictsWithLegacyQuitOrdering(controllerButtons) &&
+        !hasOppositeDpadDirections(controllerButtons);
 }
 
 bool DeckBindings::conflictsWithStatsChord(quint32 controllerButtons)
 {
-    return controllerButtons == statsControllerButtons();
+    return masksHavePrefixRelationship(controllerButtons,
+                                       statsControllerButtons()) ||
+        masksHavePrefixRelationship(controllerButtons,
+                                    statsControllerButtonsWithPhysicalY());
 }
 
 QString DeckBindings::controllerConflictReason(quint32 controllerButtons)
 {
     if (conflictsWithStatsChord(controllerButtons)) {
         return QStringLiteral(
-            "This shortcut is reserved for Moonlight's performance statistics.");
+            "This shortcut overlaps Moonlight's performance statistics shortcut.");
+    }
+    if (conflictsWithLegacyQuitOrdering(controllerButtons)) {
+        return QStringLiteral(
+            "This shortcut extends Moonlight's direct disconnect shortcut.");
+    }
+    if (hasOppositeDpadDirections(controllerButtons)) {
+        return QStringLiteral(
+            "A shortcut cannot contain opposite D-pad directions.");
     }
     if (!isValidControllerBinding(controllerButtons)) {
         return QStringLiteral(
@@ -313,6 +446,22 @@ int DeckBindings::sdlScancodeForQtKey(int qtKey)
     }
 }
 
+int DeckBindings::sdlScancodeForNativeKey(quint32 nativeScanCode,
+                                          const QString& platformName)
+{
+#ifdef Q_OS_LINUX
+    if (!platformName.startsWith(QStringLiteral("wayland")) ||
+            nativeScanCode <= 8) {
+        return SDL_SCANCODE_UNKNOWN;
+    }
+    return sdlScancodeForLinuxEvdev(nativeScanCode - 8);
+#else
+    Q_UNUSED(nativeScanCode);
+    Q_UNUSED(platformName);
+    return SDL_SCANCODE_UNKNOWN;
+#endif
+}
+
 quint32 DeckBindings::defaultControllerButtons()
 {
     return buttonBit(SDL_CONTROLLER_BUTTON_LEFTSHOULDER) |
@@ -333,14 +482,14 @@ void DeckControllerChordCapture::begin()
 {
     m_Active = true;
     m_ButtonsDown = 0;
-    m_CandidateButtons = 0;
+    m_PeakButtons = 0;
 }
 
 void DeckControllerChordCapture::cancel()
 {
     m_Active = false;
     m_ButtonsDown = 0;
-    m_CandidateButtons = 0;
+    m_PeakButtons = 0;
 }
 
 bool DeckControllerChordCapture::isActive() const
@@ -360,14 +509,16 @@ std::optional<quint32> DeckControllerChordCapture::handleButton(
     }
     if (pressed) {
         m_ButtonsDown |= bit;
-        m_CandidateButtons |= bit;
+        if (populationCount(m_ButtonsDown) > populationCount(m_PeakButtons)) {
+            m_PeakButtons = m_ButtonsDown;
+        }
         return std::nullopt;
     }
     m_ButtonsDown &= ~bit;
-    if (m_CandidateButtons == 0 || m_ButtonsDown != 0) {
+    if (m_PeakButtons == 0 || m_ButtonsDown != 0) {
         return std::nullopt;
     }
-    const quint32 completed = m_CandidateButtons;
+    const quint32 completed = m_PeakButtons;
     cancel();
     return completed;
 }

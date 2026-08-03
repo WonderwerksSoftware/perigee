@@ -11,12 +11,14 @@
 #include <QSize>
 #include <QString>
 #include <Qt>
+#include <QVector>
 
 class DeckInputRouter final
 {
 public:
     DeckInputRouter();
-    explicit DeckInputRouter(DeckBindings bindings);
+    explicit DeckInputRouter(DeckBindings bindings,
+                             bool swapFaceButtons = false);
 
     enum class Disposition {
         Passthrough,
@@ -59,9 +61,12 @@ public:
         Qt::MouseButton mouseButton = Qt::NoButton;
         Qt::MouseButtons mouseButtons = Qt::NoButton;
         QPoint wheelDelta;
+        QVector<SDL_Event> replayEvents;
+        bool replayToDeck = false;
     };
 
     Result route(const SDL_Event& event);
+    Result routeReplay(const SDL_Event& event) const;
 
     bool isDeckOpen() const;
     SDL_JoystickID controllerOwner() const;
@@ -79,9 +84,15 @@ private:
     Result routeMouseMotion(const SDL_MouseMotionEvent& event);
     Result routeMouseButton(const SDL_MouseButtonEvent& event);
     Result routeMouseWheel(const SDL_MouseWheelEvent& event);
+    Result routeKeyOrdinary(const SDL_KeyboardEvent& event) const;
+    Result routeControllerButtonOrdinary(
+        const SDL_ControllerButtonEvent& event) const;
 
     bool keyboardChordHeld(const SDL_KeyboardEvent& event) const;
+    bool isKeyboardChordMember(SDL_Scancode scancode) const;
     quint32 controllerMask(SDL_JoystickID controller) const;
+    quint32 statsControllerMask() const;
+    void armChordReleaseTails();
     void beginReleaseTails();
     void setOpen(bool open, SDL_JoystickID owner);
     QPointF mapPointer(int x, int y, bool clamp, bool* accepted) const;
@@ -108,4 +119,12 @@ private:
     bool m_HasPointerPosition = false;
     Qt::MouseButtons m_LocalMouseButtons = Qt::NoButton;
     DeckBindings m_Bindings;
+    bool m_SwapFaceButtons = false;
+
+    struct Candidate {
+        QVector<SDL_Event> events;
+        bool replayToDeck = false;
+    };
+    Candidate m_KeyboardCandidate;
+    QHash<SDL_JoystickID, Candidate> m_ControllerCandidates;
 };

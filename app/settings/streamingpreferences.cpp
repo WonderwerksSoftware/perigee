@@ -3,6 +3,7 @@
 #include "utils.h"
 
 #include <QSettings>
+#include <QGuiApplication>
 #include <QTranslator>
 #include <QCoreApplication>
 #include <QLocale>
@@ -375,10 +376,11 @@ void StreamingPreferences::save()
     deckBindings.save(settings);
 }
 
-bool StreamingPreferences::setDeckKeyboardBindingFromQt(int keyModifiers,
-                                                         int qtKey)
+bool StreamingPreferences::setDeckKeyboardBindingFromNative(
+        int keyModifiers, quint32 nativeScanCode)
 {
-    const int scancode = DeckBindings::sdlScancodeForQtKey(qtKey);
+    const int scancode = DeckBindings::sdlScancodeForNativeKey(
+        nativeScanCode, QGuiApplication::platformName());
     DeckBindings bindings(deckKeyModifiers,
                           deckKeyScancode,
                           quint32(deckControllerButtons),

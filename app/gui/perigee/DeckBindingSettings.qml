@@ -60,6 +60,27 @@ GroupBox {
         controllerCaptureButton.forceActiveFocus(Qt.TabFocusReason)
     }
 
+    function handleKeyboardCapture(modifiers, logicalKey, nativeScanCode,
+                                   autoRepeat) {
+        if (captureMode !== "keyboard" || autoRepeat ||
+                isModifierKey(logicalKey)) {
+            return
+        }
+        if (modifiers === Qt.NoModifier) {
+            conflictMessage = qsTr("Hold one or more modifiers, then press a physical key.")
+            return
+        }
+        if (!preferences ||
+                !preferences.setDeckKeyboardBindingFromNative(modifiers,
+                                                               nativeScanCode)) {
+            conflictMessage = qsTr("Perigee cannot map this physical key on the current platform. The existing shortcut was not changed.")
+            return
+        }
+        captureMode = ""
+        conflictMessage = ""
+        keyboardCaptureButton.forceActiveFocus(Qt.TabFocusReason)
+    }
+
     Keys.onPressed: function(event) {
         if (captureMode.length === 0) {
             return
@@ -69,19 +90,26 @@ GroupBox {
             cancelCapture()
             return
         }
-        if (captureMode !== "keyboard" || event.isAutoRepeat ||
-                isModifierKey(event.key)) {
-            return
+        handleKeyboardCapture(event.modifiers, event.key,
+                              event.nativeScanCode, event.isAutoRepeat)
+    }
+
+    onVisibleChanged: {
+        if (!visible) {
+            cancelCapture()
         }
-        if (!preferences ||
-                !preferences.setDeckKeyboardBindingFromQt(event.modifiers,
-                                                           event.key)) {
-            conflictMessage = qsTr("Hold one or more modifiers, then press a supported key.")
-            return
+    }
+
+    onEnabledChanged: {
+        if (!enabled) {
+            cancelCapture()
         }
-        captureMode = ""
-        conflictMessage = ""
-        keyboardCaptureButton.forceActiveFocus(Qt.TabFocusReason)
+    }
+
+    Component.onDestruction: {
+        if (gamepadNavigation) {
+            gamepadNavigation.cancelControllerBindingCapture()
+        }
     }
 
     Connections {

@@ -630,7 +630,8 @@ bool Session::initialize(QQuickWindow* qtWindow)
                 DeckBindings(m_Preferences->deckKeyModifiers,
                              m_Preferences->deckKeyScancode,
                              quint32(m_Preferences->deckControllerButtons),
-                             m_Preferences->legacyGamepadDisconnect));
+                             m_Preferences->legacyGamepadDisconnect),
+                m_Preferences->swapFaceButtons);
         }
     }
 #endif
@@ -1035,6 +1036,19 @@ bool Session::routeDeckInputEvent(const SDL_Event& event)
     }
     updateDeckPointerMapping();
     const DeckInputRouter::Result result = m_DeckInputRouter->route(event);
+    for (SDL_Event replayEvent : result.replayEvents) {
+        if (result.replayToDeck) {
+            applyDeckInputResult(m_DeckInputRouter->routeReplay(replayEvent));
+        }
+        else if (replayEvent.type == SDL_KEYDOWN ||
+                 replayEvent.type == SDL_KEYUP) {
+            m_InputHandler->handleKeyEvent(&replayEvent.key);
+        }
+        else if (replayEvent.type == SDL_CONTROLLERBUTTONDOWN ||
+                 replayEvent.type == SDL_CONTROLLERBUTTONUP) {
+            m_InputHandler->handleControllerButtonEvent(&replayEvent.cbutton);
+        }
+    }
     applyDeckInputResult(result);
     return result.disposition == DeckInputRouter::Disposition::Consumed;
 }

@@ -77,6 +77,7 @@ void SdlGamepadKeyNavigation::enable()
 
 void SdlGamepadKeyNavigation::disable()
 {
+    cancelControllerBindingCapture();
     if (!m_Enabled) {
         return;
     }
@@ -96,6 +97,9 @@ void SdlGamepadKeyNavigation::disable()
 void SdlGamepadKeyNavigation::notifyWindowFocus(bool hasFocus)
 {
     m_HasFocus = hasFocus;
+    if (!hasFocus) {
+        cancelControllerBindingCapture();
+    }
     updateTimerState();
 }
 
@@ -207,6 +211,7 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
             break;
         }
         case SDL_CONTROLLERDEVICEADDED:
+        {
             SDL_GameController* gc = SDL_GameControllerOpen(event.cdevice.which);
             if (gc != nullptr) {
                 // SDL_CONTROLLERDEVICEADDED can be reported multiple times for the same
@@ -223,9 +228,16 @@ void SdlGamepadKeyNavigation::onPollingTimerFired()
             }
             break;
         }
+        case SDL_CONTROLLERDEVICEREMOVED:
+            handleControllerDeviceRemoved(event.cdevice.which);
+            break;
+        }
     }
 
     // Handle analog sticks by polling
+    if (m_DeckBindingCapture.isActive()) {
+        return;
+    }
     for (auto gc : std::as_const(m_Gamepads)) {
         short leftX = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTX);
         short leftY = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTY);
@@ -325,8 +337,12 @@ void SdlGamepadKeyNavigation::beginControllerBindingCapture()
 
 void SdlGamepadKeyNavigation::cancelControllerBindingCapture()
 {
+    const bool wasActive = m_DeckBindingCapture.isActive();
     m_DeckBindingCapture.cancel();
     m_DeckBindingCaptureController = -1;
+    if (wasActive) {
+        emit controllerBindingCaptureCancelled();
+    }
 }
 
 void SdlGamepadKeyNavigation::handleControllerBindingButton(
@@ -355,5 +371,20 @@ void SdlGamepadKeyNavigation::handleControllerBindingButton(
     }
     else {
         emit controllerBindingCaptured(int(*completed));
+    }
+}
+
+void SdlGamepadKeyNavigation::handleControllerDeviceRemoved(
+        SDL_JoystickID controller)
+{
+    if (controller == m_DeckBindingCaptureController) {
+        cancelControllerBindingCapture();
+    }
+    for (int i = m_Gamepads.size() - 1; i >= 0; --i) {
+        SDL_Joystick* joystick = SDL_GameControllerGetJoystick(m_Gamepads.at(i));
+        if (joystick != nullptr &&
+                SDL_JoystickInstanceID(joystick) == controller) {
+            SDL_GameControllerClose(m_Gamepads.takeAt(i));
+        }
     }
 }

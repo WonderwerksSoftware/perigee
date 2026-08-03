@@ -26,6 +26,7 @@ SOURCES += \
     ../app/streaming/input/mouse.cpp \
     ../app/streaming/input/reltouch.cpp \
     ../app/streaming/input/remoteinputstate.cpp \
+    ../app/settings/streamingpreferences.cpp \
     ../app/gui/sdlgamepadkeynavigation.cpp \
     ../app/path.cpp \
     ../app/streaming/video/overlaymanager.cpp \
@@ -42,6 +43,7 @@ SOURCES += \
     test_inputneutralization.cpp \
     test_inputintegration.cpp \
     test_sdlgamepadkeynavigation.cpp \
+    test_streamingpreferences.cpp \
     input_integration_stubs.cpp \
     test_overlaylayout.cpp \
     test_smoke.cpp

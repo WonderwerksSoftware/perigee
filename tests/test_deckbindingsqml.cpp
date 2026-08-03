@@ -22,6 +22,9 @@ public:
     int deckKeyScancode = SDL_SCANCODE_SPACE;
     int deckControllerButtons = 0x650;
     bool legacyGamepadDisconnect = false;
+    int logicalKeyboardCaptureCalls = 0;
+    int nativeKeyboardCaptureCalls = 0;
+    quint32 lastNativeScanCode = 0;
 
     Q_INVOKABLE QString formatDeckKeyboardBinding(int, int) const
     {
@@ -42,6 +45,15 @@ public:
 
     Q_INVOKABLE bool setDeckKeyboardBindingFromQt(int, int)
     {
+        ++logicalKeyboardCaptureCalls;
+        emit deckBindingsChanged();
+        return true;
+    }
+
+    Q_INVOKABLE bool setDeckKeyboardBindingFromNative(int, quint32 nativeScanCode)
+    {
+        ++nativeKeyboardCaptureCalls;
+        lastNativeScanCode = nativeScanCode;
         emit deckBindingsChanged();
         return true;
     }
@@ -98,6 +110,8 @@ private slots:
     void captureCanBeCancelledExplicitly();
     void controllerBackCancelsCapture();
     void statsConflictStaysInCaptureAndExplainsTheProblem();
+    void keyboardCaptureUsesNativeScanCodeInsteadOfLogicalKey();
+    void hidingTheSettingsViewCancelsControllerCapture();
 };
 
 void DeckBindingsQmlTest::captureCanBeCancelledExplicitly()
@@ -164,6 +178,55 @@ void DeckBindingsQmlTest::statsConflictStaysInCaptureAndExplainsTheProblem()
     QCOMPARE(root->property("captureMode").toString(), QStringLiteral("controller"));
     QCOMPARE(root->property("conflictMessage").toString(),
              QStringLiteral("This shortcut is reserved for Moonlight's performance statistics."));
+}
+
+void DeckBindingsQmlTest::keyboardCaptureUsesNativeScanCodeInsteadOfLogicalKey()
+{
+    QQmlEngine engine;
+    QQmlComponent component(&engine,
+        QUrl(QStringLiteral("qrc:/gui/perigee/DeckBindingSettings.qml")));
+    FakeDeckPreferences preferences;
+    FakeGamepadNavigation navigation;
+    QScopedPointer<QObject> root(component.createWithInitialProperties({
+        {QStringLiteral("preferences"), QVariant::fromValue(&preferences)},
+        {QStringLiteral("gamepadNavigation"), QVariant::fromValue(&navigation)},
+    }));
+    QVERIFY2(root, qPrintable(component.errorString()));
+    QVERIFY(QMetaObject::invokeMethod(root.data(), "beginKeyboardCapture"));
+
+    QVERIFY(QMetaObject::invokeMethod(
+        root.data(), "handleKeyboardCapture",
+        Q_ARG(QVariant, int(Qt::ControlModifier)),
+        Q_ARG(QVariant, int(Qt::Key_Z)),
+        Q_ARG(QVariant, quint32(29)),
+        Q_ARG(QVariant, false)));
+
+    QCOMPARE(preferences.nativeKeyboardCaptureCalls, 1);
+    QCOMPARE(preferences.logicalKeyboardCaptureCalls, 0);
+    QCOMPARE(preferences.lastNativeScanCode, quint32(29));
+    QCOMPARE(root->property("captureMode").toString(), QString());
+}
+
+void DeckBindingsQmlTest::hidingTheSettingsViewCancelsControllerCapture()
+{
+    QQmlEngine engine;
+    QQmlComponent component(&engine,
+        QUrl(QStringLiteral("qrc:/gui/perigee/DeckBindingSettings.qml")));
+    FakeDeckPreferences preferences;
+    FakeGamepadNavigation navigation;
+    QScopedPointer<QObject> root(component.createWithInitialProperties({
+        {QStringLiteral("preferences"), QVariant::fromValue(&preferences)},
+        {QStringLiteral("gamepadNavigation"), QVariant::fromValue(&navigation)},
+    }));
+    QVERIFY2(root, qPrintable(component.errorString()));
+    QVERIFY(QMetaObject::invokeMethod(root.data(), "beginControllerCapture"));
+    QVERIFY(navigation.captureActive);
+
+    root->setProperty("visible", false);
+    QCoreApplication::processEvents();
+
+    QVERIFY(!navigation.captureActive);
+    QCOMPARE(root->property("captureMode").toString(), QString());
 }
 
 REGISTER_PERIGEE_TEST(DeckBindingsQmlTest);

@@ -28,8 +28,9 @@ DeckInputRouter::Result consumedResult()
 
 DeckInputRouter::DeckInputRouter() = default;
 
-DeckInputRouter::DeckInputRouter(DeckBindings bindings)
-    : m_Bindings(std::move(bindings))
+DeckInputRouter::DeckInputRouter(DeckBindings bindings, bool swapFaceButtons)
+    : m_Bindings(std::move(bindings)),
+      m_SwapFaceButtons(swapFaceButtons)
 {
 }
 
@@ -66,6 +67,7 @@ DeckInputRouter::Result DeckInputRouter::route(const SDL_Event& event)
         m_ButtonsDown.remove(event.cdevice.which);
         m_ButtonReleaseTail.remove(event.cdevice.which);
         m_ChordTriggered.remove(event.cdevice.which);
+        m_ControllerCandidates.remove(event.cdevice.which);
         return {};
 #if SDL_VERSION_ATLEAST(2, 0, 14)
     case SDL_CONTROLLERSENSORUPDATE:
@@ -74,6 +76,20 @@ DeckInputRouter::Result DeckInputRouter::route(const SDL_Event& event)
     case SDL_CONTROLLERTOUCHPADMOTION:
         return m_Open ? consumedResult() : Result {};
 #endif
+    default:
+        return {};
+    }
+}
+
+DeckInputRouter::Result DeckInputRouter::routeReplay(const SDL_Event& event) const
+{
+    switch (event.type) {
+    case SDL_KEYDOWN:
+    case SDL_KEYUP:
+        return routeKeyOrdinary(event.key);
+    case SDL_CONTROLLERBUTTONDOWN:
+    case SDL_CONTROLLERBUTTONUP:
+        return routeControllerButtonOrdinary(event.cbutton);
     default:
         return {};
     }
@@ -132,13 +148,31 @@ DeckInputRouter::Result DeckInputRouter::routeKey(const SDL_KeyboardEvent& event
     else {
         m_KeysDown.remove(scanCode);
     }
-    if (!keyboardChordHeld(event)) {
-        m_KeyboardChordTriggered = false;
+    SDL_Event bufferedEvent {};
+    bufferedEvent.type = event.type;
+    bufferedEvent.key = event;
+    const bool chordMember = isKeyboardChordMember(scanCode);
+    if (!m_KeyboardCandidate.events.isEmpty() && !chordMember) {
+        Candidate aborted = std::move(m_KeyboardCandidate);
+        m_KeyboardCandidate = {};
+        Result result = routeKeyOrdinary(event);
+        result.replayEvents = std::move(aborted.events);
+        result.replayToDeck = aborted.replayToDeck;
+        return result;
+    }
+    if (chordMember &&
+            (!m_KeyboardCandidate.events.isEmpty() || pressed)) {
+        if (m_KeyboardCandidate.events.isEmpty()) {
+            m_KeyboardCandidate.replayToDeck = m_Open;
+        }
+        m_KeyboardCandidate.events.push_back(bufferedEvent);
     }
 
     if (pressed && !event.repeat && keyboardChordHeld(event) &&
             !m_KeyboardChordTriggered) {
+        m_KeyboardCandidate = {};
         m_KeyboardChordTriggered = true;
+        armChordReleaseTails();
         Result result;
         result.disposition = Disposition::Consumed;
         if (m_Open) {
@@ -152,19 +186,34 @@ DeckInputRouter::Result DeckInputRouter::routeKey(const SDL_KeyboardEvent& event
         return result;
     }
 
-    if (!m_Open) {
-        if (!keyboardChordHeld(event)) {
-            m_KeyboardChordTriggered = false;
-        }
-        return {};
+    if (!pressed && !m_KeyboardCandidate.events.isEmpty()) {
+        Candidate aborted = std::move(m_KeyboardCandidate);
+        m_KeyboardCandidate = {};
+        Result result = consumedResult();
+        result.replayEvents = std::move(aborted.events);
+        result.replayToDeck = aborted.replayToDeck;
+        return result;
     }
 
+    if (!m_KeyboardCandidate.events.isEmpty()) {
+        return consumedResult();
+    }
+
+    return routeKeyOrdinary(event);
+}
+
+DeckInputRouter::Result DeckInputRouter::routeKeyOrdinary(
+        const SDL_KeyboardEvent& event) const
+{
+    if (!m_Open) {
+        return {};
+    }
     Result result;
     result.disposition = Disposition::Consumed;
     result.action = Action::Key;
     result.key = qtKey(event.keysym);
     result.keyModifiers = qtModifiers(SDL_Keymod(event.keysym.mod));
-    result.pressed = pressed;
+    result.pressed = event.state == SDL_PRESSED;
     result.autoRepeat = event.repeat != 0;
     return result;
 }
@@ -220,7 +269,8 @@ DeckInputRouter::Result DeckInputRouter::routeControllerButton(
     }
 
     if (pressed && !wasDown && !m_ChordTriggered.contains(event.which)) {
-        if (m_Open && down == DeckBindings::statsControllerButtons()) {
+        if (m_Open && down == statsControllerMask()) {
+            m_ControllerCandidates.remove(event.which);
             m_ChordTriggered.insert(event.which);
             m_ButtonReleaseTail[event.which] |= down;
             Result result;
@@ -229,11 +279,51 @@ DeckInputRouter::Result DeckInputRouter::routeControllerButton(
             result.controllerId = event.which;
             return result;
         }
-        if (!m_Bindings.legacyGamepadDisconnect() &&
+    }
+
+    SDL_Event bufferedEvent {};
+    bufferedEvent.type = event.type;
+    bufferedEvent.cbutton = event;
+    const bool configuredMember =
+        (m_Bindings.controllerButtons() & bit) != 0;
+    const bool candidateMember = configuredMember ||
+        (m_Open && (statsControllerMask() & bit) != 0);
+    const bool candidateAllowed =
+        !m_Bindings.legacyGamepadDisconnect() &&
+        (!m_Open || m_ControllerOwner < 0 ||
+         m_ControllerOwner == event.which);
+    auto candidateIt = m_ControllerCandidates.find(event.which);
+    if (candidateIt != m_ControllerCandidates.end() &&
+            !candidateMember) {
+        Candidate aborted = std::move(candidateIt.value());
+        m_ControllerCandidates.erase(candidateIt);
+        Result result = routeControllerButtonOrdinary(event);
+        result.replayEvents = std::move(aborted.events);
+        result.replayToDeck = aborted.replayToDeck;
+        return result;
+    }
+    if (candidateAllowed && candidateMember &&
+            (candidateIt != m_ControllerCandidates.end() || pressed)) {
+        if (candidateIt == m_ControllerCandidates.end()) {
+            Candidate candidate;
+            candidate.replayToDeck = m_Open;
+            candidateIt = m_ControllerCandidates.insert(event.which,
+                                                         std::move(candidate));
+            if (m_Open && m_ControllerOwner < 0) {
+                m_ControllerOwner = event.which;
+            }
+        }
+        candidateIt->events.push_back(bufferedEvent);
+    }
+
+    if (pressed && !wasDown && !m_ChordTriggered.contains(event.which)) {
+        if (candidateAllowed &&
                 down == m_Bindings.controllerButtons() &&
                 (!m_Open || m_ControllerOwner < 0 ||
                  m_ControllerOwner == event.which)) {
+            m_ControllerCandidates.remove(event.which);
             m_ChordTriggered.insert(event.which);
+            armChordReleaseTails();
             Result result;
             result.disposition = Disposition::Consumed;
             result.controllerId = event.which;
@@ -249,21 +339,58 @@ DeckInputRouter::Result DeckInputRouter::routeControllerButton(
         }
     }
 
+    candidateIt = m_ControllerCandidates.find(event.which);
+    if (!pressed && candidateIt != m_ControllerCandidates.end()) {
+        Candidate aborted = std::move(candidateIt.value());
+        m_ControllerCandidates.erase(candidateIt);
+        Result result = consumedResult();
+        result.replayEvents = std::move(aborted.events);
+        result.replayToDeck = aborted.replayToDeck;
+        return result;
+    }
+    if (candidateIt != m_ControllerCandidates.end()) {
+        return consumedResult();
+    }
+
+    if (m_Open && m_ControllerOwner < 0 && pressed) {
+        m_ControllerOwner = event.which;
+    }
+    if (m_Open && wasDown) {
+        return consumedResult();
+    }
+    return routeControllerButtonOrdinary(event);
+}
+
+DeckInputRouter::Result DeckInputRouter::routeControllerButtonOrdinary(
+        const SDL_ControllerButtonEvent& event) const
+{
     if (!m_Open) {
         return {};
     }
-
     Result result;
     result.disposition = Disposition::Consumed;
     result.controllerId = event.which;
-    if (m_ControllerOwner < 0 && pressed) {
-        m_ControllerOwner = event.which;
-    }
-    if (event.which != m_ControllerOwner || !pressed || wasDown) {
+    if (event.which != m_ControllerOwner || event.state != SDL_PRESSED) {
         return result;
     }
-
-    switch (event.button) {
+    Uint8 button = event.button;
+    if (m_SwapFaceButtons) {
+        switch (button) {
+        case SDL_CONTROLLER_BUTTON_A:
+            button = SDL_CONTROLLER_BUTTON_B;
+            break;
+        case SDL_CONTROLLER_BUTTON_B:
+            button = SDL_CONTROLLER_BUTTON_A;
+            break;
+        case SDL_CONTROLLER_BUTTON_X:
+            button = SDL_CONTROLLER_BUTTON_Y;
+            break;
+        case SDL_CONTROLLER_BUTTON_Y:
+            button = SDL_CONTROLLER_BUTTON_X;
+            break;
+        }
+    }
+    switch (button) {
     case SDL_CONTROLLER_BUTTON_DPAD_UP:
         result.action = Action::NavigateUp;
         break;
@@ -433,9 +560,44 @@ bool DeckInputRouter::keyboardChordHeld(const SDL_KeyboardEvent& event) const
         (modifiers & requiredModifiers) == requiredModifiers;
 }
 
+bool DeckInputRouter::isKeyboardChordMember(SDL_Scancode scancode) const
+{
+    if (scancode == SDL_Scancode(m_Bindings.keyScancode())) {
+        return true;
+    }
+    const int modifiers = m_Bindings.keyModifiers();
+    if ((modifiers & Qt::ControlModifier) &&
+            (scancode == SDL_SCANCODE_LCTRL ||
+             scancode == SDL_SCANCODE_RCTRL)) {
+        return true;
+    }
+    if ((modifiers & Qt::AltModifier) &&
+            (scancode == SDL_SCANCODE_LALT ||
+             scancode == SDL_SCANCODE_RALT)) {
+        return true;
+    }
+    if ((modifiers & Qt::ShiftModifier) &&
+            (scancode == SDL_SCANCODE_LSHIFT ||
+             scancode == SDL_SCANCODE_RSHIFT)) {
+        return true;
+    }
+    return (modifiers & Qt::MetaModifier) &&
+        (scancode == SDL_SCANCODE_LGUI || scancode == SDL_SCANCODE_RGUI);
+}
+
 quint32 DeckInputRouter::controllerMask(SDL_JoystickID controller) const
 {
     return m_ButtonsDown.value(controller);
+}
+
+quint32 DeckInputRouter::statsControllerMask() const
+{
+    quint32 mask = DeckBindings::statsControllerButtons();
+    if (m_SwapFaceButtons) {
+        mask &= ~(quint32(1) << SDL_CONTROLLER_BUTTON_X);
+        mask |= quint32(1) << SDL_CONTROLLER_BUTTON_Y;
+    }
+    return mask;
 }
 
 void DeckInputRouter::beginReleaseTails()
@@ -444,6 +606,21 @@ void DeckInputRouter::beginReleaseTails()
     for (auto it = m_ButtonsDown.cbegin(); it != m_ButtonsDown.cend(); ++it) {
         m_ButtonReleaseTail[it.key()] |= it.value();
     }
+}
+
+void DeckInputRouter::armChordReleaseTails()
+{
+    for (SDL_Scancode key : std::as_const(m_KeysDown)) {
+        if (isKeyboardChordMember(key)) {
+            m_KeyReleaseTail.insert(key);
+        }
+    }
+    for (auto it = m_ButtonsDown.cbegin(); it != m_ButtonsDown.cend(); ++it) {
+        m_ButtonReleaseTail[it.key()] |=
+            it.value() & m_Bindings.controllerButtons();
+    }
+    m_KeyboardCandidate = {};
+    m_ControllerCandidates.clear();
 }
 
 void DeckInputRouter::setOpen(bool open, SDL_JoystickID owner)

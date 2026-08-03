@@ -1,5 +1,19 @@
 #include "input_integration_stubs.h"
 
+namespace WMUtils {
+
+bool isRunningWayland()
+{
+    return false;
+}
+
+bool isGpuSlow()
+{
+    return false;
+}
+
+}
+
 #include "streaming/session.h"
 #include "streaming/sdleventcodes.h"
 #include "streaming/streamutils.h"

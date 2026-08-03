@@ -16,8 +16,8 @@ public:
 
     Q_INVOKABLE void save();
 
-    Q_INVOKABLE bool setDeckKeyboardBindingFromQt(int keyModifiers,
-                                                   int qtKey);
+    Q_INVOKABLE bool setDeckKeyboardBindingFromNative(int keyModifiers,
+                                                       quint32 nativeScanCode);
     Q_INVOKABLE bool setDeckControllerBinding(int controllerButtons);
     Q_INVOKABLE void resetDeckBindings();
     Q_INVOKABLE QString formatDeckKeyboardBinding(int keyModifiers,

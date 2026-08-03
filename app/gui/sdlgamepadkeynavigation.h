@@ -39,6 +39,7 @@ private:
     void sendKey(QEvent::Type type, Qt::Key key, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
     void handleControllerBindingButton(SDL_JoystickID controller,
                                        Uint8 button, bool pressed);
+    void handleControllerDeviceRemoved(SDL_JoystickID controller);
 
     void updateTimerState();
 

@@ -34,9 +34,13 @@ private slots:
     void validBindingsRoundTripThroughIsolatedSettings();
     void invalidKeyboardStorageFallsBackAsOneBinding();
     void invalidControllerStorageFallsBackWithoutShadowingStats();
+    void controllerBindingsRejectReservedPrefixRelationships();
+    void controllerBindingsRejectImpossibleDirections();
     void extendedFunctionKeysMapToTheirPhysicalScancodes();
+    void waylandNativeScanCodesMapPhysicalKeysWithoutLogicalTranslation();
     void resetRestoresDefaultsAndDisablesLegacyMode();
     void controllerCaptureCompletesOnlyAfterEveryButtonIsReleased();
+    void controllerCaptureUsesTheLargestSimultaneousChordNotRolledUnion();
     void controllerCaptureCanBeCancelledWithoutAResult();
 };
 
@@ -64,7 +68,7 @@ void DeckBindingsTest::validBindingsRoundTripThroughIsolatedSettings()
     const quint32 controller = buttonMask({
         SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
         SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
-        SDL_CONTROLLER_BUTTON_BACK,
+        SDL_CONTROLLER_BUTTON_START,
         SDL_CONTROLLER_BUTTON_Y,
     });
     const DeckBindings saved(int(Qt::ControlModifier | Qt::MetaModifier),
@@ -145,6 +149,47 @@ void DeckBindingsTest::invalidControllerStorageFallsBackWithoutShadowingStats()
     }
 }
 
+void DeckBindingsTest::controllerBindingsRejectReservedPrefixRelationships()
+{
+    const quint32 lb = quint32(1) << SDL_CONTROLLER_BUTTON_LEFTSHOULDER;
+    const quint32 rb = quint32(1) << SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
+    const quint32 back = quint32(1) << SDL_CONTROLLER_BUTTON_BACK;
+    const quint32 start = quint32(1) << SDL_CONTROLLER_BUTTON_START;
+    const quint32 a = quint32(1) << SDL_CONTROLLER_BUTTON_A;
+    const quint32 x = quint32(1) << SDL_CONTROLLER_BUTTON_X;
+    const quint32 y = quint32(1) << SDL_CONTROLLER_BUTTON_Y;
+    const quint32 statsPrefix = lb | rb | back;
+
+    const QList<quint32> conflicts {
+        lb | rb,
+        statsPrefix | x,
+        statsPrefix | x | a,
+        statsPrefix | y,
+        statsPrefix | y | a,
+        lb | rb | back | start | a,
+    };
+    for (quint32 conflict : conflicts) {
+        QVERIFY2(!DeckBindings::isValidControllerBinding(conflict),
+                 qPrintable(QStringLiteral("unexpectedly accepted 0x%1")
+                                .arg(conflict, 0, 16)));
+        QVERIFY(!DeckBindings::controllerConflictReason(conflict).isEmpty());
+    }
+
+    QVERIFY(DeckBindings::isValidControllerBinding(lb | rb | back | start));
+}
+
+void DeckBindingsTest::controllerBindingsRejectImpossibleDirections()
+{
+    const quint32 impossible =
+        (quint32(1) << SDL_CONTROLLER_BUTTON_LEFTSHOULDER) |
+        (quint32(1) << SDL_CONTROLLER_BUTTON_DPAD_UP) |
+        (quint32(1) << SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+
+    QVERIFY(!DeckBindings::isValidControllerBinding(impossible));
+    QVERIFY(DeckBindings::controllerConflictReason(impossible)
+                .contains(QStringLiteral("opposite"), Qt::CaseInsensitive));
+}
+
 void DeckBindingsTest::extendedFunctionKeysMapToTheirPhysicalScancodes()
 {
     QCOMPARE(DeckBindings::sdlScancodeForQtKey(Qt::Key_F12),
@@ -153,6 +198,23 @@ void DeckBindingsTest::extendedFunctionKeysMapToTheirPhysicalScancodes()
              int(SDL_SCANCODE_F13));
     QCOMPARE(DeckBindings::sdlScancodeForQtKey(Qt::Key_F24),
              int(SDL_SCANCODE_F24));
+}
+
+void DeckBindingsTest::waylandNativeScanCodesMapPhysicalKeysWithoutLogicalTranslation()
+{
+    // Wayland/Qt uses XKB keycodes: Linux evdev code plus the XKB offset 8.
+    QCOMPARE(DeckBindings::sdlScancodeForNativeKey(29, QStringLiteral("wayland")),
+             int(SDL_SCANCODE_Y));
+    QCOMPARE(DeckBindings::sdlScancodeForNativeKey(38, QStringLiteral("wayland-egl")),
+             int(SDL_SCANCODE_A));
+    QCOMPARE(DeckBindings::sdlScancodeForNativeKey(104, QStringLiteral("wayland")),
+             int(SDL_SCANCODE_KP_ENTER));
+    QCOMPARE(DeckBindings::sdlScancodeForNativeKey(29, QStringLiteral("xcb")),
+             int(SDL_SCANCODE_UNKNOWN));
+    QCOMPARE(DeckBindings::sdlScancodeForNativeKey(29, QStringLiteral("offscreen")),
+             int(SDL_SCANCODE_UNKNOWN));
+    QCOMPARE(DeckBindings::sdlScancodeForNativeKey(0, QStringLiteral("wayland")),
+             int(SDL_SCANCODE_UNKNOWN));
 }
 
 void DeckBindingsTest::resetRestoresDefaultsAndDisablesLegacyMode()
@@ -193,6 +255,25 @@ void DeckBindingsTest::controllerCaptureCompletesOnlyAfterEveryButtonIsReleased(
              buttonMask({SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
                          SDL_CONTROLLER_BUTTON_BACK}));
     QVERIFY(!capture.isActive());
+}
+
+void DeckBindingsTest::controllerCaptureUsesTheLargestSimultaneousChordNotRolledUnion()
+{
+    DeckControllerChordCapture capture;
+    capture.begin();
+
+    QVERIFY(!capture.handleButton(SDL_CONTROLLER_BUTTON_LEFTSHOULDER, true));
+    QVERIFY(!capture.handleButton(SDL_CONTROLLER_BUTTON_DPAD_UP, true));
+    QVERIFY(!capture.handleButton(SDL_CONTROLLER_BUTTON_DPAD_UP, false));
+    QVERIFY(!capture.handleButton(SDL_CONTROLLER_BUTTON_DPAD_DOWN, true));
+    QVERIFY(!capture.handleButton(SDL_CONTROLLER_BUTTON_LEFTSHOULDER, false));
+    const std::optional<quint32> completed =
+        capture.handleButton(SDL_CONTROLLER_BUTTON_DPAD_DOWN, false);
+
+    QVERIFY(completed.has_value());
+    QCOMPARE(*completed,
+             buttonMask({SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+                         SDL_CONTROLLER_BUTTON_DPAD_UP}));
 }
 
 void DeckBindingsTest::controllerCaptureCanBeCancelledWithoutAResult()

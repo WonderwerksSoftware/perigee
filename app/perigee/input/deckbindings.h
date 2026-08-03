@@ -37,6 +37,8 @@ public:
     static QString formatKeyboardBinding(int keyModifiers, int keyScancode);
     static QString formatControllerBinding(quint32 controllerButtons);
     static int sdlScancodeForQtKey(int qtKey);
+    static int sdlScancodeForNativeKey(quint32 nativeScanCode,
+                                       const QString& platformName);
 
     static quint32 defaultControllerButtons();
     static quint32 statsControllerButtons();
@@ -63,5 +65,5 @@ public:
 private:
     bool m_Active = false;
     quint32 m_ButtonsDown = 0;
-    quint32 m_CandidateButtons = 0;
+    quint32 m_PeakButtons = 0;
 };
