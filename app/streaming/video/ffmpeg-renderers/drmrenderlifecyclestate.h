@@ -20,9 +20,11 @@ public:
         return m_RestorationRequired;
     }
 
-    void completeRestoration() noexcept
+    void completeRestoration(bool succeeded) noexcept
     {
-        m_RestorationRequired = false;
+        if (succeeded) {
+            m_RestorationRequired = false;
+        }
     }
 
 private:

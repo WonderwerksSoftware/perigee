@@ -228,6 +228,7 @@ private slots:
     void failedSetupDoesNotConsumePendingOverlay_data();
     void failedSetupDoesNotConsumePendingOverlay();
     void separatesDrmOverlayReadinessFromRestorationLifecycle();
+    void failedDrmRestorationKeepsRestorationRequired();
     void singleOverlayArbitratesStatusOverRetainedDeck();
     void deletesManagerOwnedSurfacesExactlyOnce();
     void permitsSurfaceDeleterToReenterPublication();
@@ -478,7 +479,7 @@ void OverlayLayoutTest::separatesDrmOverlayReadinessFromRestorationLifecycle()
         QVERIFY(readiness.deferIfNotReady(Overlay::OverlayStatusUpdate));
         QVERIFY(lifecycle.restorationRequired());
 
-        lifecycle.completeRestoration();
+        lifecycle.completeRestoration(true);
         QVERIFY(!lifecycle.restorationRequired());
     }
 
@@ -493,9 +494,23 @@ void OverlayLayoutTest::separatesDrmOverlayReadinessFromRestorationLifecycle()
         QVERIFY(!readiness.deferIfNotReady(Overlay::OverlayDeck));
         QVERIFY(lifecycle.restorationRequired());
 
-        lifecycle.completeRestoration();
+        lifecycle.completeRestoration(true);
         QVERIFY(!lifecycle.restorationRequired());
     }
+}
+
+void OverlayLayoutTest::failedDrmRestorationKeepsRestorationRequired()
+{
+    DrmRenderLifecycleState lifecycle;
+
+    lifecycle.beginPrepare();
+    lifecycle.recordApplyResult(true);
+
+    lifecycle.completeRestoration(false);
+    QVERIFY(lifecycle.restorationRequired());
+
+    lifecycle.completeRestoration(true);
+    QVERIFY(!lifecycle.restorationRequired());
 }
 
 void OverlayLayoutTest::singleOverlayArbitratesStatusOverRetainedDeck()

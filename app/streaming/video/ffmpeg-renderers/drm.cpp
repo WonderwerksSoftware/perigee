@@ -535,7 +535,7 @@ void DrmRenderer::cleanupRenderContext()
 
     const bool restorationApplySucceeded = m_PropSetter.apply();
     m_RenderLifecycle.recordApplyResult(restorationApplySucceeded);
-    m_RenderLifecycle.completeRestoration();
+    m_RenderLifecycle.completeRestoration(restorationApplySucceeded);
 }
 
 bool DrmRenderer::initialize(PDECODER_PARAMETERS params)
