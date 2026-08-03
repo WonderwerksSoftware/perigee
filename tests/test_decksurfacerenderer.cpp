@@ -20,6 +20,7 @@ class DeckSurfaceRendererTest : public QObject
 private slots:
     void initTestCase();
     void rendersPremultipliedArgbWithTransparencyInQmlCoordinates();
+    void updatesTargetMappingWhenOnlyDevicePixelRatioChanges();
     void reportsComponentLoadFailure();
 };
 
@@ -84,6 +85,45 @@ void DeckSurfaceRendererTest::rendersPremultipliedArgbWithTransparencyInQmlCoord
     QCOMPARE(green, quint8(0));
     QCOMPARE(blue, quint8(255));
     QCOMPARE(alpha, quint8(255));
+}
+
+void DeckSurfaceRendererTest::updatesTargetMappingWhenOnlyDevicePixelRatioChanges()
+{
+    QQmlEngine engine;
+    QString error;
+    QImage dprOneImage;
+    QImage dprTwoImage;
+
+    {
+        DeckSurfaceRenderer renderer;
+        QVERIFY2(renderer.initialize(
+                     &engine,
+                     QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeckProbe.qml")),
+                     &error),
+                 qPrintable(error));
+
+        renderer.resize(QSize(64, 48), 1.0);
+        QVERIFY2(renderer.render(&dprOneImage, &error), qPrintable(error));
+
+        // The physical target remains 64x48, but each logical pixel now spans
+        // two target pixels. This must refresh the target's DPR mapping even
+        // though the existing FBO has the requested physical dimensions.
+        renderer.resize(QSize(32, 24), 2.0);
+        QVERIFY2(renderer.render(&dprTwoImage, &error), qPrintable(error));
+    }
+
+    QCOMPARE(dprOneImage.size(), QSize(64, 48));
+    QCOMPARE(dprOneImage.format(), QImage::Format_ARGB32_Premultiplied);
+    QCOMPARE(dprOneImage.pixelColor(24, 12), QColor(255, 0, 255, 255));
+    QCOMPARE(dprOneImage.pixelColor(24, 40).alpha(), 0);
+    QCOMPARE(dprOneImage.pixelColor(0, 0).alpha(), 0);
+
+    QCOMPARE(dprTwoImage.size(), QSize(64, 48));
+    QCOMPARE(dprTwoImage.format(), QImage::Format_ARGB32_Premultiplied);
+    QCOMPARE(dprTwoImage.pixelColor(24, 12).alpha(), 0);
+    QCOMPARE(dprTwoImage.pixelColor(48, 4).alpha(), 0);
+    QCOMPARE(dprTwoImage.pixelColor(48, 40), QColor(255, 0, 255, 255));
+    QCOMPARE(dprTwoImage.pixelColor(0, 0).alpha(), 0);
 }
 
 void DeckSurfaceRendererTest::reportsComponentLoadFailure()

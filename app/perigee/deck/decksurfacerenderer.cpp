@@ -117,13 +117,19 @@ public:
             return false;
         }
 
+        framebuffer = std::move(candidate);
+        assignFramebufferRenderTarget();
+        return true;
+    }
+
+    void assignFramebufferRenderTarget()
+    {
         QQuickRenderTarget target =
             QQuickRenderTarget::fromOpenGLTexture(
-                candidate->texture(), GL_RGBA8, pixelSize);
+                framebuffer->texture(), GL_RGBA8, pixelSize);
         target.setDevicePixelRatio(devicePixelRatio);
         quickWindow->setRenderTarget(target);
-        framebuffer = std::move(candidate);
-        return true;
+        renderTargetDevicePixelRatio = devicePixelRatio;
     }
 
     QThread* ownerThread;
@@ -136,6 +142,7 @@ public:
     QSize logicalSize;
     QSize pixelSize;
     qreal devicePixelRatio = 1.0;
+    qreal renderTargetDevicePixelRatio = 0.0;
     bool initialized = false;
 };
 
@@ -316,6 +323,9 @@ bool DeckSurfaceRenderer::render(QImage* premultipliedArgb, QString* error)
             !m_Impl->createFramebuffer(error)) {
         m_Impl->context->doneCurrent();
         return false;
+    }
+    if (m_Impl->renderTargetDevicePixelRatio != m_Impl->devicePixelRatio) {
+        m_Impl->assignFramebufferRenderTarget();
     }
 
     m_Impl->renderControl->polishItems();
