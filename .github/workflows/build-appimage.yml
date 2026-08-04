@@ -73,7 +73,7 @@ jobs:
           printf '%s\n' "$AQT_VENV/bin" "$QT_DIR/bin" "$DEP_ROOT/bin" >> "$GITHUB_PATH"
           {
             printf 'CMAKE_PREFIX_PATH=%s:%s\n' "$DEP_ROOT" "$QT_DIR"
-            printf 'LD_LIBRARY_PATH=%s/lib:%s/lib\n' "$DEP_ROOT" "$QT_DIR"
+            printf 'LD_LIBRARY_PATH=%s/lib:%s/lib/x86_64-linux-gnu:%s/lib\n' "$DEP_ROOT" "$DEP_ROOT" "$QT_DIR"
             printf 'PKG_CONFIG_PATH=%s/lib/pkgconfig:%s/lib/x86_64-linux-gnu/pkgconfig:%s/share/pkgconfig\n' "$DEP_ROOT" "$DEP_ROOT" "$DEP_ROOT"
           } >> "$GITHUB_ENV"
 
@@ -82,7 +82,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.QT_ROOT }}
-          key: perigee-qt-${{ runner.os }}-${{ runner.arch }}-6.8.3-aqt-3.3.0-linux-gcc-64-qtvirtualkeyboard
+          key: perigee-qt-${{ runner.os }}-${{ runner.arch }}-6.8.3-aqt-3.3.0-linux-gcc-64-qtvirtualkeyboard-qtwayland
 
       - name: Install pinned Qt
         if: steps.qt-cache.outputs.cache-hit != 'true'
@@ -114,6 +114,8 @@ jobs:
           test -d "$QT_DIR/qml/QtQuick/Controls"
           test -d "$QT_DIR/qml/QtQuick/VirtualKeyboard"
           test -d "$QT_DIR/plugins/platforms"
+          test -f "$QT_DIR/plugins/platforms/libqwayland-generic.so"
+          test -f "$QT_DIR/plugins/platforms/libqwayland-egl.so"
           test -d "$QT_DIR/plugins/imageformats"
 
       - name: Validate pinned Meson version

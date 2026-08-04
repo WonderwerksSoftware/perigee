@@ -58,7 +58,6 @@ OPTIONAL_QML_MODULES = ("QtQuick/Effects", "QtQuick/Shapes")
 QML_ROOT_MODULES = ("QtQml", "QtQuick")
 
 PLUGIN_FILES = (
-    "platforms/libqwayland.so",
     "platforms/libqxcb.so",
     "platforms/libqoffscreen.so",
     "platforms/libqminimal.so",
@@ -67,6 +66,12 @@ PLUGIN_FILES = (
     "imageformats/libqjpeg.so",
     "imageformats/libqsvg.so",
     "iconengines/libqsvgicon.so",
+)
+
+WAYLAND_PLUGIN_FILES = (
+    "platforms/libqwayland.so",
+    "platforms/libqwayland-generic.so",
+    "platforms/libqwayland-egl.so",
 )
 
 PLUGIN_DIRECTORIES = (
@@ -275,6 +280,14 @@ def stage_qt(prefix: pathlib.Path) -> None:
         copy_tree(qml_root / module, prefix / "qml" / module)
     for module in OPTIONAL_QML_MODULES:
         copy_tree_if_present(qml_root / module, prefix / "qml" / module)
+    wayland_plugins = 0
+    for relative in WAYLAND_PLUGIN_FILES:
+        source = plugin_root / relative
+        if source.is_file():
+            copy_regular(source, prefix / "plugins" / relative)
+            wayland_plugins += 1
+    if wayland_plugins == 0:
+        raise PackagingError("Qt Wayland platform plugin is missing")
     for relative in PLUGIN_FILES:
         copy_regular(plugin_root / relative, prefix / "plugins" / relative)
     for relative in PLUGIN_DIRECTORIES:

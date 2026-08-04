@@ -79,7 +79,7 @@ def valid_tree(root: pathlib.Path, kind: str) -> pathlib.Path:
     shutil.copy2("/usr/bin/true", private_library)
     private_library.chmod(0o644)
     normalize_fixture_elf(private_library, "$ORIGIN")
-    plugin = root / prefix / "plugins/platforms/libqwayland.so"
+    plugin = root / prefix / "plugins/platforms/libqwayland-generic.so"
     plugin.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2("/usr/bin/true", plugin)
     plugin.chmod(0o644)
@@ -285,7 +285,7 @@ class VerifyLinuxArtifactsTest(unittest.TestCase):
         VERIFY.REVIEWED_LICENSE_DIGESTS = dict(VERIFY.REVIEWED_LICENSE_DIGESTS)
         for relative in (
             "lib/libfixture.so.1",
-            "plugins/platforms/libqwayland.so",
+            "plugins/platforms/libqwayland-generic.so",
         ):
             component = VERIFY.elf_license_component(relative, None)
             VERIFY.REVIEWED_LICENSE_DIGESTS[f"{component}/LICENSE.txt"] = fixture_digest
@@ -304,6 +304,12 @@ class VerifyLinuxArtifactsTest(unittest.TestCase):
                 root = self.root / kind
                 valid_tree(root, kind)
                 VERIFY.verify_tree(root, kind)
+
+    def test_qt_wayland_plugin_is_required_but_accepts_modern_names(self) -> None:
+        root = self.root / "missing-wayland"
+        valid_tree(root, "tar")
+        (root / "plugins/platforms/libqwayland-generic.so").unlink()
+        self.assert_rejected(root, "tar", "missing Qt Wayland platform plugin")
 
     def test_terminate_process_stops_the_launch_process_group(self) -> None:
         process = subprocess.Popen(

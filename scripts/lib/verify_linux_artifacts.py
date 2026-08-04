@@ -83,6 +83,12 @@ REQUIRED_QML_MODULES = (
     "QtQuick/Templates",
     "QtQuick/Window",
 )
+
+WAYLAND_PLATFORM_PLUGINS = (
+    "plugins/platforms/libqwayland.so",
+    "plugins/platforms/libqwayland-generic.so",
+    "plugins/platforms/libqwayland-egl.so",
+)
 REVIEWED_LICENSE_CATALOG_PATH = (
     SOURCE_ROOT / "scripts/lib/reviewed_linux_license_digests.tsv"
 )
@@ -514,7 +520,6 @@ def required_paths(kind: str) -> tuple[str, ...]:
     if kind == "tar":
         return (
             "bin/perigee",
-            "plugins/platforms/libqwayland.so",
             "qml/QML/qmldir",
             "qml/QtCore/qmldir",
             "qml/QtQml/qmldir",
@@ -538,7 +543,6 @@ def required_paths(kind: str) -> tuple[str, ...]:
     return (
         "AppRun",
         "usr/bin/perigee",
-        "usr/plugins/platforms/libqwayland.so",
         "usr/qml/QML/qmldir",
         "usr/qml/QtCore/qmldir",
         "usr/qml/QtQml/qmldir",
@@ -1162,6 +1166,9 @@ def verify_tree(root: pathlib.Path, kind: str) -> None:
     missing = [entry for entry in required_paths(kind) if not (root / entry).exists()]
     if missing:
         fail(f"missing payload path: {missing[0]}")
+    prefix = pathlib.Path() if kind == "tar" else pathlib.Path("usr")
+    if not any((root / prefix / relative).is_file() for relative in WAYLAND_PLATFORM_PLUGINS):
+        fail("missing Qt Wayland platform plugin")
 
     executable = root / ("bin/perigee" if kind == "tar" else "usr/bin/perigee")
     if not executable.is_file() or not os.access(executable, os.X_OK):

@@ -90,6 +90,8 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn("QT_VERSION: 6.8.3", self.workflow)
         self.assertIn("aqt install-qt linux desktop 6.8.3 linux_gcc_64", self.workflow)
         self.assertIn("-m qtvirtualkeyboard", self.workflow)
+        self.assertIn('test -f "$QT_DIR/plugins/platforms/libqwayland-generic.so"', self.workflow)
+        self.assertIn('test -f "$QT_DIR/plugins/platforms/libqwayland-egl.so"', self.workflow)
         self.assertNotIn("6.8.3 gcc_64 \\", self.workflow)
         self.assertIn("QT_ROOT", self.workflow)
         self.assertRegex(self.workflow, r"qmake6[^\n]*-query QT_VERSION")
@@ -97,6 +99,12 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn('command -v qmake6', self.workflow)
         self.assertIn('"$QT_DIR/bin/qmake6"', self.workflow)
         self.assertLess(self.workflow.index("Validate Qt version"), self.workflow.index("Cache immutable dependencies"))
+
+    def test_ci_exports_architecture_specific_runtime_libraries_for_spawned_app(self) -> None:
+        self.assertIn(
+            "LD_LIBRARY_PATH=%s/lib:%s/lib/x86_64-linux-gnu:%s/lib",
+            self.workflow,
+        )
 
     def test_reusable_workflow_job_env_avoids_runner_context(self) -> None:
         job_env = re.search(r"(?ms)^    env:\n(?P<body>.*?)(?=^\s{4}steps:)", self.workflow)
