@@ -21,6 +21,7 @@ LICENSE_CATALOG_PATH = SOURCE_ROOT / "scripts/lib/reviewed_linux_license_digests
 LICENSE_CATALOG_GENERATOR = SOURCE_ROOT / "scripts/lib/generate_linux_license_catalog.py"
 QT_LICENSE_EXTRACTOR = SOURCE_ROOT / "scripts/lib/extract_qt_license_archives.py"
 UBUNTU_PACKAGE_SET = SOURCE_ROOT / "scripts/ci/ubuntu-22.04-packages.txt"
+MAIN_CPP = SOURCE_ROOT / "app/main.cpp"
 
 
 def load(name: str, path: pathlib.Path):
@@ -65,6 +66,17 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn(
             "PKG_CONFIG_PATH=%s/lib/pkgconfig:%s/lib/x86_64-linux-gnu/pkgconfig:%s/share/pkgconfig",
             self.workflow,
+        )
+
+    def test_version_query_bypasses_gui_initialization(self) -> None:
+        main_cpp = MAIN_CPP.read_text(encoding="utf-8")
+        self.assertIn(
+            'QString::fromLocal8Bit(argv[i]) == QStringLiteral("--version")',
+            main_cpp,
+        )
+        self.assertLess(
+            main_cpp.index('QString::fromLocal8Bit(argv[i]) == QStringLiteral("--version")'),
+            main_cpp.index("QGuiApplication app(argc, argv);"),
         )
 
     def test_ci_exposes_sdl2_compat_under_the_qmake_package_name(self) -> None:

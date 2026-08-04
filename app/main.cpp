@@ -15,6 +15,7 @@
 #include <QRegularExpression>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
+#include <cstdio>
 
 #ifdef Q_OS_UNIX
 #include <sys/socket.h>
@@ -428,6 +429,16 @@ int main(int argc, char *argv[])
 
     // Set the app version for the QCommandLineParser's showVersion() command
     QCoreApplication::setApplicationVersion(VERSION_STR);
+
+    // --version is a non-interactive query. Handle it before constructing a
+    // QGuiApplication so headless packaging checks do not depend on a display
+    // backend or initialize the full Qt Quick stack.
+    for (int i = 1; i < argc; ++i) {
+        if (QString::fromLocal8Bit(argv[i]) == QStringLiteral("--version")) {
+            fprintf(stdout, "Perigee %s\n", VERSION_STR);
+            return 0;
+        }
+    }
 
     // Set these here to allow us to use the default QSettings constructor.
     // These also ensure that our cache directory is named correctly. As such,
