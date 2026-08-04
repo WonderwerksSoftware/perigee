@@ -1306,10 +1306,22 @@ def verify_version(executable: pathlib.Path, expected: str, work_root: pathlib.P
             timeout=20,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        fail(f"packaged --version command failed: {executable.name}")
+    except subprocess.TimeoutExpired:
+        fail(f"packaged --version command timed out: {executable.name}")
+    except OSError as error:
+        fail(f"packaged --version command failed to start: {executable.name}: {error}")
     if result.returncode != 0:
-        fail(f"packaged --version command failed: {executable.name}")
+        try:
+            error_output = result.stderr.decode("utf-8", errors="replace").strip()
+        except AttributeError:
+            error_output = ""
+        if len(error_output) > 240:
+            error_output = error_output[-240:]
+        detail = f": {error_output}" if error_output else ""
+        fail(
+            f"packaged --version command failed ({result.returncode}): "
+            f"{executable.name}{detail}"
+        )
     try:
         output = result.stdout.decode("utf-8").rstrip("\n")
     except UnicodeDecodeError:
