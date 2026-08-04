@@ -241,6 +241,7 @@ def rpm_owners(path: pathlib.Path) -> set[str]:
 REVIEWED_LICENSE_DIGESTS = load_reviewed_license_digests(
     REVIEWED_LICENSE_CATALOG_PATH
 )
+VERSION_COMMAND_TIMEOUT_SECONDS = 20
 
 
 def safe_symlink_target(path: pathlib.PurePosixPath, target: str) -> pathlib.PurePosixPath:
@@ -1298,21 +1299,36 @@ def verify_version(executable: pathlib.Path, expected: str, work_root: pathlib.P
         "APPIMAGE_EXTRACT_AND_RUN": "1",
     }
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             [str(executable), "--version"],
             env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=20,
-            check=False,
+            start_new_session=True,
         )
+        try:
+            stdout, stderr = process.communicate(
+                timeout=VERSION_COMMAND_TIMEOUT_SECONDS
+            )
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+            fail(f"packaged --version command timed out: {executable.name}")
+        returncode = process.returncode
     except subprocess.TimeoutExpired:
         fail(f"packaged --version command timed out: {executable.name}")
     except OSError as error:
         fail(f"packaged --version command failed to start: {executable.name}: {error}")
-    if result.returncode != 0:
+    if returncode != 0:
         try:
-            error_output = result.stderr.decode("utf-8", errors="replace").strip()
+            error_output = stderr.decode("utf-8", errors="replace").strip()
         except AttributeError:
             error_output = ""
         if len(error_output) > 240:
@@ -1323,10 +1339,10 @@ def verify_version(executable: pathlib.Path, expected: str, work_root: pathlib.P
             f"{executable.name}{detail}"
         )
     try:
-        output = result.stdout.decode("utf-8").rstrip("\n")
+        output = stdout.decode("utf-8").rstrip("\n")
     except UnicodeDecodeError:
         fail(f"version output is not UTF-8: {executable.name}")
-    if output != expected or b"\x00" in result.stdout:
+    if output != expected or b"\x00" in stdout:
         fail(f"unexpected version output from {executable.name}")
 
 

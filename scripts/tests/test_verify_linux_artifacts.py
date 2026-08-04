@@ -1035,6 +1035,13 @@ class VerifyLinuxArtifactsTest(unittest.TestCase):
         with self.assertRaisesRegex(VERIFY.VerificationError, "unexpected version"):
             VERIFY.verify_version(bad, "Perigee 0.1.0", self.root / "bad-home")
 
+    def test_version_timeout_kills_the_entire_process_group(self) -> None:
+        slow = self.root / "slow-version"
+        write(slow, b"#!/bin/sh\nsleep 30\n", 0o755)
+        with mock.patch.object(VERIFY, "VERSION_COMMAND_TIMEOUT_SECONDS", 0.05):
+            with self.assertRaisesRegex(VERIFY.VerificationError, "timed out"):
+                VERIFY.verify_version(slow, "Perigee 0.1.0", self.root / "slow-home")
+
     def test_whole_appimage_version_sets_extract_and_run(self) -> None:
         appimage = self.root / "Perigee-0.1.0-x86_64.AppImage"
         write(
