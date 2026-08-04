@@ -92,7 +92,43 @@ COPIED_SOURCES: dict[pathlib.Path, pathlib.Path] = {}
 RPM_LICENSE_CACHE: dict[str, list[pathlib.Path]] = {}
 PACKAGE_LICENSE_CACHE: dict[str, "PackageLicenseSource" | None] = {}
 PATH_PACKAGE_IDENTITY_CACHE: dict[tuple[str, pathlib.Path, str], tuple[str, str]] = {}
-QT_LICENSE_CACHE: list[pathlib.Path] | None = None
+QT_LICENSE_CACHE: dict[str, list[pathlib.Path]] = {}
+
+QT_LICENSE_MODULE_PREFIXES = (
+    (
+        "qtvirtualkeyboard",
+        (
+            "lib/libQt6VirtualKeyboard",
+            "plugins/platforminputcontexts/libqtvirtualkeyboard",
+            "qml/QtQuick/VirtualKeyboard",
+        ),
+    ),
+    (
+        "qtwayland",
+        (
+            "lib/libQt6Wayland",
+            "plugins/platforms/libqwayland",
+            "plugins/wayland-",
+        ),
+    ),
+    (
+        "qtsvg",
+        (
+            "lib/libQt6Svg",
+            "plugins/imageformats/libqsvg",
+            "plugins/iconengines/libqsvgicon",
+        ),
+    ),
+    (
+        "qtdeclarative",
+        (
+            "lib/libQt6Qml",
+            "lib/libQt6Quick",
+            "qml/QtQml",
+            "qml/QtQuick",
+        ),
+    ),
+)
 
 
 class PackageLicenseSource(NamedTuple):
@@ -544,18 +580,28 @@ def package_identity_for_path(
     return result
 
 
+def qt_module_for_source(source: pathlib.Path, qt_prefix: pathlib.Path) -> str | None:
+    try:
+        relative = source.resolve().relative_to(qt_prefix.resolve()).as_posix()
+    except ValueError:
+        return None
+    for module, prefixes in QT_LICENSE_MODULE_PREFIXES:
+        if any(relative.startswith(prefix) for prefix in prefixes):
+            return module
+    return "qtbase"
+
+
 def qt_license_files(source: pathlib.Path) -> list[pathlib.Path]:
     """Return license texts shipped with a non-system Qt installation."""
     global QT_LICENSE_CACHE
     qt_prefix = qt_path("QT_INSTALL_PREFIX").resolve()
     if qt_prefix == pathlib.Path("/usr"):
         return []
-    try:
-        source.resolve().relative_to(qt_prefix)
-    except ValueError:
+    module = qt_module_for_source(source, qt_prefix)
+    if module is None:
         return []
-    if QT_LICENSE_CACHE is not None:
-        return QT_LICENSE_CACHE
+    if module in QT_LICENSE_CACHE:
+        return QT_LICENSE_CACHE[module]
 
     roots: list[pathlib.Path] = []
     base = qt_prefix
@@ -570,16 +616,11 @@ def qt_license_files(source: pathlib.Path) -> list[pathlib.Path]:
 
     files: list[pathlib.Path] = []
     for root in roots:
-        files.extend(path for path in sorted(root.rglob("*")) if path.is_file())
-    for base in (qt_prefix, qt_prefix.parent, qt_prefix.parent.parent):
-        files.extend(
-            path
-            for path in sorted(base.glob("*"))
-            if path.is_file()
-            and path.name.upper().startswith(("LICENSE", "COPYING", "COPYRIGHT", "NOTICE"))
-        )
-    QT_LICENSE_CACHE = sorted(set(files))
-    return QT_LICENSE_CACHE
+        module_root = root / module
+        if module_root.is_dir():
+            files.extend(path for path in sorted(module_root.rglob("*")) if path.is_file())
+    QT_LICENSE_CACHE[module] = sorted(set(files))
+    return QT_LICENSE_CACHE[module]
 
 
 def source_build_component(library_name: str) -> str | None:
@@ -758,7 +799,7 @@ def stage(args: argparse.Namespace) -> None:
     RPM_LICENSE_CACHE.clear()
     PACKAGE_LICENSE_CACHE.clear()
     PATH_PACKAGE_IDENTITY_CACHE.clear()
-    QT_LICENSE_CACHE = None
+    QT_LICENSE_CACHE = {}
     source_root = args.source_root.resolve()
     root = args.destination.resolve()
     prefix = root if args.layout == "tar" else root / "usr"

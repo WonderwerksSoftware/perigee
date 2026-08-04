@@ -128,7 +128,7 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn('rm -rf -- "$QT_DIR/LICENSES"', self.workflow)
         self.assertIn('mv -- "$qt_license_stage" "$QT_DIR/LICENSES"', self.workflow)
         self.assertIn("sha256sum --check --strict", self.workflow)
-        self.assertIn('test -f "$QT_DIR/LICENSES/LicenseRef-Qt-Commercial.txt"', self.workflow)
+        self.assertIn('test -f "$QT_DIR/LICENSES/qtbase/LicenseRef-Qt-Commercial.txt"', self.workflow)
         self.assertIn("qt source license archives", self.workflow)
         self.assertLess(
             self.workflow.index("Install pinned Qt source license texts"),
@@ -164,9 +164,9 @@ class LinuxPackagingContractTest(unittest.TestCase):
             )
             destination = root / "licenses"
             extractor.extract_archives([base, virtual], destination)
-            self.assertEqual((destination / "Module.txt").read_bytes(), b"base\n")
+            self.assertEqual((destination / "qtbase/Module.txt").read_bytes(), b"base\n")
             self.assertEqual(
-                (destination / "Module.txt.9189697282c2").read_bytes(),
+                (destination / "qtvirtualkeyboard/Module.txt").read_bytes(),
                 b"virtual keyboard\n",
             )
             with self.assertRaises(extractor.LicenseArchiveError):
@@ -176,6 +176,21 @@ class LinuxPackagingContractTest(unittest.TestCase):
             make_archive(unsafe, "qtwayland-everywhere-src-6.8.3", [("escape", b"", "symlink")])
             with self.assertRaises(extractor.LicenseArchiveError):
                 extractor.extract_archives([unsafe], root / "unsafe")
+
+    def test_qt_license_origins_keep_module_identity(self) -> None:
+        stage = load("stage_linux_payload", STAGE_PATH)
+        prefix = pathlib.Path("/opt/qt")
+        cases = {
+            "lib/libQt6VirtualKeyboard.so.6": "qtvirtualkeyboard",
+            "plugins/platforms/libqwayland-generic.so": "qtwayland",
+            "plugins/imageformats/libqsvg.so": "qtsvg",
+            "qml/QtQuick/Controls/qmldir": "qtdeclarative",
+            "lib/libQt6Core.so.6": "qtbase",
+        }
+        for relative, module in cases.items():
+            with self.subTest(relative=relative):
+                self.assertEqual(stage.qt_module_for_source(prefix / relative, prefix), module)
+        self.assertIsNone(stage.qt_module_for_source(pathlib.Path("/usr/lib/libQt6Core.so"), prefix))
 
     def test_ci_exports_architecture_specific_runtime_libraries_for_spawned_app(self) -> None:
         self.assertIn(

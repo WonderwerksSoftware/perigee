@@ -12,18 +12,31 @@ import tarfile
 from pathlib import Path, PurePosixPath
 
 
+QT_LICENSE_MODULES = {
+    "qtbase",
+    "qtsvg",
+    "qtdeclarative",
+    "qtwayland",
+    "qtvirtualkeyboard",
+}
+
+
 class LicenseArchiveError(ValueError):
     """Raised when an archive does not match the reviewed license layout."""
 
 
-def _license_members(archive: Path) -> list[tuple[str, bytes]]:
+def _license_members(archive: Path) -> tuple[str, list[tuple[str, bytes]]]:
     root = archive.name
     for suffix in (".tar.xz", ".tar.gz", ".tar.bz2", ".tar"):
         if root.endswith(suffix):
             root = root[: -len(suffix)]
             break
-    if not root.endswith("-everywhere-src-6.8.3"):
+    suffix = "-everywhere-src-6.8.3"
+    if not root.endswith(suffix):
         raise LicenseArchiveError(f"unexpected Qt source archive name: {archive.name}")
+    module = root[: -len(suffix)]
+    if module not in QT_LICENSE_MODULES:
+        raise LicenseArchiveError(f"unsupported Qt source module: {module}")
     prefix = PurePosixPath(root) / "LICENSES"
     prefix_parts = prefix.parts
     selected: list[tuple[str, bytes]] = []
@@ -48,29 +61,32 @@ def _license_members(archive: Path) -> list[tuple[str, bytes]]:
             selected.append((path.name, extracted.read()))
     if not selected:
         raise LicenseArchiveError(f"Qt source archive has no LICENSES files: {archive.name}")
-    return selected
+    return module, selected
 
 
 def extract_archives(archives: list[Path], destination: Path) -> None:
     """Validate all archives, then write their license texts into a new directory."""
     if destination.exists():
         raise LicenseArchiveError(f"license destination already exists: {destination}")
-    collected: dict[str, bytes] = {}
+    collected: dict[tuple[str, str], bytes] = {}
     for archive in archives:
-        for name, content in _license_members(archive):
-            existing = collected.get(name)
+        module, members = _license_members(archive)
+        for name, content in members:
+            key = (module, name)
+            existing = collected.get(key)
             if existing is None:
-                collected[name] = content
+                collected[key] = content
                 continue
             if existing == content:
                 continue
             digest = hashlib.sha256(content).hexdigest()[:12]
-            collected[f"{name}.{digest}"] = content
+            collected[(module, f"{name}.{digest}")] = content
 
     destination.mkdir(parents=False)
     try:
-        for name, content in sorted(collected.items()):
-            target = destination / name
+        for (module, name), content in sorted(collected.items()):
+            target = destination / module / name
+            target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
             target.chmod(0o644)
     except Exception:

@@ -162,8 +162,8 @@ jobs:
             "${qt_source_archives[@]}"
           rm -rf -- "$QT_DIR/LICENSES"
           mv -- "$qt_license_stage" "$QT_DIR/LICENSES"
-          test -f "$QT_DIR/LICENSES/LicenseRef-Qt-Commercial.txt"
-          test -f "$QT_DIR/LICENSES/LGPL-3.0-only.txt"
+          test -f "$QT_DIR/LICENSES/qtbase/LicenseRef-Qt-Commercial.txt"
+          test -f "$QT_DIR/LICENSES/qtbase/LGPL-3.0-only.txt"
 
       - name: Validate pinned Meson version
         run: |
