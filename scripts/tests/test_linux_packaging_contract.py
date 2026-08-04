@@ -113,7 +113,7 @@ class LinuxPackagingContractTest(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("quickWindow->setRenderTarget(framebuffer.get());", renderer)
-        self.assertIn("renderControl->initialize(context.get())", renderer)
+        self.assertIn("renderControl->initialize(context.get());", renderer)
         self.assertRegex(
             renderer,
             r"#if QT_VERSION >= QT_VERSION_CHECK\(6, 0, 0\)\s+"

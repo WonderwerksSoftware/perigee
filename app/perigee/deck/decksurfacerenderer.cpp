@@ -282,7 +282,8 @@ bool DeckSurfaceRenderer::initialize(QQmlEngine* engine,
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     const bool renderControlInitialized = renderControl->initialize();
 #else
-    const bool renderControlInitialized = renderControl->initialize(context.get());
+    renderControl->initialize(context.get());
+    const bool renderControlInitialized = true;
 #endif
     if (!renderControlInitialized) {
         quickWindow.reset();
