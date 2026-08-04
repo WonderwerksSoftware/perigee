@@ -67,11 +67,9 @@ FocusScope {
 
                 onChosen: {
                     deckController.activateAction(actionId)
-                    tray.forceActiveFocus()
                 }
                 onPointed: {
                     deckController.focusAction(actionId)
-                    tray.forceActiveFocus()
                 }
             }
         }

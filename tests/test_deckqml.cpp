@@ -1127,6 +1127,8 @@ void DeckQmlTest::pointerClickActivatesActionAfterFocus()
     QMouseEvent press(QEvent::MouseButtonPress, secondActionCenter,
                       secondActionCenter, secondActionCenter,
                       Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    capturedQtWarnings.clear();
+    previousQtMessageHandler = qInstallMessageHandler(captureQtWarnings);
     QVERIFY(renderer.sendPointerEvent(&press));
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
 
@@ -1138,6 +1140,16 @@ void DeckQmlTest::pointerClickActivatesActionAfterFocus()
                         Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     QVERIFY(renderer.sendPointerEvent(&release));
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    qInstallMessageHandler(previousQtMessageHandler);
+    previousQtMessageHandler = nullptr;
+
+    QVERIFY2(std::none_of(
+                  capturedQtWarnings.cbegin(), capturedQtWarnings.cend(),
+                  [](const QString& warning) {
+                      return warning.contains(
+                          QStringLiteral("ReferenceError: tray is not defined"));
+                  }),
+              qPrintable(capturedQtWarnings.join(QStringLiteral("\n"))));
     QCOMPARE(adapter.executedActionIds,
              QStringList({QStringLiteral("display.second")}));
 }
