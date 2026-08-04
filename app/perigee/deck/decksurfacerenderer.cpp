@@ -15,7 +15,9 @@
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQmlError>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QQuickGraphicsDevice>
+#endif
 #include <QQuickItem>
 #include <QQuickRenderControl>
 #include <QQuickRenderTarget>
@@ -261,8 +263,10 @@ bool DeckSurfaceRenderer::initialize(QQmlEngine* engine,
     auto renderControl = std::make_unique<QQuickRenderControl>();
     auto quickWindow = std::make_unique<QQuickWindow>(renderControl.get());
     quickWindow->setColor(Qt::transparent);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     quickWindow->setGraphicsDevice(
         QQuickGraphicsDevice::fromOpenGLContext(context.get()));
+#endif
     if (!renderControl->initialize()) {
         quickWindow.reset();
         renderControl.reset();
