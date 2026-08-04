@@ -759,10 +759,12 @@ int main(int argc, char *argv[])
     app.setApplicationDisplayName(ProductIdentity::windowTitle());
 
 #ifdef Q_OS_LINUX
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     // Deck uses QQuickRenderControl with an application-owned OpenGL context.
     // This selects Qt Quick's API only; Moonlight's SDL renderer preference is
     // intentionally unchanged. This is before the first QQuickWindow.
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+#endif
 #endif
 
 #ifdef Q_OS_DARWIN

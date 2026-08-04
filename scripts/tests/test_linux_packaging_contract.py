@@ -104,6 +104,11 @@ class LinuxPackagingContractTest(unittest.TestCase):
     def test_steam_link_build_keeps_its_supported_qt5_path(self) -> None:
         app_pro = (SOURCE_ROOT / "app/app.pro").read_text(encoding="utf-8")
         self.assertIn("!config_SL:!versionAtLeast(QT_VERSION, 6.7.0)", app_pro)
+        main_cpp = (SOURCE_ROOT / "app/main.cpp").read_text(encoding="utf-8")
+        graphics_index = main_cpp.index("QQuickWindow::setGraphicsApi")
+        linux_guard = main_cpp.rfind("#ifdef Q_OS_LINUX", 0, graphics_index)
+        graphics_api = main_cpp[linux_guard:graphics_index]
+        self.assertIn("#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)", graphics_api)
 
     def test_ci_installs_pinned_qt_source_license_texts(self) -> None:
         for module, digest in (
