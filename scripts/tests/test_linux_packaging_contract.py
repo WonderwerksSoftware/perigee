@@ -101,6 +101,10 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn('"$QT_DIR/bin/qmake6"', self.workflow)
         self.assertLess(self.workflow.index("Validate Qt version"), self.workflow.index("Cache immutable dependencies"))
 
+    def test_steam_link_build_keeps_its_supported_qt5_path(self) -> None:
+        app_pro = (SOURCE_ROOT / "app/app.pro").read_text(encoding="utf-8")
+        self.assertIn("!config_SL:!versionAtLeast(QT_VERSION, 6.7.0)", app_pro)
+
     def test_ci_installs_pinned_qt_source_license_texts(self) -> None:
         for module, digest in (
             ("qtbase", "56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80"),
