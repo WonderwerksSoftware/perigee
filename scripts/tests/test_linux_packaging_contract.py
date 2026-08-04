@@ -261,6 +261,17 @@ class LinuxPackagingContractTest(unittest.TestCase):
             self.workflow,
         )
 
+    def test_ci_stages_sdl3_for_sdl2_compat_runtime_loading(self) -> None:
+        self.assertIn(
+            "PERIGEE_EXTRA_RUNTIME_LIBRARIES: ${{ github.workspace }}/dep_root/lib/libSDL3.so.0",
+            self.workflow,
+        )
+        package_common = (SOURCE_ROOT / "scripts/lib/package_linux_common.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("PERIGEE_EXTRA_RUNTIME_LIBRARIES", package_common)
+        self.assertIn("--extra-library", package_common)
+
     def test_reusable_workflow_job_env_avoids_runner_context(self) -> None:
         job_env = re.search(r"(?ms)^    env:\n(?P<body>.*?)(?=^\s{4}steps:)", self.workflow)
         self.assertIsNotNone(job_env)
@@ -635,6 +646,22 @@ class LinuxPackagingContractTest(unittest.TestCase):
 
             self.assertEqual(stager.COPIED_SOURCES[first.resolve()], original)
             self.assertEqual(stager.COPIED_SOURCES[second.resolve()], original)
+
+    def test_extra_runtime_libraries_are_staged_before_dependency_walk(self) -> None:
+        stager = load("stage_extra_runtime_library_test", STAGE_PATH)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / "dep_root/lib/libSDL3.so.0"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"SDL3 fixture\n")
+            prefix = root / "stage/usr"
+
+            stager.COPIED_SOURCES.clear()
+            stager.collect_extra_libraries(prefix, [source])
+
+            staged = prefix / "lib/libSDL3.so.0"
+            self.assertEqual(staged.read_bytes(), source.read_bytes())
+            self.assertEqual(stager.COPIED_SOURCES[staged.resolve()], source)
 
     def test_elf_path_scrubber_preserves_length_and_removes_host_prefixes(self) -> None:
         stager = load("stage_linux_payload_path_scrubber", STAGE_PATH)

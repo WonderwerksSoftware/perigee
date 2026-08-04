@@ -298,6 +298,17 @@ def collect_libraries(prefix: pathlib.Path) -> None:
                 pending.append(destination)
 
 
+def collect_extra_libraries(prefix: pathlib.Path, sources: list[pathlib.Path]) -> None:
+    """Add runtime libraries that are loaded with dlopen instead of ELF NEEDED."""
+
+    library_root = prefix / "lib"
+    library_root.mkdir(parents=True, exist_ok=True)
+    for source in sources:
+        if not source.is_file():
+            raise PackagingError(f"missing extra runtime library: {source}")
+        copy_regular(source, library_root / source.name)
+
+
 def patch_elfs(prefix: pathlib.Path) -> None:
     library_root = prefix / "lib"
     for path in sorted(prefix.rglob("*")):
@@ -968,6 +979,7 @@ def stage(args: argparse.Namespace) -> None:
         copy_regular(desktop, root / "app.perigee_stream.Perigee.desktop")
         copy_regular(icon, root / "app.perigee_stream.Perigee.svg")
         copy_regular(icon, root / ".DirIcon")
+    collect_extra_libraries(prefix, args.extra_libraries)
     collect_libraries(prefix)
     stage_licenses(source_root, root, prefix)
     patch_elfs(prefix)
@@ -981,6 +993,14 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--destination", type=pathlib.Path, required=True)
     result.add_argument("--layout", choices=("tar", "appimage"), required=True)
     result.add_argument("--epoch", type=int, required=True)
+    result.add_argument(
+        "--extra-library",
+        dest="extra_libraries",
+        action="append",
+        type=pathlib.Path,
+        default=[],
+        help="stage a runtime library loaded through dlopen",
+    )
     return result
 
 

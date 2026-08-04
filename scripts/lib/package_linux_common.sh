@@ -115,12 +115,23 @@ perigee_stage_payload()
 {
     local layout="$1"
     local binary="$2"
+    local -a extra_library_args=()
+    local -a extra_libraries=()
+    local extra_library
     perigee_assert_native_wayland "$binary"
     perigee_reset_directory "$PERIGEE_STAGE_DIR"
+    if [ -n "${PERIGEE_EXTRA_RUNTIME_LIBRARIES:-}" ]; then
+        IFS=: read -r -a extra_libraries <<< "$PERIGEE_EXTRA_RUNTIME_LIBRARIES"
+        for extra_library in "${extra_libraries[@]}"; do
+            [ -n "$extra_library" ] || continue
+            extra_library_args+=(--extra-library "$extra_library")
+        done
+    fi
     python3 -B "$PERIGEE_SCRIPT_DIR/lib/stage_linux_payload.py" \
         --source-root "$PERIGEE_SOURCE_ROOT" \
         --binary "$binary" \
         --destination "$PERIGEE_STAGE_DIR" \
         --layout "$layout" \
-        --epoch "$SOURCE_DATE_EPOCH"
+        --epoch "$SOURCE_DATE_EPOCH" \
+        "${extra_library_args[@]}"
 }
