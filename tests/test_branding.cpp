@@ -611,9 +611,11 @@ void BrandingTest::allArtifactConsumersUsePerigeeNames()
     QVERIFY(appImageWorkflow.open(QIODevice::ReadOnly | QIODevice::Text));
     const QByteArray appImageWorkflowContents = appImageWorkflow.readAll();
     QVERIFY(appImageWorkflowContents.contains("name: Perigee-LinuxAppImage-"));
-    QVERIFY(appImageWorkflowContents.contains("path: Perigee-*-x86_64.AppImage"));
+    QVERIFY(appImageWorkflowContents.contains(
+        "path: build/artifacts-a/Perigee-*-x86_64.AppImage"));
     QVERIFY(appImageWorkflowContents.contains("name: Perigee-LinuxTar-"));
-    QVERIFY(appImageWorkflowContents.contains("path: Perigee-*-linux-x86_64.tar.zst"));
+    QVERIFY(appImageWorkflowContents.contains(
+        "path: build/artifacts-a/Perigee-*-linux-x86_64.tar.zst"));
     QVERIFY(!appImageWorkflowContents.contains(
         "Perigee-${{ env.CI_VERSION }}-x86_64.AppImage"));
 
