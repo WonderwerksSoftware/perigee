@@ -624,6 +624,16 @@ class LinuxPackagingContractTest(unittest.TestCase):
             self.assertEqual(stager.COPIED_SOURCES[first.resolve()], original)
             self.assertEqual(stager.COPIED_SOURCES[second.resolve()], original)
 
+    def test_elf_path_scrubber_preserves_length_and_removes_host_prefixes(self) -> None:
+        stager = load("stage_linux_payload_path_scrubber", STAGE_PATH)
+        payload = b"prefix /home/runner/work/perigee /tmp/perigee-build suffix"
+        scrubbed = stager.scrub_absolute_build_paths(payload)
+        self.assertEqual(len(scrubbed), len(payload))
+        self.assertNotIn(b"/home/", scrubbed)
+        self.assertNotIn(b"/tmp/", scrubbed)
+        self.assertIn(b"/src_/runner/work/perigee", scrubbed)
+        self.assertIn(b"/tmp_perigee-build", scrubbed)
+
     def test_dpkg_license_discovery_uses_same_source_sibling(self) -> None:
         stager = load("stage_dpkg_source_license_test", STAGE_PATH)
         with tempfile.TemporaryDirectory() as directory:

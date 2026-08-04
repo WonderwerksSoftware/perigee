@@ -92,6 +92,14 @@ COPIED_SOURCES: dict[pathlib.Path, pathlib.Path] = {}
 RPM_LICENSE_CACHE: dict[str, list[pathlib.Path]] = {}
 DPKG_LICENSE_CACHE: dict[str, list[pathlib.Path]] = {}
 DPKG_SOURCE_CACHE: dict[str, tuple[str, str] | None] = {}
+
+# Pinned third-party binaries can retain absolute source or build paths in
+# diagnostic strings after normal ELF stripping. Keep host paths out of the
+# release payload without changing binary offsets or section sizes.
+ABSOLUTE_BUILD_PATH_REPLACEMENTS = (
+    (b"/home/", b"/src_/"),
+    (b"/tmp/", b"/tmp_"),
+)
 PACKAGE_LICENSE_CACHE: dict[str, "PackageLicenseSource" | None] = {}
 PATH_PACKAGE_IDENTITY_CACHE: dict[tuple[str, pathlib.Path, str], tuple[str, str]] = {}
 QT_LICENSE_CACHE: dict[str, list[pathlib.Path]] = {}
@@ -309,6 +317,19 @@ def patch_elfs(prefix: pathlib.Path) -> None:
                 str(path),
             ]
         )
+        original = path.read_bytes()
+        scrubbed = scrub_absolute_build_paths(original)
+        if scrubbed != original:
+            path.write_bytes(scrubbed)
+
+
+def scrub_absolute_build_paths(data: bytes) -> bytes:
+    """Replace host-only path prefixes while preserving binary length."""
+
+    scrubbed = data
+    for source, replacement in ABSOLUTE_BUILD_PATH_REPLACEMENTS:
+        scrubbed = scrubbed.replace(source, replacement)
+    return scrubbed
 
 
 def write_text(path: pathlib.Path, text: str, mode: int = 0o644) -> None:
