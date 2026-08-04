@@ -109,6 +109,21 @@ class LinuxPackagingContractTest(unittest.TestCase):
         linux_guard = main_cpp.rfind("#ifdef Q_OS_LINUX", 0, graphics_index)
         graphics_api = main_cpp[linux_guard:graphics_index]
         self.assertIn("#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)", graphics_api)
+        renderer = (SOURCE_ROOT / "app/perigee/deck/decksurfacerenderer.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("quickWindow->setRenderTarget(framebuffer.get());", renderer)
+        self.assertIn("renderControl->initialize(context.get())", renderer)
+        self.assertRegex(
+            renderer,
+            r"#if QT_VERSION >= QT_VERSION_CHECK\(6, 0, 0\)\s+"
+            r"m_Impl->renderControl->beginFrame\(\);",
+        )
+        self.assertRegex(
+            renderer,
+            r"#if QT_VERSION >= QT_VERSION_CHECK\(6, 0, 0\)\s+"
+            r"m_Impl->renderControl->endFrame\(\);",
+        )
 
     def test_ci_installs_pinned_qt_source_license_texts(self) -> None:
         for module, digest in (

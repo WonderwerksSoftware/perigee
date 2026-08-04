@@ -17,10 +17,10 @@
 #include <QQmlError>
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QQuickGraphicsDevice>
+#include <QQuickRenderTarget>
 #endif
 #include <QQuickItem>
 #include <QQuickRenderControl>
-#include <QQuickRenderTarget>
 #include <QQuickWindow>
 #include <QSurfaceFormat>
 #include <QThread>
@@ -91,7 +91,11 @@ public:
         const bool current = context != nullptr && offscreenSurface != nullptr &&
             context->makeCurrent(offscreenSurface.get());
         if (quickWindow != nullptr) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
             quickWindow->setRenderTarget(QQuickRenderTarget());
+#else
+            quickWindow->setRenderTarget(nullptr);
+#endif
         }
         quickWindow.reset();
         renderControl.reset();
@@ -112,7 +116,11 @@ public:
             return false;
         }
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
         quickWindow->setRenderTarget(QQuickRenderTarget());
+#else
+        quickWindow->setRenderTarget(nullptr);
+#endif
         framebuffer.reset();
 
         QOpenGLFramebufferObjectFormat format;
@@ -134,11 +142,15 @@ public:
 
     void assignFramebufferRenderTarget()
     {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
         QQuickRenderTarget target =
             QQuickRenderTarget::fromOpenGLTexture(
                 framebuffer->texture(), GL_RGBA8, pixelSize);
         target.setDevicePixelRatio(devicePixelRatio);
         quickWindow->setRenderTarget(target);
+#else
+        quickWindow->setRenderTarget(framebuffer.get());
+#endif
         renderTargetDevicePixelRatio = devicePixelRatio;
     }
 
@@ -267,7 +279,12 @@ bool DeckSurfaceRenderer::initialize(QQmlEngine* engine,
     quickWindow->setGraphicsDevice(
         QQuickGraphicsDevice::fromOpenGLContext(context.get()));
 #endif
-    if (!renderControl->initialize()) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const bool renderControlInitialized = renderControl->initialize();
+#else
+    const bool renderControlInitialized = renderControl->initialize(context.get());
+#endif
+    if (!renderControlInitialized) {
         quickWindow.reset();
         renderControl.reset();
         context->doneCurrent();
@@ -385,10 +402,14 @@ bool DeckSurfaceRenderer::render(QImage* premultipliedArgb, QString* error)
     }
 
     m_Impl->renderControl->polishItems();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     m_Impl->renderControl->beginFrame();
+#endif
     m_Impl->renderControl->sync();
     m_Impl->renderControl->render();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     m_Impl->renderControl->endFrame();
+#endif
 
     // QOpenGLFramebufferObject::toImage(true) performs the sole vertical
     // mirror, converting OpenGL's bottom-left origin to QML/image coordinates.
