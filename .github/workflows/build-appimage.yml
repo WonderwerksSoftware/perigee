@@ -82,14 +82,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.QT_ROOT }}
-          key: perigee-qt-${{ runner.os }}-${{ runner.arch }}-6.8.3-aqt-3.3.0-qtdeclarative-qtsvg-qtwayland-qtvirtualkeyboard
+          key: perigee-qt-${{ runner.os }}-${{ runner.arch }}-6.8.3-aqt-3.3.0-linux-gcc-64-qtvirtualkeyboard
 
       - name: Install pinned Qt
         if: steps.qt-cache.outputs.cache-hit != 'true'
         run: |
-          aqt install-qt linux desktop 6.8.3 gcc_64 \
+          aqt install-qt linux desktop 6.8.3 linux_gcc_64 \
             -O "$QT_ROOT" \
-            -m qtdeclarative qtsvg qtwayland qtvirtualkeyboard
+            -m qtvirtualkeyboard
 
       - name: Validate Qt version
         run: |

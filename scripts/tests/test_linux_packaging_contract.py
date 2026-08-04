@@ -68,8 +68,9 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn("runs-on: ubuntu-22.04", verifier_workflow)
         self.assertIn("aqtinstall==3.3.0", self.workflow)
         self.assertIn("QT_VERSION: 6.8.3", self.workflow)
-        for module in ("qtdeclarative", "qtsvg", "qtwayland", "qtvirtualkeyboard"):
-            self.assertIn(module, self.workflow)
+        self.assertIn("aqt install-qt linux desktop 6.8.3 linux_gcc_64", self.workflow)
+        self.assertIn("-m qtvirtualkeyboard", self.workflow)
+        self.assertNotIn("6.8.3 gcc_64 \\", self.workflow)
         self.assertIn("QT_ROOT", self.workflow)
         self.assertRegex(self.workflow, r"qmake6[^\n]*-query QT_VERSION")
         self.assertIn("Perigee requires Qt 6.7 or newer", self.workflow)
