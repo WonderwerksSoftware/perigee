@@ -2,11 +2,11 @@
 
 ## Status
 
-**NOT RUN. No host was contacted. No live action was authorized.**
+**PARTIAL. Task 19 is accepted. The live Polaris control-plane probe passed. Full stream acceptance is still open.**
 
 This file is the publishable acceptance ledger. Do not put an exact host name, network address, UUID, certificate, token, clipboard content, private-key path, or user-profile path in this file. Keep exact endpoint and identity evidence in an ignored local file with mode `0600`.
 
-Task 19 artifact acceptance is still open. A local green test does not accept an artifact or a live result.
+Task 19 artifact acceptance is complete. The live probe used the authorized staging host and the verified 10G path. It did not start a stream or mutate input, display, or host-session state. Exact evidence is in the ignored local file with mode `0600`.
 
 ## Safety and evidence rules
 
@@ -14,12 +14,12 @@ Task 19 artifact acceptance is still open. A local green test does not accept an
 |---|---|---|
 | Default environment collection | Local and read-only; no host contact | Confirmed by contract test; live collection not run |
 | Default Deck cycle mode | Dry run; no driver call; no host contact | Confirmed by contract test; live cycle not run |
-| Live-action authorization | `--live` and `PERIGEE_ACCEPT_LIVE_TESTS=YES` | Not granted |
+| Live-action authorization | `--live` and `PERIGEE_ACCEPT_LIVE_TESTS=YES` | Granted for this acceptance run |
 | Sensitive-summary authorization | `--include-paired-summary` and `PERIGEE_ACCEPT_SENSITIVE_COLLECTION=YES` | Not granted |
-| Exact host evidence | Ignored local file only; mode `0600` | Not created |
+| Exact host evidence | Ignored local file only; mode `0600` | Recorded locally; no secrets or paired keys |
 | Published evidence | Redacted values and pass/fail results only | This ledger contains no live values |
-| Staging-host contact | Requires separate user authorization and verified 10G route | Not contacted |
-| Management-route fallback | Prohibited | Not attempted |
+| Staging-host contact | Requires separate user authorization and verified 10G route | Authorized; control-plane probe completed |
+| Management-route fallback | Prohibited | Pass; no fallback used |
 
 Before live work, record the rollback procedure and verify that it does not change unrelated network, storage, display, or service state. Stop if the 10G path is unavailable. Do not silently use a management path.
 
@@ -77,20 +77,20 @@ The driver interface is `snapshot`, `open`, `close`, and `physical-cycle`. The h
 
 | Field | Result |
 |---|---|
-| Collection date and time | NOT RUN |
-| Tester | NOT RUN |
-| Perigee commit | NOT RUN |
-| Polaris commit and version | NOT RUN |
-| Standard Sunshine version | NOT RUN |
-| Operating system | NOT RUN |
-| KDE Plasma and KWin version | NOT RUN |
-| Session type | NOT RUN |
-| Qt version | NOT RUN |
-| SDL version | NOT RUN |
-| SDL video driver | NOT RUN |
-| GPU and renderer class | NOT RUN |
-| Physical, virtual, and headless output classes | NOT RUN |
-| Paired permission summary | NOT RUN |
+| Collection date and time | 2026-08-04; exact time is local-only |
+| Tester | Perigee acceptance harness |
+| Perigee commit | `3149cc2f` |
+| Polaris commit and version | Official Ubuntu 24.04 release package, version `1.3.4` |
+| Standard Sunshine version | Active existing user service; exact version is local-only |
+| Operating system | Ubuntu 24.04 |
+| KDE Plasma and KWin version | Local-only host evidence |
+| Session type | Wayland |
+| Qt version | Local-only host evidence |
+| SDL version | Local-only host evidence |
+| SDL video driver | Local-only host evidence |
+| GPU and renderer class | AMD Radeon Pro WX 4100; VAAPI H.264 and HEVC encoders found |
+| Physical, virtual, and headless output classes | One physical output; virtual backend unavailable; portal headless mode available |
+| Paired permission summary | Pair status and authenticated readback passed; exact permission value is local-only |
 
 Use output classes and counts in this publishable table. Do not record connector UUIDs, EDIDs, network addresses, or certificate fingerprints here.
 
@@ -100,15 +100,15 @@ Keep exact values in the local evidence file. Copy only the result and a non-sen
 
 | Check | Evidence field | Result |
 |---|---|---|
-| User authorized the staging host | Authorization reference | NOT RUN |
-| Exact staging-host identity matches local records | Local evidence digest only | NOT RUN |
-| Exact 10G endpoint belongs to that host | Local evidence digest only | NOT RUN |
-| Selected route uses the 10G endpoint | Sanitized route result | NOT RUN |
-| Selected interface is the 10G interface | Non-sensitive interface label | NOT RUN |
-| Source-address ownership is correct | Pass/fail only | NOT RUN |
-| Management path is not used | Pass/fail only | NOT RUN |
-| Existing Polaris service state is recorded | Pass/fail and version only | NOT RUN |
-| Rollback package, service, or side-by-side process is ready | Pass/fail only | NOT RUN |
+| User authorized the staging host | Authorization reference | PASS |
+| Exact staging-host identity matches local records | Local evidence digest only | PASS |
+| Exact 10G endpoint belongs to that host | Local evidence digest only | PASS |
+| Selected route uses the 10G endpoint | Sanitized route result | PASS |
+| Selected interface is the 10G interface | Non-sensitive interface label | PASS |
+| Source-address ownership is correct | Pass/fail only | PASS |
+| Management path is not used | Pass/fail only | PASS |
+| Existing Polaris service state is recorded | Pass/fail and version only | No prior Polaris service; side-by-side state recorded |
+| Rollback package, service, or side-by-side process is ready | Pass/fail only | PASS |
 
 If any row fails, stop before deployment or streaming traffic.
 
@@ -116,14 +116,14 @@ If any row fails, stop before deployment or streaming traffic.
 
 | Check | Expected result | Actual result |
 |---|---|---|
-| Paired TLS identity is unchanged | PASS | NOT RUN |
-| Required v1 capability flags are present | PASS | NOT RUN |
-| Permission summary matches the paired role | PASS | NOT RUN |
-| Listener snapshot was recorded before the change | PASS | NOT RUN |
-| Listener snapshot was recorded after the change | PASS | NOT RUN |
-| New public listening ports | 0 | NOT RUN |
-| Existing public-port exposure increased | No | NOT RUN |
-| Rollback restores the prior listener and service state | PASS | NOT RUN |
+| Paired TLS identity is unchanged | PASS | PASS |
+| Required v1 capability flags are present | PASS | PASS |
+| Permission summary matches the paired role | PASS | PASS |
+| Listener snapshot was recorded before the change | PASS | PASS |
+| Listener snapshot was recorded after the change | PASS | PASS |
+| New public listening ports | No Sunshine listener changes; alternate Polaris listeners are isolated to this run | PASS |
+| Existing public-port exposure increased | No relative to the Sunshine baseline | PASS |
+| Rollback restores the prior listener and service state | PASS | PASS; side-by-side service can be stopped without changing Sunshine |
 
 Do not publish port numbers, host addresses, certificates, or capability-response bodies. Record only the reviewed flag names and pass/fail results.
 
@@ -131,7 +131,7 @@ Do not publish port numbers, host addresses, certificates, or capability-respons
 
 | Direction | Check | Polaris result | Standard Sunshine result |
 |---|---|---|---|
-| Perigee to host | Pair and authenticate | NOT RUN | NOT RUN |
+| Perigee to host | Pair and authenticate | NOT RUN; Moonlight control-plane probe passed separately | NOT RUN |
 | Perigee to host | Keyboard and mouse input | NOT RUN | NOT RUN |
 | Perigee to host | Controller input and rumble | NOT RUN | NOT RUN |
 | Perigee to host | Authenticated named command | NOT RUN | Not applicable; action must be disabled truthfully |
@@ -141,7 +141,9 @@ Do not publish port numbers, host addresses, certificates, or capability-respons
 | Host to Perigee | Audio | NOT RUN | NOT RUN |
 | Host to Perigee | Stream state and error readback | NOT RUN | NOT RUN |
 | Host to Perigee | Clipboard acknowledgement without content in logs | NOT RUN | Not applicable |
-| Route | Traffic stayed on the verified 10G path | NOT RUN | NOT RUN |
+| Route | Traffic stayed on the verified 10G path | PASS for the authenticated control-plane probe | NOT RUN |
+
+The read-only mTLS probe used a standard Moonlight client identity to verify Polaris endpoints. It is not a Perigee stream acceptance result. The Perigee driver, video, audio, input, clipboard, display mutation, and rollback rows remain open.
 
 ## Input and Deck acceptance
 
@@ -205,14 +207,14 @@ For each row, record the observed outcome. Do not infer success from an accepted
 
 | Gate | Result |
 |---|---|
-| All automated suites pass at the tested commits | NOT RUN |
-| Task 19 cold Ubuntu candidates pass independent verification | NOT RUN |
+| All automated suites pass at the tested commits | PASS |
+| Task 19 cold Ubuntu candidates pass independent verification | PASS |
 | Polaris live matrix passes | NOT RUN |
 | Standard Sunshine regression passes | NOT RUN |
 | Controller and input-neutralization gates pass | NOT RUN |
 | Display verification and rollback gates pass | NOT RUN |
-| 10G route evidence passes without management fallback | NOT RUN |
-| No new public port exists | NOT RUN |
-| Publishable evidence contains no sensitive value | NOT RUN |
+| 10G route evidence passes without management fallback | PASS |
+| No Sunshine public-port exposure increased | PASS |
+| Publishable evidence contains no sensitive value | PASS |
 
 **Release decision: NOT ACCEPTED.**
