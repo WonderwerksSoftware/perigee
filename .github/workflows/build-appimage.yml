@@ -29,7 +29,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     env:
-      AQT_VENV: ${{ runner.temp }}/perigee-aqt
+      AQT_VENV: ${{ github.workspace }}/.perigee-tmp/aqt
       CC: gcc
       CI_VERSION: ${{ inputs.ci_version }}
       CPATH: ${{ github.workspace }}/dep_root/include
@@ -37,9 +37,9 @@ jobs:
       DEP_ROOT: ${{ github.workspace }}/dep_root
       JOB_KIND: ${{ inputs.job_kind }}
       MESON_VERSION: 1.6.1
-      PYTHON_WHEEL_DIR: ${{ runner.temp }}/perigee-python-wheels
-      QT_DIR: ${{ runner.temp }}/perigee-qt/6.8.3/gcc_64
-      QT_ROOT: ${{ runner.temp }}/perigee-qt
+      PYTHON_WHEEL_DIR: ${{ github.workspace }}/.perigee-tmp/python-wheels
+      QT_DIR: ${{ github.workspace }}/.perigee-tmp/qt/6.8.3/gcc_64
+      QT_ROOT: ${{ github.workspace }}/.perigee-tmp/qt
       QT_VERSION: 6.8.3
 
     steps:

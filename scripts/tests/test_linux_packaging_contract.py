@@ -76,6 +76,17 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn('"$QT_DIR/bin/qmake6"', self.workflow)
         self.assertLess(self.workflow.index("Validate Qt version"), self.workflow.index("Cache immutable dependencies"))
 
+    def test_reusable_workflow_job_env_avoids_runner_context(self) -> None:
+        job_env = re.search(r"(?ms)^    env:\n(?P<body>.*?)(?=^\s{4}steps:)", self.workflow)
+        self.assertIsNotNone(job_env)
+        assert job_env is not None
+        self.assertNotIn("${{ runner.", job_env.group("body"))
+        for variable in ("AQT_VENV", "PYTHON_WHEEL_DIR", "QT_DIR", "QT_ROOT"):
+            self.assertRegex(
+                job_env.group("body"),
+                re.compile(rf"^      {variable}: \$\{{\{{ github\.workspace \}}\}}/", re.MULTILINE),
+            )
+
     def test_ci_installs_and_gates_a_pinned_supported_meson(self) -> None:
         self.assertIn("MESON_VERSION: 1.6.1", self.workflow)
         self.assertIn('meson=="$MESON_VERSION"', self.workflow)
