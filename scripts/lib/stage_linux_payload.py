@@ -90,6 +90,8 @@ class PackagingError(RuntimeError):
 
 COPIED_SOURCES: dict[pathlib.Path, pathlib.Path] = {}
 RPM_LICENSE_CACHE: dict[str, list[pathlib.Path]] = {}
+DPKG_LICENSE_CACHE: dict[str, list[pathlib.Path]] = {}
+DPKG_SOURCE_CACHE: dict[str, tuple[str, str] | None] = {}
 PACKAGE_LICENSE_CACHE: dict[str, "PackageLicenseSource" | None] = {}
 PATH_PACKAGE_IDENTITY_CACHE: dict[tuple[str, pathlib.Path, str], tuple[str, str]] = {}
 QT_LICENSE_CACHE: dict[str, list[pathlib.Path]] = {}
@@ -442,6 +444,80 @@ def rpm_license_files(package: str) -> list[pathlib.Path]:
     return result
 
 
+def dpkg_direct_license_files(package: str) -> list[pathlib.Path]:
+    listing = subprocess.run(
+        ["dpkg-query", "-L", package],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if listing.returncode != 0:
+        return []
+    return sorted(
+        {
+            pathlib.Path(line)
+            for line in listing.stdout.splitlines()
+            if pathlib.Path(line).is_file()
+            and (line.endswith("/copyright") or "/licenses/" in line)
+        }
+    )
+
+
+def dpkg_source_identity(package: str) -> tuple[str, str] | None:
+    if package in DPKG_SOURCE_CACHE:
+        return DPKG_SOURCE_CACHE[package]
+    result = subprocess.run(
+        ["dpkg-query", "-W", "-f=${source:Package}\t${source:Version}", package],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    fields = result.stdout.strip().split("\t")
+    identity = (
+        (fields[0], fields[1])
+        if result.returncode == 0 and len(fields) == 2 and all(fields)
+        else None
+    )
+    DPKG_SOURCE_CACHE[package] = identity
+    return identity
+
+
+def dpkg_license_files(package: str) -> list[pathlib.Path]:
+    if package in DPKG_LICENSE_CACHE:
+        return DPKG_LICENSE_CACHE[package]
+    licenses = dpkg_direct_license_files(package)
+    if not licenses:
+        expected_source = dpkg_source_identity(package)
+        installed = subprocess.run(
+            [
+                "dpkg-query",
+                "-W",
+                "-f=${binary:Package}\t${source:Package}\t${source:Version}\n",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        if expected_source is not None and installed.returncode == 0:
+            candidates: list[str] = []
+            for line in installed.stdout.splitlines():
+                fields = line.split("\t")
+                if (
+                    len(fields) == 3
+                    and (fields[1], fields[2]) == expected_source
+                    and fields[0] != package
+                ):
+                    candidates.append(fields[0])
+            for candidate in sorted(set(candidates)):
+                licenses.extend(dpkg_direct_license_files(candidate))
+    result = sorted(set(licenses))
+    DPKG_LICENSE_CACHE[package] = result
+    return result
+
+
 def package_license_files(source: pathlib.Path) -> PackageLicenseSource | None:
     # Ubuntu's merged-/usr layout exposes libraries through both /lib and
     # /usr/lib, but the dpkg database contains a mixture of both spellings.
@@ -530,12 +606,7 @@ def package_license_files(source: pathlib.Path) -> PackageLicenseSource | None:
             listed_paths = set(listing.stdout.splitlines())
             if query_path.as_posix() not in listed_paths:
                 continue
-            licenses = [
-                pathlib.Path(line)
-                for line in listed_paths
-                if pathlib.Path(line).is_file()
-                and (line.endswith("/copyright") or "/licenses/" in line)
-            ]
+            licenses = dpkg_license_files(package)
             if not licenses:
                 raise PackagingError(f"package has no standalone license files: {package}")
             version = subprocess.run(
@@ -852,6 +923,8 @@ def stage(args: argparse.Namespace) -> None:
     global QT_LICENSE_CACHE
     COPIED_SOURCES.clear()
     RPM_LICENSE_CACHE.clear()
+    DPKG_LICENSE_CACHE.clear()
+    DPKG_SOURCE_CACHE.clear()
     PACKAGE_LICENSE_CACHE.clear()
     PATH_PACKAGE_IDENTITY_CACHE.clear()
     QT_LICENSE_CACHE = {}

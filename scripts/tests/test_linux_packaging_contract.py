@@ -624,6 +624,73 @@ class LinuxPackagingContractTest(unittest.TestCase):
             self.assertEqual(stager.COPIED_SOURCES[first.resolve()], original)
             self.assertEqual(stager.COPIED_SOURCES[second.resolve()], original)
 
+    def test_dpkg_license_discovery_uses_same_source_sibling(self) -> None:
+        stager = load("stage_dpkg_source_license_test", STAGE_PATH)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            library = root / "usr/lib/libfixture.so.1"
+            library.parent.mkdir(parents=True)
+            library.write_bytes(b"fixture library\n")
+            copyright_file = root / "usr/share/doc/fixture/copyright"
+            copyright_file.parent.mkdir(parents=True)
+            copyright_file.write_text("Fixture license\n", encoding="utf-8")
+
+            def query(command: list[str], **_kwargs: object) -> mock.Mock:
+                if command == ["dpkg-query", "-S", str(library)]:
+                    return mock.Mock(
+                        returncode=0,
+                        stdout=f"libfixture:amd64: {library}\n",
+                        stderr="",
+                    )
+                if command == ["dpkg-query", "-L", "libfixture:amd64"]:
+                    return mock.Mock(returncode=0, stdout=f"{library}\n", stderr="")
+                if command == [
+                    "dpkg-query",
+                    "-W",
+                    "-f=${source:Package}\t${source:Version}",
+                    "libfixture:amd64",
+                ]:
+                    return mock.Mock(returncode=0, stdout="fixture-source\t1.0-1", stderr="")
+                if command == [
+                    "dpkg-query",
+                    "-W",
+                    "-f=${binary:Package}\t${source:Package}\t${source:Version}\n",
+                ]:
+                    return mock.Mock(
+                        returncode=0,
+                        stdout=(
+                            "libfixture:amd64\tfixture-source\t1.0-1\n"
+                            "fixture-license:all\tfixture-source\t1.0-1\n"
+                        ),
+                        stderr="",
+                    )
+                if command == ["dpkg-query", "-L", "fixture-license:all"]:
+                    return mock.Mock(returncode=0, stdout=f"{copyright_file}\n", stderr="")
+                if command == [
+                    "dpkg-query",
+                    "-W",
+                    "-f=${Version}",
+                    "libfixture:amd64",
+                ]:
+                    return mock.Mock(returncode=0, stdout="1.0-1", stderr="")
+                raise AssertionError(command)
+
+            def which(command: str) -> str | None:
+                return "/usr/bin/dpkg-query" if command == "dpkg-query" else None
+
+            stager.PACKAGE_LICENSE_CACHE.clear()
+            stager.DPKG_LICENSE_CACHE.clear()
+            stager.DPKG_SOURCE_CACHE.clear()
+            with mock.patch.object(stager.shutil, "which", side_effect=which), mock.patch.object(
+                stager.subprocess, "run", side_effect=query
+            ):
+                package = stager.package_license_files(library)
+
+            self.assertIsNotNone(package)
+            assert package is not None
+            self.assertEqual(package.package, "libfixture:amd64")
+            self.assertEqual(package.licenses, (copyright_file,))
+
     def test_stager_and_verifier_share_the_graphics_policy(self) -> None:
         stage = load("stage_policy_test", STAGE_PATH)
         verify = load("verify_policy_test", VERIFY_PATH)

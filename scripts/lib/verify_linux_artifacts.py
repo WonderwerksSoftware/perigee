@@ -195,6 +195,15 @@ def run_dpkg_query(arguments: list[str]) -> str:
     return result.stdout
 
 
+def dpkg_source_identity(package: str) -> tuple[str, str] | None:
+    fields = run_dpkg_query(
+        ["-W", "-f=${source:Package}\t${source:Version}", package]
+    ).strip().split("\t")
+    if len(fields) != 2 or not all(fields):
+        return None
+    return fields[0], fields[1]
+
+
 def dpkg_owners(path: pathlib.Path) -> set[str]:
     output = run_dpkg_query(["-S", path.as_posix()])
     return {
@@ -890,6 +899,7 @@ def verify_system_component_provenance(
     if package_cache is None:
         package_cache = {}
     rpm_source_cache: dict[str, str] = {}
+    dpkg_source_cache: dict[str, tuple[str, str] | None] = {}
 
     def owners_for(manager_name: str, path: pathlib.Path) -> set[str]:
         key = (manager_name, path)
@@ -927,6 +937,11 @@ def verify_system_component_provenance(
                 fail(f"system provenance package has no source RPM: {component}")
             rpm_source_cache[package_name] = source_package
         return rpm_source_cache[package_name]
+
+    def dpkg_source_package(package_name: str) -> tuple[str, str] | None:
+        if package_name not in dpkg_source_cache:
+            dpkg_source_cache[package_name] = dpkg_source_identity(package_name)
+        return dpkg_source_cache[package_name]
 
     if not rows:
         fail(f"missing system license provenance: {component}")
@@ -979,7 +994,10 @@ def verify_system_component_provenance(
             same_source_rpm = manager == "rpm" and rpm_source_package(
                 package
             ) == rpm_source_package(row.license_package)
-            if not same_source_rpm:
+            same_source_dpkg = manager == "dpkg" and dpkg_source_package(
+                package
+            ) == dpkg_source_package(row.license_package)
+            if not (same_source_rpm or same_source_dpkg):
                 fail(f"system provenance license is unrelated to package: {component}")
         if not row.license_source.is_file():
             fail(f"system provenance license is missing: {component}")

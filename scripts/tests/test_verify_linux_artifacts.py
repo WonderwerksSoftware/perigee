@@ -589,6 +589,42 @@ class VerifyLinuxArtifactsTest(unittest.TestCase):
                         fixture["license_root"],
                     )
 
+    def test_dpkg_system_license_provenance_accepts_same_source_license_owner(self) -> None:
+        fixture = system_provenance_fixture(self.root / "dpkg-split-owner", "dpkg")
+        row = fixture["row"]._replace(
+            license_package="fixture-license:all",
+            license_version="1.0-1",
+        )
+
+        def query(arguments: list[str]) -> str:
+            if arguments[:1] == ["-S"]:
+                return (
+                    f"{row.package}: {fixture['provider']}\n"
+                    if arguments[1] == str(fixture["provider"])
+                    else f"{row.license_package}: {fixture['license_source']}\n"
+                )
+            if arguments[:2] == ["-W", "-f=${Version}"]:
+                return "1.0-1"
+            if arguments[:2] == ["-W", "-f=${source:Package}\t${source:Version}"]:
+                return "fixture-source\t1.0-1"
+            if arguments[:1] == ["-L"]:
+                return (
+                    f"{fixture['provider']}\n"
+                    if arguments[1] == row.package
+                    else f"{fixture['license_source']}\n"
+                )
+            raise AssertionError(arguments)
+
+        with mock.patch.object(VERIFY, "run_dpkg_query", side_effect=query):
+            VERIFY.verify_system_component_provenance(
+                fixture["payload_root"],
+                fixture["component"],
+                [fixture["payload_elf"]],
+                [fixture["packaged_path"]],
+                [row],
+                fixture["license_root"],
+            )
+
     def test_rpm_system_provenance_accepts_split_license_owner(self) -> None:
         fixture = system_provenance_fixture(self.root / "rpm-split-owner", "rpm")
         row = fixture["row"]._replace(
