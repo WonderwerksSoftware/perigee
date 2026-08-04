@@ -52,6 +52,7 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertRegex(self.workflow, r"\[\[ \"\$APPIMAGE_RUNTIME_SHA256\" =~ \^\[0-9a-f\]\{64\}\$ \]\]")
 
     def test_ci_build_inputs_and_native_wayland_assertion_are_present(self) -> None:
+        self.assertIn("attr", self.ubuntu_packages)
         self.assertIn("libwayland-dev", self.ubuntu_packages)
         self.assertRegex(self.workflow, r"configure[^\n]*--enable-x11[^\n]*--enable-wayland[^\n]*--enable-drm")
         self.assertNotIn("libshaderc-dev", self.workflow)
