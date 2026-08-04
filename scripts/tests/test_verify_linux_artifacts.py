@@ -1042,6 +1042,15 @@ class VerifyLinuxArtifactsTest(unittest.TestCase):
             with self.assertRaisesRegex(VERIFY.VerificationError, "timed out"):
                 VERIFY.verify_version(slow, "Perigee 0.1.0", self.root / "slow-home")
 
+    def test_version_failure_reports_return_code_and_stderr(self) -> None:
+        failing = self.root / "failing-version"
+        write(failing, b"#!/bin/sh\nprintf 'fixture failure\\n' >&2\nexit 7\n", 0o755)
+        with self.assertRaisesRegex(
+            VERIFY.VerificationError,
+            r"packaged --version command failed \(7\): failing-version: fixture failure",
+        ):
+            VERIFY.verify_version(failing, "Perigee 0.1.0", self.root / "failing-home")
+
     def test_whole_appimage_version_sets_extract_and_run(self) -> None:
         appimage = self.root / "Perigee-0.1.0-x86_64.AppImage"
         write(

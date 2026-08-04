@@ -1335,7 +1335,7 @@ def verify_version(executable: pathlib.Path, expected: str, work_root: pathlib.P
             error_output = error_output[-240:]
         detail = f": {error_output}" if error_output else ""
         fail(
-            f"packaged --version command failed ({result.returncode}): "
+            f"packaged --version command failed ({returncode}): "
             f"{executable.name}{detail}"
         )
     try:
