@@ -37,7 +37,7 @@ jobs:
       DEP_ROOT: ${{ github.workspace }}/dep_root
       JOB_KIND: ${{ inputs.job_kind }}
       MESON_VERSION: 1.6.1
-      PERIGEE_EXTRA_RUNTIME_LIBRARIES: ${{ github.workspace }}/dep_root/lib/libSDL3.so.0
+      PERIGEE_EXTRA_RUNTIME_LIBRARIES: ${{ github.workspace }}/dep_root/lib/libSDL3.so.0:/usr/lib/x86_64-linux-gnu/libssl.so.3:/usr/lib/x86_64-linux-gnu/libcrypto.so.3
       PYTHON_WHEEL_DIR: ${{ github.workspace }}/.perigee-tmp/python-wheels
       QT_DIR: ${{ github.workspace }}/.perigee-tmp/qt/6.8.3/gcc_64
       QT_ROOT: ${{ github.workspace }}/.perigee-tmp/qt

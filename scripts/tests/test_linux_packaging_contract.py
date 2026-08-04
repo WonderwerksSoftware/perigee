@@ -261,9 +261,9 @@ class LinuxPackagingContractTest(unittest.TestCase):
             self.workflow,
         )
 
-    def test_ci_stages_sdl3_for_sdl2_compat_runtime_loading(self) -> None:
+    def test_ci_stages_dlopen_runtime_libraries_for_clean_launch(self) -> None:
         self.assertIn(
-            "PERIGEE_EXTRA_RUNTIME_LIBRARIES: ${{ github.workspace }}/dep_root/lib/libSDL3.so.0",
+            "PERIGEE_EXTRA_RUNTIME_LIBRARIES: ${{ github.workspace }}/dep_root/lib/libSDL3.so.0:/usr/lib/x86_64-linux-gnu/libssl.so.3:/usr/lib/x86_64-linux-gnu/libcrypto.so.3",
             self.workflow,
         )
         package_common = (SOURCE_ROOT / "scripts/lib/package_linux_common.sh").read_text(
