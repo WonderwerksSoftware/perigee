@@ -94,11 +94,12 @@ DPKG_LICENSE_CACHE: dict[str, list[pathlib.Path]] = {}
 DPKG_SOURCE_CACHE: dict[str, tuple[str, str] | None] = {}
 
 # Pinned third-party binaries can retain absolute source or build paths in
-# diagnostic strings after normal ELF stripping. Keep host paths out of the
-# release payload without changing binary offsets or section sizes.
+# diagnostic strings after normal ELF stripping. Keep host build paths out of
+# the release payload without changing binary offsets or section sizes. Do
+# not rewrite ordinary /tmp/ runtime paths: Qt, X11, Kerberos, and FFmpeg use
+# those paths as real defaults.
 ABSOLUTE_BUILD_PATH_REPLACEMENTS = (
     (b"/home/", b"/src_/"),
-    (b"/tmp/", b"/tmp_"),
 )
 PACKAGE_LICENSE_CACHE: dict[str, "PackageLicenseSource" | None] = {}
 PATH_PACKAGE_IDENTITY_CACHE: dict[tuple[str, pathlib.Path, str], tuple[str, str]] = {}

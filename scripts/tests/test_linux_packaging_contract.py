@@ -630,9 +630,8 @@ class LinuxPackagingContractTest(unittest.TestCase):
         scrubbed = stager.scrub_absolute_build_paths(payload)
         self.assertEqual(len(scrubbed), len(payload))
         self.assertNotIn(b"/home/", scrubbed)
-        self.assertNotIn(b"/tmp/", scrubbed)
         self.assertIn(b"/src_/runner/work/perigee", scrubbed)
-        self.assertIn(b"/tmp_perigee-build", scrubbed)
+        self.assertIn(b"/tmp/perigee-build", scrubbed)
 
     def test_dpkg_license_discovery_uses_same_source_sibling(self) -> None:
         stager = load("stage_dpkg_source_license_test", STAGE_PATH)
