@@ -185,6 +185,7 @@ private slots:
     void rendersControllerLayoutReferencePngs();
     void rendersAndPublishesOwnedArgbSurface();
     void realPointerEventSelectsCategoryThroughRenderer();
+    void pointerPressMovesActionFocusBeforeRelease();
     void realTextInputCommitsThroughRenderer();
 };
 
@@ -968,6 +969,49 @@ void DeckQmlTest::realPointerEventSelectsCategoryThroughRenderer()
 
     QTRY_COMPARE(controller.activeCategory(), 1);
     QCOMPARE(controller.focusRegion(), DeckController::CategoriesRegion);
+}
+
+void DeckQmlTest::pointerPressMovesActionFocusBeforeRelease()
+{
+    DeckQmlHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.first"), state(true));
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.second"), state(true));
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.first"), QStringLiteral("First"),
+                   ActionCategory::Display),
+        descriptor(QStringLiteral("display.second"), QStringLiteral("Second"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+    QCOMPARE(focusedActionId(controller.actionModel()),
+             QStringLiteral("display.first"));
+
+    QQmlEngine engine;
+    DeckSurfaceRenderer renderer;
+    QString error;
+    QImage image;
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    renderer.resize(QSize(960, 540), 1.0);
+    QVERIFY2(renderer.render(&image, &error), qPrintable(error));
+
+    // The second action row begins below the first 62px row and 6px gap.
+    const QPointF secondActionCenter(480.0, 257.0);
+    QMouseEvent press(QEvent::MouseButtonPress, secondActionCenter,
+                      secondActionCenter, secondActionCenter,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QVERIFY(renderer.sendPointerEvent(&press));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+
+    QCOMPARE(focusedActionId(controller.actionModel()),
+             QStringLiteral("display.second"));
 }
 
 void DeckQmlTest::realTextInputCommitsThroughRenderer()

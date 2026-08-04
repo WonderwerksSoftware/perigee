@@ -104,6 +104,7 @@ Rectangle {
         enabled: actionEnabled
         hoverEnabled: true
         onEntered: row.pointed()
+        onPressed: row.pointed()
         onClicked: row.chosen()
     }
 }

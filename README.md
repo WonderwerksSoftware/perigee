@@ -32,7 +32,7 @@ Polaris is the primary host for enhanced controls. Standard Sunshine hosts keep 
 - Show controller glyphs for Xbox, PlayStation, Nintendo, and Steam Deck layouts.
 - Preserve ordinary Moonlight shortcuts and controller input while Deck is closed.
 
-Automated tests cover these features with local fixtures and a fake Polaris service. The cold Linux artifact gate is green. A live Polaris control-plane probe and a bounded Perigee stream smoke passed on the authorized staging path; full decoded-frame, input, display, controller, and standard Sunshine acceptance remain open.
+Automated tests cover these features with local fixtures and a fake Polaris service. The cold Linux artifact gate is green. A live Polaris control-plane probe and a bounded Standard Sunshine stream smoke passed on the authorized staging path, including H.264 decode and first video/audio packets. Input, display, controller, recovery, and full Polaris stream acceptance remain open.
 
 See the [live acceptance ledger](docs/testing/live-acceptance-2026-08.md) for the current release gate. It contains redacted results only. Exact host evidence stays in an ignored local file.
 
@@ -45,7 +45,7 @@ See the [live acceptance ledger](docs/testing/live-acceptance-2026-08.md) for th
 - Polaris display and command controls require the companion paired-client control endpoints.
 - The automatic Moonlight update feed is disabled. Perigee 0.1.0 has no replacement update feed.
 - Perigee release artifacts do not exist yet. Build the current source for development use.
-- Live Polaris, Sunshine, controller, multi-display, and KDE Wayland acceptance is pending.
+- Live Polaris, controller, multi-display, and KDE Wayland acceptance is pending. Standard Sunshine launch and bounded video/audio smoke have been verified; Deck input acceptance is still pending.
 - Windows and macOS packaging inputs use the Perigee identity. Native release qualification is pending.
 - Flatpak packaging is not part of version 0.1.0.
 - Existing translation catalogs have not received a complete Perigee terminology update.
@@ -208,7 +208,7 @@ Perigee keeps the inherited GameStream-compatible streaming path for standard [S
 
 Local Deck actions remain available without Polaris. Polaris-only actions are hidden or disabled when the host does not advertise them.
 
-Automated regression tests cover the fallback boundary. Live standard Sunshine regression testing is pending.
+Automated regression tests cover the fallback boundary. A bounded live Standard Sunshine launch and video/audio smoke passed; keyboard, mouse, controller, Deck, statistics, and disconnect/quit acceptance remain open.
 
 ## Contributing
 

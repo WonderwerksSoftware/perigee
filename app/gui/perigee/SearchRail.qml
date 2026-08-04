@@ -155,6 +155,7 @@ FocusScope {
 
                     MouseArea {
                         anchors.fill: parent
+                        onPressed: categoryRail.forceActiveFocus()
                         onClicked: {
                             deckController.selectCategory(index)
                             categoryRail.forceActiveFocus()
