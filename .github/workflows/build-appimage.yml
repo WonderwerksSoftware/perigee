@@ -118,6 +118,27 @@ jobs:
           test -f "$QT_DIR/plugins/platforms/libqwayland-egl.so"
           test -d "$QT_DIR/plugins/imageformats"
 
+      - name: Install pinned Qt source license texts
+        env:
+          QT_SOURCE_LICENSE_SHA256: 56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80
+          QT_SOURCE_LICENSE_URL: https://download.qt.io/official_releases/qt/6.8/6.8.3/submodules/qtbase-everywhere-src-6.8.3.tar.xz
+        run: |
+          archive="$RUNNER_TEMP/qtbase-everywhere-src-6.8.3.tar.xz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "$QT_SOURCE_LICENSE_URL" \
+            --output "$archive"
+          printf '%s  %s\n' \
+            "$QT_SOURCE_LICENSE_SHA256" \
+            "$archive" | sha256sum --check --strict
+          mkdir -p -- "$QT_DIR/LICENSES"
+          tar --extract --xz \
+            --file "$archive" \
+            --directory "$QT_DIR/LICENSES" \
+            --strip-components=2 \
+            'qtbase-everywhere-src-6.8.3/LICENSES/*'
+          test -f "$QT_DIR/LICENSES/LicenseRef-Qt-Commercial.txt"
+          test -f "$QT_DIR/LICENSES/LGPL-3.0-only.txt"
+
       - name: Validate pinned Meson version
         run: |
           test "$(command -v meson)" = "$AQT_VENV/bin/meson" || {
@@ -244,6 +265,7 @@ jobs:
             qmake6 -query QT_VERSION
             qmake6 -query QT_INSTALL_PREFIX
             printf '%s\n' 'qtvirtualkeyboard (base archives: qtbase qtsvg qtdeclarative qtwayland)'
+            printf '%s\n' 'qtbase source license archive sha256 56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80'
             dpkg-query -W -f='${Package}=${Version}\n' | LC_ALL=C sort
             "$AQT_VENV/bin/pip" freeze --all | LC_ALL=C sort
             (

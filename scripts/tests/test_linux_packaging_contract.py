@@ -100,6 +100,27 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn('"$QT_DIR/bin/qmake6"', self.workflow)
         self.assertLess(self.workflow.index("Validate Qt version"), self.workflow.index("Cache immutable dependencies"))
 
+    def test_ci_installs_pinned_qt_source_license_texts(self) -> None:
+        self.assertIn(
+            "QT_SOURCE_LICENSE_URL: https://download.qt.io/official_releases/qt/6.8/6.8.3/submodules/qtbase-everywhere-src-6.8.3.tar.xz",
+            self.workflow,
+        )
+        self.assertIn(
+            "QT_SOURCE_LICENSE_SHA256: 56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80",
+            self.workflow,
+        )
+        self.assertIn("Install pinned Qt source license texts", self.workflow)
+        self.assertIn('mkdir -p -- "$QT_DIR/LICENSES"', self.workflow)
+        self.assertIn("sha256sum --check --strict", self.workflow)
+        self.assertIn("tar --extract --xz", self.workflow)
+        self.assertIn("qtbase-everywhere-src-6.8.3/LICENSES/*", self.workflow)
+        self.assertIn('test -f "$QT_DIR/LICENSES/LicenseRef-Qt-Commercial.txt"', self.workflow)
+        self.assertIn("qtbase source license archive sha256 56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80", self.workflow)
+        self.assertLess(
+            self.workflow.index("Install pinned Qt source license texts"),
+            self.workflow.index("Validate pinned Meson version"),
+        )
+
     def test_ci_exports_architecture_specific_runtime_libraries_for_spawned_app(self) -> None:
         self.assertIn(
             "LD_LIBRARY_PATH=%s/lib:%s/lib/x86_64-linux-gnu:%s/lib",
