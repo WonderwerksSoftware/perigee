@@ -216,7 +216,7 @@ private slots:
     void rendersControllerLayoutReferencePngs();
     void rendersAndPublishesOwnedArgbSurface();
     void realPointerEventSelectsCategoryThroughRenderer();
-    void pointerPressMovesActionFocusBeforeRelease();
+    void pointerClickActivatesActionAfterFocus();
     void realTextInputCommitsThroughRenderer();
 };
 
@@ -1090,7 +1090,7 @@ void DeckQmlTest::realPointerEventSelectsCategoryThroughRenderer()
     QCOMPARE(controller.focusRegion(), DeckController::CategoriesRegion);
 }
 
-void DeckQmlTest::pointerPressMovesActionFocusBeforeRelease()
+void DeckQmlTest::pointerClickActivatesActionAfterFocus()
 {
     DeckQmlHostAdapter adapter;
     adapter.currentSnapshot.actionStates.insert(
@@ -1131,6 +1131,14 @@ void DeckQmlTest::pointerPressMovesActionFocusBeforeRelease()
 
     QCOMPARE(focusedActionId(controller.actionModel()),
              QStringLiteral("display.second"));
+
+    QMouseEvent release(QEvent::MouseButtonRelease, secondActionCenter,
+                        secondActionCenter, secondActionCenter,
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QVERIFY(renderer.sendPointerEvent(&release));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    QCOMPARE(adapter.executedActionIds,
+             QStringList({QStringLiteral("display.second")}));
 }
 
 void DeckQmlTest::realTextInputCommitsThroughRenderer()
