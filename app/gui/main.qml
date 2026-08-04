@@ -5,13 +5,13 @@ import QtQuick.Window 2.2
 import QtQuick.Controls.Material 2.2
 
 import ComputerManager 1.0
-import AutoUpdateChecker 1.0
 import StreamingPreferences 1.0
 import SystemProperties 1.0
 import SdlGamepadKeyNavigation 1.0
 
 ApplicationWindow {
     property bool pollingActive: false
+    property bool startupComplete: false
 
     // Set by SettingsView to force the back operation to pop all
     // pages except the initial view. This is required when doing
@@ -19,6 +19,7 @@ ApplicationWindow {
     property bool clearOnBack: false
 
     id: window
+    title: applicationWindowTitle
     width: 1280
     height: 600
 
@@ -34,7 +35,15 @@ ApplicationWindow {
         SdlGamepadKeyNavigation.enable()
     }
 
-    Component.onCompleted: {
+    function startMainUi() {
+        if (startupComplete || MoonlightSettingsImport.decisionRequired) {
+            return
+        }
+        startupComplete = true
+        StreamingPreferences.retranslate()
+        doEarlyInit()
+        stackView.push(initialView)
+
         // Show the window according to the user's preferences
         if (SystemProperties.hasDesktopEnvironment) {
             if (StreamingPreferences.uiDisplayMode == StreamingPreferences.UI_MAXIMIZED) {
@@ -50,6 +59,14 @@ ApplicationWindow {
             window.showFullScreen()
         }
 
+        // The import prompt can make the window visible before startup.
+        // Start focus-dependent services after the user makes a choice.
+        if (window.visible && window.active && !pollingActive) {
+            ComputerManager.startPolling()
+            pollingActive = true
+        }
+        SdlGamepadKeyNavigation.notifyWindowFocus(window.visible && window.active)
+
         // Display any modal dialogs for configuration warnings
         if (runConfigChecks) {
             if (SystemProperties.isWow64) {
@@ -60,6 +77,22 @@ ApplicationWindow {
             SystemProperties.hasHardwareAccelerationChanged.connect(hasHardwareAccelerationChanged)
             SystemProperties.unmappedGamepadsChanged.connect(hasUnmappedGamepadsChanged)
             SystemProperties.startAsyncLoad()
+        }
+    }
+
+    Component.onCompleted: {
+        if (MoonlightSettingsImport.decisionRequired) {
+            window.show()
+            moonlightImportDialog.open()
+        }
+        else {
+            startMainUi()
+        }
+    }
+
+    onClosing: function(close) {
+        if (MoonlightSettingsImport.decisionRequired) {
+            MoonlightSettingsImport.declineImport()
         }
     }
 
@@ -111,13 +144,6 @@ ApplicationWindow {
         anchors.fill: parent
         focus: true
 
-        Component.onCompleted: {
-            // Perform our early initialization before constructing
-            // the initial view and pushing it to the StackView
-            doEarlyInit()
-            push(initialView)
-        }
-
         onCurrentItemChanged: {
             // Ensure focus travels to the next view when going back
             if (currentItem) {
@@ -156,14 +182,14 @@ ApplicationWindow {
     }
 
     // This timer keeps us polling for 5 minutes of inactivity
-    // to allow the user to work with Moonlight on a second display
+    // to allow the user to work with Perigee on a second display
     // while dealing with configuration issues. This will ensure
-    // machines come online even if the input focus isn't on Moonlight.
+    // machines come online even if the input focus isn't on Perigee.
     Timer {
         id: inactivityTimer
         interval: 5 * 60000
         onTriggered: {
-            if (!active && pollingActive) {
+            if (startupComplete && !active && pollingActive) {
                 ComputerManager.stopPollingAsync()
                 pollingActive = false
             }
@@ -171,6 +197,10 @@ ApplicationWindow {
     }
 
     onVisibleChanged: {
+        if (!startupComplete) {
+            return
+        }
+
         // When we become invisible while streaming is going on,
         // stop polling immediately.
         if (!visible) {
@@ -197,6 +227,10 @@ ApplicationWindow {
     }
 
     onActiveChanged: {
+        if (!startupComplete) {
+            return
+        }
+
         if (active) {
             // Stop the inactivity timer
             inactivityTimer.stop()
@@ -243,7 +277,7 @@ ApplicationWindow {
             id: titleLabel
             visible: toolBar.width > 700
             anchors.fill: parent
-            text: stackView.currentItem.objectName
+            text: stackView.currentItem ? stackView.currentItem.objectName : applicationWindowTitle
             font.pointSize: 20
             elide: Label.ElideRight
             horizontalAlignment: Qt.AlignHCenter
@@ -282,7 +316,8 @@ ApplicationWindow {
                 // We need this label to always be visible so it can occupy
                 // the remaining space in the RowLayout. To "hide" it, we
                 // just set the text to empty string.
-                text: !titleLabel.visible ? stackView.currentItem.objectName : ""
+                text: !titleLabel.visible && stackView.currentItem
+                      ? stackView.currentItem.objectName : ""
             }
 
             Label {
@@ -304,7 +339,7 @@ ApplicationWindow {
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Join our community on Discord")
+                ToolTip.text: qsTr("Open the upstream Moonlight community on Discord")
 
                 // TODO need to make sure browser is brought to foreground.
                 onClicked: Qt.openUrlExternally("https://moonlight-stream.org/discord");
@@ -341,44 +376,6 @@ ApplicationWindow {
             }
 
             NavigableToolButton {
-                property string browserUrl: ""
-
-                id: updateButton
-
-                iconSource: "qrc:/res/update.svg"
-
-                ToolTip.delay: 1000
-                ToolTip.timeout: 3000
-                ToolTip.visible: hovered || visible
-
-                // Invisible until we get a callback notifying us that
-                // an update is available
-                visible: false
-
-                onClicked: {
-                    if (SystemProperties.hasBrowser) {
-                        Qt.openUrlExternally(browserUrl);
-                    }
-                }
-
-                function updateAvailable(version, url)
-                {
-                    ToolTip.text = qsTr("Update available for Moonlight: Version %1").arg(version)
-                    updateButton.browserUrl = url
-                    updateButton.visible = true
-                }
-
-                Component.onCompleted: {
-                    AutoUpdateChecker.onUpdateAvailable.connect(updateAvailable)
-                    AutoUpdateChecker.start()
-                }
-
-                Keys.onDownPressed: {
-                    stackView.currentItem.forceActiveFocus(Qt.TabFocus)
-                }
-            }
-
-            NavigableToolButton {
                 id: helpButton
                 visible: SystemProperties.hasBrowser
 
@@ -387,7 +384,7 @@ ApplicationWindow {
                 ToolTip.delay: 1000
                 ToolTip.timeout: 3000
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Help") + (helpShortcut.nativeText ? (" ("+helpShortcut.nativeText+")") : "")
+                ToolTip.text: qsTr("Open the upstream Moonlight setup guide") + (helpShortcut.nativeText ? (" ("+helpShortcut.nativeText+")") : "")
 
                 Shortcut {
                     id: helpShortcut
@@ -448,35 +445,57 @@ ApplicationWindow {
 
     ErrorMessageDialog {
         id: noHwDecoderDialog
-        text: qsTr("No functioning hardware accelerated video decoder was detected by Moonlight. " +
+        text: qsTr("No functioning hardware accelerated video decoder was detected by Perigee. " +
                    "Your streaming performance may be severely degraded in this configuration.")
-        helpText: qsTr("Click the Help button for more information on solving this problem.")
+        helpText: qsTr("Click the Help button to open the upstream Moonlight hardware-decoding guide.")
         helpUrl: "https://github.com/moonlight-stream/moonlight-docs/wiki/Fixing-Hardware-Decoding-Problems"
+    }
+
+    NavigableMessageDialog {
+        id: moonlightImportDialog
+        standardButtons: Dialog.Yes | Dialog.No
+        preferRejectButton: true
+        closePolicy: Popup.CloseOnEscape
+        text: qsTr("Import your streaming preferences and paired hosts from Moonlight Qt?")
+
+        onAccepted: {
+            if (MoonlightSettingsImport.acceptImport()) {
+                startMainUi()
+            }
+            else {
+                Qt.quit()
+            }
+        }
+        onRejected: {
+            if (MoonlightSettingsImport.declineImport()) {
+                startMainUi()
+            }
+            else {
+                Qt.quit()
+            }
+        }
     }
 
     ErrorMessageDialog {
         id: xWaylandDialog
         text: qsTr("Hardware acceleration doesn't work on XWayland. Continuing on XWayland may result in poor streaming performance. " +
                    "Try running with QT_QPA_PLATFORM=wayland or switch to X11.")
-        helpText: qsTr("Click the Help button for more information.")
+        helpText: qsTr("Click the Help button to open the upstream Moonlight hardware-decoding guide.")
         helpUrl: "https://github.com/moonlight-stream/moonlight-docs/wiki/Fixing-Hardware-Decoding-Problems"
     }
 
     NavigableMessageDialog {
         id: wow64Dialog
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        text: qsTr("This version of Moonlight isn't optimized for your PC. Please download the '%1' version of Moonlight for the best streaming performance.").arg(SystemProperties.friendlyNativeArchName)
-        onAccepted: {
-            Qt.openUrlExternally("https://github.com/moonlight-stream/moonlight-qt/releases");
-        }
+        standardButtons: Dialog.Ok
+        text: qsTr("This version of Perigee is not optimized for your PC. Use a Perigee build for '%1' for the best streaming performance.").arg(SystemProperties.friendlyNativeArchName)
     }
 
     ErrorMessageDialog {
         id: unmappedGamepadDialog
         property string unmappedGamepads : ""
-        text: qsTr("Moonlight detected gamepads without a mapping:") + "\n" + unmappedGamepads
+        text: qsTr("Perigee detected gamepads without a mapping:") + "\n" + unmappedGamepads
         helpTextSeparator: "\n\n"
-        helpText: qsTr("Click the Help button for information on how to map your gamepads.")
+        helpText: qsTr("Click the Help button to open the upstream Moonlight gamepad-mapping guide.")
         helpUrl: "https://github.com/moonlight-stream/moonlight-docs/wiki/Gamepad-Mapping"
     }
 

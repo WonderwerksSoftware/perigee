@@ -50,13 +50,14 @@
 #include "utils.h"
 #include "gui/computermodel.h"
 #include "gui/appmodel.h"
-#include "backend/autoupdatechecker.h"
 #include "backend/computermanager.h"
 #include "backend/systemproperties.h"
 #include "streaming/session.h"
 #include "settings/streamingpreferences.h"
 #include "gui/sdlgamepadkeynavigation.h"
 #include "perigee/display/sessiontransitioncoordinator.h"
+#include "perigee/branding/productidentity.h"
+#include "settings/moonlightsettingsimport.h"
 
 #if defined(Q_OS_WIN32)
 #define IS_UNSPECIFIED_HANDLE(x) ((x) == INVALID_HANDLE_VALUE || (x) == NULL)
@@ -288,7 +289,7 @@ LONG WINAPI UnhandledExceptionHandler(struct _EXCEPTION_POINTERS *ExceptionInfo)
     }
 
     WCHAR dmpFileName[MAX_PATH];
-    swprintf_s(dmpFileName, L"%ls\\Moonlight-%I64u.dmp",
+    swprintf_s(dmpFileName, L"%ls\\Perigee-%I64u.dmp",
                (PWCHAR)QDir::toNativeSeparators(Path::getLogDir()).utf16(), QDateTime::currentSecsSinceEpoch());
     QString qDmpFileName = QString::fromUtf16((const char16_t*)dmpFileName);
     HANDLE dumpHandle = CreateFileW(dmpFileName, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -431,9 +432,7 @@ int main(int argc, char *argv[])
     // Set these here to allow us to use the default QSettings constructor.
     // These also ensure that our cache directory is named correctly. As such,
     // it is critical that these be called before Path::initialize().
-    QCoreApplication::setOrganizationName("Moonlight Game Streaming Project");
-    QCoreApplication::setOrganizationDomain("moonlight-stream.com");
-    QCoreApplication::setApplicationName("Moonlight");
+    ProductIdentity::apply();
 
     if (QFile(QDir::currentPath() + "/portable.dat").exists()) {
         QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -467,7 +466,7 @@ int main(int argc, char *argv[])
     if (IS_UNSPECIFIED_HANDLE(oldConErr))
 #endif
     {
-        s_LoggerFile = new QFile(tempDir.filePath(QString("Moonlight-%1.log").arg(QDateTime::currentSecsSinceEpoch())));
+        s_LoggerFile = new QFile(tempDir.filePath(QString("Perigee-%1.log").arg(QDateTime::currentSecsSinceEpoch())));
         if (s_LoggerFile->open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream(stderr) << "Redirecting log output to " << s_LoggerFile->fileName() << Qt::endl;
             s_LoggerStream.setDevice(s_LoggerFile);
@@ -500,7 +499,7 @@ int main(int argc, char *argv[])
 
 #ifdef LOG_TO_FILE
     // Prune the oldest existing logs if there are more than 10
-    QStringList existingLogNames = tempDir.entryList(QStringList("Moonlight-*.log"), QDir::NoFilter, QDir::SortFlag::Time);
+    QStringList existingLogNames = tempDir.entryList(QStringList("Perigee-*.log"), QDir::NoFilter, QDir::SortFlag::Time);
     for (int i = 10; i < existingLogNames.size(); i++) {
         qInfo() << "Removing old log file:" << existingLogNames.at(i);
         QFile(tempDir.filePath(existingLogNames.at(i))).remove();
@@ -554,7 +553,7 @@ int main(int argc, char *argv[])
 
             if (!QFile("/dev/dri").exists()) {
                 qWarning() << "Unable to find a KMSDRM display device!";
-                qWarning() << "On the Raspberry Pi, you must enable the 'fake KMS' driver in raspi-config to use Moonlight outside of the GUI environment.";
+                qWarning() << "On the Raspberry Pi, you must enable the 'fake KMS' driver in raspi-config to use Perigee outside of the GUI environment.";
             }
             else if (!qEnvironmentVariableIsSet("QT_QPA_EGLFS_KMS_CONFIG")) {
                 // HACK: Remove this when Qt is fixed to properly check for display support before picking a card
@@ -718,8 +717,8 @@ int main(int argc, char *argv[])
     // Set our app name for SDL to use with PulseAudio and PipeWire. This matches what we
     // provide as our app name to libsoundio too. On SDL 2.0.18+, SDL_APP_NAME is also used
     // for screensaver inhibitor reporting.
-    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_APP_NAME, "Moonlight");
-    SDL_SetHint(SDL_HINT_APP_NAME, "Moonlight");
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_APP_NAME, "Perigee");
+    SDL_SetHint(SDL_HINT_APP_NAME, "Perigee");
 
     // SDL will try to lock the mouse cursor on Wayland if it's not visible in order to
     // support applications that assume they can warp the cursor (which isn't possible
@@ -757,6 +756,7 @@ int main(int argc, char *argv[])
     }
 
     QGuiApplication app(argc, argv);
+    app.setApplicationDisplayName(ProductIdentity::windowTitle());
 
 #ifdef Q_OS_LINUX
     // Deck uses QQuickRenderControl with an application-owned OpenGL context.
@@ -866,9 +866,6 @@ int main(int argc, char *argv[])
 #endif
     }
 
-    // Apply the initial translation based on user preference
-    StreamingPreferences::get()->retranslate();
-
     // Trickily declare the translation for dialog buttons
     QCoreApplication::translate("QPlatformTheme", "&Yes");
     QCoreApplication::translate("QPlatformTheme", "&No");
@@ -932,13 +929,13 @@ int main(int argc, char *argv[])
 #ifndef Q_OS_DARWIN
     // Set the window icon except on macOS where we want to keep the
     // modified macOS 11 style rounded corner icon.
-    app.setWindowIcon(QIcon(":/res/moonlight.svg"));
+    app.setWindowIcon(QIcon(":/res/perigee.svg"));
 #endif
 
     // This is necessary to show our icon correctly on Wayland
-    app.setDesktopFileName("com.moonlight_stream.Moonlight");
-    qputenv("SDL_VIDEO_WAYLAND_WMCLASS", "com.moonlight_stream.Moonlight");
-    qputenv("SDL_VIDEO_X11_WMCLASS", "com.moonlight_stream.Moonlight");
+    app.setDesktopFileName("app.perigee_stream.Perigee");
+    qputenv("SDL_VIDEO_WAYLAND_WMCLASS", "app.perigee_stream.Perigee");
+    qputenv("SDL_VIDEO_X11_WMCLASS", "app.perigee_stream.Perigee");
 
     // Register our C++ types for QML
     qmlRegisterType<ComputerModel>("ComputerModel", 1, 0, "ComputerModel");
@@ -949,11 +946,6 @@ int main(int argc, char *argv[])
                                               [](QQmlEngine* qmlEngine, QJSEngine*) -> QObject* {
                                                   return new ComputerManager(StreamingPreferences::get(qmlEngine));
                                               });
-    qmlRegisterSingletonType<AutoUpdateChecker>("AutoUpdateChecker", 1, 0,
-                                                "AutoUpdateChecker",
-                                                [](QQmlEngine*, QJSEngine*) -> QObject* {
-                                                    return new AutoUpdateChecker();
-                                                });
     qmlRegisterSingletonType<SystemProperties>("SystemProperties", 1, 0,
                                                "SystemProperties",
                                                [](QQmlEngine*, QJSEngine*) -> QObject* {
@@ -969,9 +961,6 @@ int main(int argc, char *argv[])
                                                    [](QQmlEngine* qmlEngine, QJSEngine*) -> QObject* {
                                                        return StreamingPreferences::get(qmlEngine);
                                                    });
-
-    // Create the identity manager on the main thread
-    IdentityManager::get();
 
     // We require the Material theme
     QQuickStyle::setStyle("Material");
@@ -995,9 +984,33 @@ int main(int argc, char *argv[])
 
     SessionTransitionCoordinator displayTransitionCoordinator;
     Session::setTransitionCoordinator(&displayTransitionCoordinator);
+    QSettings moonlightSettings(QSettings::defaultFormat(), QSettings::UserScope,
+                                QStringLiteral("Moonlight Game Streaming Project"),
+                                QStringLiteral("Moonlight"));
+    QSettings perigeeSettings;
+    MoonlightSettingsImport moonlightSettingsImport(moonlightSettings,
+                                                    perigeeSettings);
+
+    // Noninteractive commands cannot ask an import question. They take the
+    // safe default before a preference or identity singleton is created.
+    if (commandLineParserResult != GlobalCommandLineParser::NormalStartRequested
+            && moonlightSettingsImport.decisionRequired()
+            && !moonlightSettingsImport.declineImport()) {
+        qCritical() << "Unable to record the Moonlight settings import decision";
+        return -1;
+    }
+    if (commandLineParserResult != GlobalCommandLineParser::NormalStartRequested) {
+        StreamingPreferences::get()->retranslate();
+        IdentityManager::get();
+    }
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(
         "DisplayTransitionCoordinator", &displayTransitionCoordinator);
+    engine.rootContext()->setContextProperty(
+        "MoonlightSettingsImport", &moonlightSettingsImport);
+    engine.rootContext()->setContextProperty(
+        "applicationWindowTitle", ProductIdentity::windowTitle());
     QString initialView;
     bool hasGUI = true;
 

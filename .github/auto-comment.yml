@@ -1,4 +1,5 @@
 issuesOpened: >
-  If this is a question about Moonlight or you need help troubleshooting a streaming problem, please use the help channels on our [Discord server](https://moonlight-stream.org/discord) instead of GitHub issues. There are many more people available on Discord to help you and answer your questions.<br /><br />
-  This issue tracker should only be used for specific bugs or feature requests.<br /><br />
-  Thank you, and happy streaming!
+  Thank you for reporting a Perigee issue.<br /><br />
+  The Perigee issue tracker is for reproducible bugs and specific feature requests.
+  For a bug, complete the bug report template and include the requested logs.<br /><br />
+  Thank you for helping improve Perigee.

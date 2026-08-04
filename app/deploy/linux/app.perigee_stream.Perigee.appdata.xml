@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>app.perigee_stream.Perigee</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0+</project_license>
+  <name>Perigee</name>
+  <summary>Control remote game and workstation streams from one in-stream deck</summary>
+  <description>
+    <p>Perigee is a Moonlight-based client for remote games and workstations. The Perigee Deck provides searchable session controls in the video window.</p>
+    <p>Perigee uses enhanced Polaris controls when the paired host advertises them.</p>
+    <p>Perigee keeps the standard Moonlight streaming path for Sunshine hosts.</p>
+  </description>
+  <developer id="app.perigee-stream">
+    <name>Perigee Streaming Project</name>
+  </developer>
+  <url type="homepage">https://github.com/WonderwerksSoftware/perigee</url>
+  <launchable type="desktop-id">app.perigee_stream.Perigee.desktop</launchable>
+  <provides>
+    <binary>perigee</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <branding>
+    <color type="primary" scheme_preference="light">#5b45c8</color>
+    <color type="primary" scheme_preference="dark">#111827</color>
+  </branding>
+  <releases>
+    <release version="0.1.0" date="2026-08-03">
+      <description>
+        <p>Initial development release of the Perigee Deck and Polaris controls.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Perigee
+Comment=Stream games and workstations with an in-stream control deck
+Exec=perigee
+Icon=perigee
+Terminal=false
+Type=Application
+Categories=Qt;Network;RemoteAccess;
+Keywords=gamestream;stream;sunshine;polaris;remote play;remote desktop;

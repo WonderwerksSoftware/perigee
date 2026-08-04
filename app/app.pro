@@ -6,10 +6,10 @@ CONFIG += c++17
 }
 
 unix:!macx {
-    TARGET = moonlight
+    TARGET = perigee
 } else {
     # On macOS, this is the name displayed in the global menu bar
-    TARGET = Moonlight
+    TARGET = Perigee
 }
 
 include(../globaldefs.pri)
@@ -203,7 +203,6 @@ SOURCES += \
     gui/appmodel.cpp \
     streaming/bandwidth.cpp \
     streaming/streamutils.cpp \
-    backend/autoupdatechecker.cpp \
     perigee/actions/actionregistry.cpp \
     perigee/actions/actioncategories.cpp \
     perigee/actions/gamestreamadapter.cpp \
@@ -221,6 +220,8 @@ SOURCES += \
     perigee/polaris/polarisadapter.cpp \
     perigee/polaris/polarisapiclient.cpp \
     perigee/support/redaction.cpp \
+    perigee/branding/productidentity.cpp \
+    settings/moonlightsettingsimport.cpp \
     path.cpp \
     settings/mappingmanager.cpp \
     gui/sdlgamepadkeynavigation.cpp \
@@ -261,7 +262,6 @@ HEADERS += \
     streaming/video/decoder.h \
     streaming/bandwidth.h \
     streaming/streamutils.h \
-    backend/autoupdatechecker.h \
     perigee/actions/actionregistry.h \
     perigee/actions/actioncategories.h \
     perigee/actions/actiontypes.h \
@@ -283,6 +283,8 @@ HEADERS += \
     perigee/polaris/polarisapiclient.h \
     perigee/polaris/polarisresponse.h \
     perigee/support/redaction.h \
+    perigee/branding/productidentity.h \
+    settings/moonlightsettingsimport.h \
     path.h \
     settings/mappingmanager.h \
     gui/sdlgamepadkeynavigation.h \
@@ -579,25 +581,25 @@ unix:!macx: {
 
     target.path = $$PREFIX/$$BINDIR/
 
-    desktop.files = deploy/linux/com.moonlight_stream.Moonlight.desktop
+    desktop.files = deploy/linux/app.perigee_stream.Perigee.desktop
     desktop.path = $$PREFIX/$$DATADIR/applications/
 
-    icons.files = res/moonlight.svg
+    icons.files = res/perigee.svg
     icons.path = $$PREFIX/$$DATADIR/icons/hicolor/scalable/apps/
 
-    appstream.files = deploy/linux/com.moonlight_stream.Moonlight.appdata.xml
+    appstream.files = deploy/linux/app.perigee_stream.Perigee.appdata.xml
     appstream.path = $$PREFIX/$$DATADIR/metainfo/
 
     INSTALLS += target desktop icons appstream
 }
 win32 {
-    RC_ICONS = moonlight.ico
-    QMAKE_TARGET_COMPANY = Moonlight Game Streaming Project
-    QMAKE_TARGET_DESCRIPTION = Moonlight Game Streaming Client
-    QMAKE_TARGET_PRODUCT = Moonlight
+    RC_ICONS = perigee.ico
+    QMAKE_TARGET_COMPANY = Perigee Streaming Project
+    QMAKE_TARGET_DESCRIPTION = Perigee Remote Streaming Client
+    QMAKE_TARGET_PRODUCT = Perigee
 
     CONFIG -= embed_manifest_exe
-    QMAKE_LFLAGS += /MANIFEST:embed /MANIFESTINPUT:$${PWD}/Moonlight.exe.manifest
+    QMAKE_LFLAGS += /MANIFEST:embed /MANIFESTINPUT:$${PWD}/Perigee.exe.manifest
 }
 macx {
     # Create Info.plist in object dir with the correct version string
@@ -606,7 +608,7 @@ macx {
 
     QMAKE_INFO_PLIST = $$OUT_PWD/Info.plist
 
-    APP_BUNDLE_RESOURCES.files = moonlight.icns
+    APP_BUNDLE_RESOURCES.files = perigee.icns
     APP_BUNDLE_RESOURCES.path = Contents/Resources
 
     APP_BUNDLE_PLIST.files = $$OUT_PWD/Info.plist

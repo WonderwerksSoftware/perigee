@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Perigee">
+  <defs>
+    <linearGradient id="orbit" x1="32" y1="24" x2="224" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8dd8ff"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="#111827"/>
+  <circle cx="128" cy="128" r="66" fill="none" stroke="url(#orbit)" stroke-width="18"/>
+  <path d="M128 62a66 66 0 0 1 0 132" fill="none" stroke="#f8fafc" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="201" cy="70" r="18" fill="#f8fafc"/>
+  <path d="M44 178c37 36 112 51 168 15" fill="none" stroke="#4fd1c5" stroke-width="10" stroke-linecap="round"/>
+</svg>

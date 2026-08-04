@@ -1,10 +1,15 @@
 #!/bin/sh
+set -eu
 
-# The ImageMagick conversion tool doesn't seem to always generate
-# ICO files with background transparency properly. Please validate
-# that the output has a transparent background.
+# The ImageMagick conversion tool does not always generate ICO files with
+# background transparency. Validate that the output is transparent.
 
-convert -density 256 -background none -define icon:auto-resize ../app/res/moonlight.svg ../app/moonlight.ico
-convert -density 256 -background none -size 64x64 ../app/res/moonlight.svg ../app/moonlight_wix.png
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SOURCE="$SCRIPT_DIR/../app/res/perigee.svg"
 
-echo IMPORTANT: Validate the icon has a transparent background before committing!
+convert -density 256 -background none -define icon:auto-resize \
+    "$SOURCE" -strip "$SCRIPT_DIR/../app/perigee.ico"
+convert -density 256 -background none "$SOURCE" -resize 64x64 -strip \
+    "$SCRIPT_DIR/../app/perigee_wix.png"
+
+echo IMPORTANT: Validate that the icon has a transparent background before committing.

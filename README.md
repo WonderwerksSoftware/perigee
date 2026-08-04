@@ -1,114 +1,249 @@
-# Moonlight PC
+# Perigee
 
-[Moonlight PC](https://moonlight-stream.org) is an open source PC client for NVIDIA GameStream and [Sunshine](https://github.com/LizardByte/Sunshine).
+<img src="app/res/perigee.svg" alt="Perigee orbital logo" width="128">
 
-Moonlight also has mobile versions for [Android](https://github.com/moonlight-stream/moonlight-android) and [iOS](https://github.com/moonlight-stream/moonlight-ios).
+Moonlight, brought closer.
 
-You can follow development on our [Discord server](https://moonlight-stream.org/discord) and help translate Moonlight into your language on [Weblate](https://hosted.weblate.org/projects/moonlight/moonlight-qt/).
+Perigee is a remote gaming and workstation client for Linux. It uses the current Moonlight Qt streaming core.
 
- [![Build](https://img.shields.io/github/actions/workflow/status/moonlight-stream/moonlight-qt/build.yml?branch=master)](https://github.com/moonlight-stream/moonlight-qt/actions/workflows/build.yml?query=branch%3Amaster)
- [![Downloads](https://img.shields.io/github/downloads/moonlight-stream/moonlight-qt/total)](https://github.com/moonlight-stream/moonlight-qt/releases)
- [![Translation Status](https://hosted.weblate.org/widgets/moonlight/-/moonlight-qt/svg-badge.svg)](https://hosted.weblate.org/projects/moonlight/moonlight-qt/)
+Perigee adds an in-stream control menu named Perigee Deck. Open Deck with one shortcut or one controller chord.
 
-## Features
- - Hardware accelerated video decoding on Windows, Mac, and Linux
- - H.264, HEVC, and AV1 codec support (AV1 requires Sunshine and a supported host GPU)
- - YUV 4:4:4 support (Sunshine only)
- - HDR streaming support
- - 7.1 surround sound audio support
- - 10-point multitouch support (Sunshine only)
- - Gamepad support with force feedback and motion controls for up to 16 players
- - Support for both pointer capture (for games) and direct mouse control (for remote desktop)
- - Support for passing system-wide keyboard shortcuts like Alt+Tab to the host
- 
-## Downloads
-- [Windows, macOS, and Steam Link](https://github.com/moonlight-stream/moonlight-qt/releases)
-- [Snap (for Ubuntu-based Linux distros)](https://snapcraft.io/moonlight)
-- [Flatpak (for other Linux distros)](https://flathub.org/apps/details/com.moonlight_stream.Moonlight)
-- [AppImage](https://github.com/moonlight-stream/moonlight-qt/releases)
-- [Raspberry Pi 4 and 5](https://github.com/moonlight-stream/moonlight-docs/wiki/Installing-Moonlight-Qt-on-Raspberry-Pi-4)
-- [Generic ARM 32-bit and 64-bit Debian packages](https://github.com/moonlight-stream/moonlight-docs/wiki/Installing-Moonlight-Qt-on-ARM%E2%80%90based-Single-Board-Computers) (not for Raspberry Pi)
-- [Experimental RISC-V Debian packages](https://github.com/moonlight-stream/moonlight-docs/wiki/Installing-Moonlight-Qt-on-RISC%E2%80%90V-Single-Board-Computers)
-- [NVIDIA Jetson and Nintendo Switch (Ubuntu L4T)](https://github.com/moonlight-stream/moonlight-docs/wiki/Installing-Moonlight-Qt-on-Linux4Tegra-(L4T)-Ubuntu)
+Version 0.1.0 is under development. It is not a production release.
 
-### Nightly Builds
-- [Downloads](https://nightly.link/moonlight-stream/moonlight-qt/workflows/build/master)
+## Purpose
 
-#### Special Thanks
+Perigee reduces the number of shortcuts that users must remember during a stream. Deck provides one searchable menu for session controls.
 
-[![Hosted By: Cloudsmith](https://img.shields.io/badge/OSS%20hosting%20by-cloudsmith-blue?logo=cloudsmith&style=flat-square)](https://cloudsmith.com)
+Polaris is the primary host for enhanced controls. Standard Sunshine hosts keep the normal GameStream-compatible streaming path.
 
-Hosting for Moonlight's Debian and L4T package repositories is graciously provided for free by [Cloudsmith](https://cloudsmith.com).
+## Implemented features
 
-## Building
+- Open Deck from a keyboard or controller. Use a keyboard, mouse, or controller inside Deck.
+- Search actions in the Display, Input, Clipboard, Stats, Window, and Session categories.
+- Navigate all core actions without text input.
+- Show current values, progress, disabled reasons, confirmations, and verified results.
+- Keep remote input neutral while Deck owns keyboard and controller input.
+- Restore the intended input-capture state when Deck closes.
+- Control mouse capture, keyboard capture, statistics, and window mode locally.
+- Disconnect the client or quit Perigee without ending the host session.
+- Use authenticated Polaris actions for named commands, text clipboard transfer, host-session control, and display selection.
+- Verify Polaris display changes with state readback and a decoded frame.
+- Attempt one rollback when a display change fails after mutation.
+- Show controller glyphs for Xbox, PlayStation, Nintendo, and Steam Deck layouts.
+- Preserve ordinary Moonlight shortcuts and controller input while Deck is closed.
 
-### Windows Build Requirements
-* Qt 6.7 SDK or later (earlier versions may work but are not officially supported)
-* [Visual Studio 2022](https://visualstudio.microsoft.com/downloads/) (Community edition is fine)
-* Select **MSVC** option during Qt installation. MinGW is not supported.
-* [7-Zip](https://www.7-zip.org/) (only if building installers for non-development PCs)
-* Graphics Tools (only if running debug builds)
-  * Install "Graphics Tools" in the Optional Features page of the Windows Settings app.
-  * Alternatively, run `dism /online /add-capability /capabilityname:Tools.Graphics.DirectX~~~~0.0.1.0` and reboot.
+Automated tests cover these features with local fixtures and a fake Polaris service. Live acceptance is still pending.
 
-### macOS Build Requirements
-* Qt 6.7 SDK or later (earlier versions may work but are not officially supported)
-* Xcode 14 or later (earlier versions may work but are not officially supported)
-* [create-dmg](https://github.com/sindresorhus/create-dmg) (only if building DMGs for use on non-development Macs)
+## Current limitations
 
-### Linux/Unix Build Requirements
-* Qt 6 is recommended, but Qt 5.12 or later is also supported (replace `qmake6` with `qmake` when using Qt 5).
-* GCC or Clang
-* FFmpeg 4.0 or later
-* Install the required packages:
-  * Debian/Ubuntu:
-    * Base Requirements: `libegl1-mesa-dev libgl1-mesa-dev libopus-dev libsdl2-dev libsdl2-ttf-dev libssl-dev libavcodec-dev libavformat-dev libswscale-dev libva-dev libvdpau-dev libxkbcommon-dev wayland-protocols libdrm-dev`
-    * Qt 6 (Recommended): `qt6-base-dev qt6-declarative-dev libqt6svg6-dev qt6-wayland qml6-module-qtquick-controls qml6-module-qtquick-templates qml6-module-qtquick-layouts qml6-module-qtqml-workerscript qml6-module-qtquick-window qml6-module-qtquick`
-    * Qt 5: `qtbase5-dev qt5-qmake qtdeclarative5-dev qtquickcontrols2-5-dev qml-module-qtquick-controls2 qml-module-qtquick-layouts qml-module-qtquick-window2 qml-module-qtquick2 qtwayland5`
-  * RedHat/Fedora (RPM Fusion repo required):
-    * Base Requirements: `openssl-devel SDL2-devel SDL2_ttf-devel ffmpeg-devel libva-devel libvdpau-devel opus-devel pulseaudio-libs-devel alsa-lib-devel libdrm-devel`
-    * Qt 6 (Recommended): `qt6-qtsvg-devel qt6-qtdeclarative-devel`
-    * Qt 5: `qt5-qtsvg-devel qt5-qtquickcontrols2-devel`
-* Building the Vulkan renderer requires a `libplacebo-dev`/`libplacebo-devel` version of at least v7.349.0 and FFmpeg 6.1 or later.
+- Perigee can stream only one active host display at a time.
+- Perigee does not open concurrent displays in separate client windows.
+- Named commands are server-advertised actions. Perigee does not provide an arbitrary shell.
+- Clipboard transfer supports UTF-8 text only. The absolute client limit is 1 mebibyte (MiB).
+- Polaris display and command controls require the companion paired-client control endpoints.
+- The automatic Moonlight update feed is disabled. Perigee 0.1.0 has no replacement update feed.
+- Perigee release artifacts do not exist yet. Build the current source for development use.
+- Live Polaris, Sunshine, controller, multi-display, and KDE Wayland acceptance is pending.
+- Windows and macOS packaging inputs use the Perigee identity. Native release qualification is pending.
+- Flatpak packaging is not part of version 0.1.0.
+- Existing translation catalogs have not received a complete Perigee terminology update.
 
-### Steam Link Build Requirements
-* [Steam Link SDK](https://github.com/ValveSoftware/steamlink-sdk) cloned on your build system
-* STEAMLINK_SDK_PATH environment variable set to the Steam Link SDK path
+## Architecture and compatibility
 
-**Steam Link Hardware Limitations**  
-Moonlight builds for Steam Link are subject to hardware limitations of the Steam Link device:
-* Maximum resolution: **1080p (1920x1080)**
-* Maximum framerate: **60 FPS**
-* Maximum video bitrate: **40 Mbps**
-* **HDR streaming is not supported** on the original hardware
+The Moonlight Qt core remains responsible for video, audio, pairing, transport, decoding, rendering, and remote input.
 
-### Docker containers
-If you want to use Docker for building, look at [this repo](https://github.com/cgutman/moonlight-packaging) containing canonical containers
-for different architectures, which handle building deps and extra linking for you.
+Perigee adds these focused layers:
 
-### Build Setup Steps
-1. Install the latest Qt SDK (and optionally, the Qt Creator IDE) from https://www.qt.io/download
-    * You can install Qt via Homebrew on macOS, but you will need to use `brew install qt --with-debug` to be able to create debug builds of Moonlight.
-    * You may also use your Linux distro's package manager for the Qt SDK as long as the packages are Qt 5.12 or later.
-    * This step is not required for building on Steam Link, because the Steam Link SDK includes Qt 5.14.
-2. Download submodules and dependencies
-    * Run `git submodule update --init --recursive` from within `moonlight-qt/`.
-    * On Windows and macOS, you must also run `setup-deps.ps1` (Windows) or `setup-deps.py` (macOS).
-    * Perform these steps each time you pull new changes from the Git repository.
-3. Open the project in Qt Creator or build from qmake on the command line.
-    * To build a binary for use on non-development machines, use the scripts in the `scripts` folder.
-        * For Windows builds, use `scripts\build-arch.bat` and `scripts\generate-bundle.bat`. Execute these scripts from the root of the repository within a Qt command prompt. Ensure  7-Zip binary directory is on your `%PATH%`.
-        * For macOS builds, use `scripts/generate-dmg.sh`. Execute this script from the root of the repository and ensure Qt's `bin` folder is in your `$PATH`.
-        * For Steam Link builds, run `scripts/build-steamlink-app.sh` from the root of the repository.
-    * To build from the command line for development use on macOS or Linux, run `qmake6 moonlight-qt.pro` then `make debug` or `make release`.
-        * The final binary will be placed in `app/moonlight`.
-    * To create an embedded build for a single-purpose device, use `qmake6 "CONFIG+=embedded" moonlight-qt.pro` and build normally.
-        * This build will lack windowed mode, Discord/Help links, and other features that don't make sense on an embedded device.
-        * For platforms with poor GPU performance, add `"CONFIG+=gpuslow"` to prefer direct KMSDRM rendering over GL/Vulkan renderers. Direct KMSDRM rendering can use dedicated YUV/RGB conversion and scaling hardware rather than slower GPU shaders for these operations.
+- `ActionRegistry` supplies stable actions, capability checks, permissions, confirmation rules, and result state.
+- `GameStreamAdapter` supplies local actions for standard Sunshine and GameStream-compatible sessions.
+- `PolarisAdapter` adds authenticated capability discovery and enhanced host actions.
+- Deck renders the user interface with Qt's QML declarative language and the existing stream overlay path.
+- The input router neutralizes remote input and gives Deck temporary local ownership.
 
-## Contribute
-1. Fork us
-2. Write code
-3. Send Pull Requests
+The first release target is Nobara Linux with KDE Plasma and Wayland. Perigee requires Qt 6.7 or newer.
 
-Check out our [website](https://moonlight-stream.org) for project links and information.
+The client keeps the inherited H.264, HEVC, AV1, high dynamic range (HDR), audio, gamepad, and remote-desktop paths.
+
+Host and hardware support still apply.
+
+## Installation
+
+Perigee does not have a verified release package. Use a local development build from this repository.
+
+Do not use Moonlight release packages as Perigee packages. Those packages have a different identity and settings namespace.
+
+On first applicable start, Perigee can import recognized Moonlight Qt preferences and paired hosts. The default answer is **No**.
+
+An accepted import copies only recognized streaming preferences and complete paired-host records. It also copies the required pairing identity for imported hosts.
+
+The import does not copy Deck bindings, logs, crash data, cached artwork, temporary state, or unknown keys.
+
+## Build
+
+Install a C++17 compiler, Qt 6.7 or newer, qmake, and the required development libraries.
+
+For Fedora or Nobara, use these upstream-derived package names:
+
+```text
+openssl-devel SDL2-devel SDL2_ttf-devel ffmpeg-devel libva-devel
+libvdpau-devel opus-devel pulseaudio-libs-devel alsa-lib-devel
+libdrm-devel qt6-qtsvg-devel qt6-qtdeclarative-devel
+```
+
+The FFmpeg development package can require RPM Fusion on Fedora-family systems.
+
+For Debian or Ubuntu, use these upstream-derived package names:
+
+```text
+libegl1-mesa-dev libgl1-mesa-dev libopus-dev libsdl2-dev
+libsdl2-ttf-dev libssl-dev libavcodec-dev libavformat-dev
+libswscale-dev libva-dev libvdpau-dev libxkbcommon-dev
+wayland-protocols libdrm-dev qt6-base-dev qt6-declarative-dev
+libqt6svg6-dev qt6-wayland qml6-module-qtquick-controls
+qml6-module-qtquick-templates qml6-module-qtquick-layouts
+qml6-module-qtqml-workerscript qml6-module-qtquick-window
+qml6-module-qtquick
+```
+
+Clone the source and its submodules:
+
+```bash
+git clone --recurse-submodules https://github.com/WonderwerksSoftware/perigee.git
+cd perigee
+```
+
+If you already have the source, update its submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+Configure an out-of-source debug build:
+
+```bash
+mkdir -p build
+cd build
+qmake6 ../moonlight-qt.pro CONFIG+=debug
+```
+
+Build Perigee:
+
+```bash
+make -j"$(nproc)" debug
+```
+
+Check the built identity:
+
+```bash
+./app/perigee --version
+```
+
+The expected output is `Perigee 0.1.0`.
+
+## Test
+
+Install X virtual framebuffer (Xvfb) before you run the complete graphical suite.
+
+Configure the test target from the build directory:
+
+```bash
+qmake6 ../moonlight-qt.pro CONFIG+=debug CONFIG+=perigee-tests
+make -j"$(nproc)" debug
+```
+
+Run the focused identity and migration tests without a display:
+
+```bash
+QT_QPA_PLATFORM=offscreen SDL_VIDEODRIVER=dummy \
+  ./tests/perigee-tests BrandingTest -silent
+```
+
+Run the complete suite with software rendering:
+
+```bash
+xvfb-run -a -s "-screen 0 1280x720x24" \
+  env LIBGL_ALWAYS_SOFTWARE=1 QT_QPA_PLATFORM=xcb SDL_VIDEODRIVER=dummy \
+  ./tests/perigee-tests -silent
+```
+
+Some integration tests create private loopback services. They do not require a live Polaris or Sunshine host.
+
+## Keyboard and controller use
+
+The default Deck keyboard shortcut is `Ctrl+Alt+Shift+Space`.
+
+The default Deck controller chord is `LB+RB+Back+Start`. Change both bindings in the Perigee settings.
+
+Use these controls while Deck is open:
+
+- Use the arrow keys, directional pad, or left stick to move.
+- Press `Enter` or the controller confirm button to activate an item.
+- Press `Escape` or the controller back button to go back or close Deck.
+- Press `LB` or `RB` to change categories.
+- Press `Y` to focus search when the platform supports text input.
+
+The direct statistics chord remains `LB+RB+Back+X`.
+
+The **Legacy direct disconnect** setting restores the original controller disconnect behavior. The keyboard shortcut still opens Deck.
+
+## Polaris behavior
+
+Perigee uses the paired Moonlight client identity for Polaris Hypertext Transfer Protocol Secure (HTTPS) requests.
+
+The client pins each HTTPS request to the paired host certificate.
+
+The client uses authenticated capability, permission, endpoint, and session data. It does not infer support from a version string.
+
+Unsupported or denied actions remain disabled with a reason. Perigee does not send guessed requests.
+
+Named-command execution accepts only advertised identifiers and structured values. The client has no free-form command field.
+
+The companion implementation is maintained in the [WonderWerks Polaris fork](https://github.com/WonderwerksSoftware/polaris). Live qualification is pending.
+
+## Standard Sunshine behavior
+
+Perigee keeps the inherited GameStream-compatible streaming path for standard [Sunshine](https://github.com/LizardByte/Sunshine) hosts.
+
+Local Deck actions remain available without Polaris. Polaris-only actions are hidden or disabled when the host does not advertise them.
+
+Automated regression tests cover the fallback boundary. Live standard Sunshine regression testing is pending.
+
+## Contributing
+
+Keep Perigee changes separate from the inherited streaming core when practical. Preserve upstream names when they identify source, protocols, or libraries.
+
+Add a failing test before each behavior change. Run the focused tests after each small change.
+
+Before you submit a change, run the applicable complete suite. Then run this check:
+
+```bash
+git diff --check
+```
+
+Do not add credentials, pairing keys, certificates, clipboard contents, or private host data to tests or logs.
+
+See [upstream-pins.md](docs/upstream-pins.md) for the reviewed Moonlight and Polaris baselines.
+
+## License
+
+Perigee is distributed under the GNU General Public License, version 3 or later. See [LICENSE](LICENSE).
+
+Keep all source notices and dependency licenses when you redistribute the software. See [NOTICE.md](NOTICE.md) for project attribution.
+
+## Upstream attribution
+
+Perigee is a modified work based on [Moonlight Qt](https://github.com/moonlight-stream/moonlight-qt).
+
+The streaming protocol implementation uses [Moonlight Common C](https://github.com/moonlight-stream/moonlight-common-c).
+
+[Polaris](https://github.com/papi-ux/polaris) is the enhanced host integration target. [Artemis](https://github.com/wjbeckett/artemis) supplied user-experience inspiration only.
+
+[Nova](https://github.com/papi-ux/nova) was a Polaris protocol and behavior reference only.
+
+These projects do not sponsor or endorse Perigee. Their names identify upstream or reference work only.
+
+## Documentation style
+
+The documentation uses guidance from [ASD-STE100 Issue 9](https://www.asd-ste100.org/assets/files/ASD-STE100_ISSUE9.pdf), dated 2025-01-15. It is not certified as ASD-STE100 compliant.
+
+The [official current-issue page](https://www.asd-ste100.org/STE_downloads.html) identifies the current standard.

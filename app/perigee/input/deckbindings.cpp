@@ -325,11 +325,11 @@ QString DeckBindings::controllerConflictReason(quint32 controllerButtons)
 {
     if (conflictsWithStatsChord(controllerButtons)) {
         return QStringLiteral(
-            "This shortcut overlaps Moonlight's performance statistics shortcut.");
+            "This shortcut overlaps the performance statistics shortcut.");
     }
     if (conflictsWithLegacyQuitOrdering(controllerButtons)) {
         return QStringLiteral(
-            "This shortcut extends Moonlight's direct disconnect shortcut.");
+            "This shortcut extends the direct disconnect shortcut.");
     }
     if (hasOppositeDpadDirections(controllerButtons)) {
         return QStringLiteral(

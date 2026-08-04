@@ -36,6 +36,6 @@ jobs:
       - name: Upload Binaries
         uses: actions/upload-artifact@v6
         with:
-          name: Moonlight-SteamLink-${{ env.CI_VERSION }}
-          path: build/deploy-release/*
+          name: Perigee-SteamLink-${{ env.CI_VERSION }}
+          path: build/installer-release/Perigee-SteamLink-${{ env.CI_VERSION }}.zip
           if-no-files-found: error

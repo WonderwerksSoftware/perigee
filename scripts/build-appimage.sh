@@ -49,7 +49,7 @@ pushd $BUILD_FOLDER
 qmake6 $SOURCE_ROOT/moonlight-qt.pro CONFIG+=disable-wayland CONFIG+=disable-libdrm PREFIX=$DEPLOY_FOLDER/usr DEFINES+=APP_IMAGE || fail "Qmake failed!"
 popd
 
-echo Compiling Moonlight in $BUILD_CONFIG configuration
+echo Compiling Perigee in $BUILD_CONFIG configuration
 pushd $BUILD_FOLDER
 make -j$(nproc) $(echo "$BUILD_CONFIG" | tr '[:upper:]' '[:lower:]') || fail "Make failed!"
 popd
@@ -68,5 +68,13 @@ VERSION=$VERSION $LINUXDEPLOY --appdir $DEPLOY_FOLDER \
   --library=/usr/local/lib/libSDL3.so.0 \
   --plugin qt --output appimage || fail "linuxdeploy failed!"
 popd
+
+set -- "$INSTALLER_FOLDER"/*.AppImage
+[ -e "$1" ] || fail "linuxdeploy did not create an AppImage!"
+[ "$#" -eq 1 ] || fail "linuxdeploy created more than one AppImage!"
+EXPECTED_APPIMAGE="$INSTALLER_FOLDER/Perigee-$VERSION-$(uname -m).AppImage"
+if [ "$1" != "$EXPECTED_APPIMAGE" ]; then
+  mv "$1" "$EXPECTED_APPIMAGE" || fail "AppImage rename failed!"
+fi
 
 echo Build successful

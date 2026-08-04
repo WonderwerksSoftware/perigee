@@ -8,14 +8,19 @@ NavigableDialog {
     property alias text: dialogLabel.dialogText
     property alias showSpinner: dialogSpinner.visible
     property alias imageSrc: dialogImage.source
+    property bool preferRejectButton: false
 
     property string helpText
     property string helpUrl : "https://github.com/moonlight-stream/moonlight-docs/wiki/Troubleshooting"
     property string helpTextSeparator : " "
 
     onOpened: {
-        // Force keyboard focus on the label so keyboard navigation works
-        if (dialogButtonBox.count > 0) {
+        var rejectButton = preferRejectButton
+                ? dialogButtonBox.standardButton(Dialog.No) : null
+        if (rejectButton) {
+            rejectButton.forceActiveFocus(Qt.TabFocus)
+        }
+        else if (dialogButtonBox.count > 0) {
             dialogButtonBox.itemAt(dialogButtonBox.count - 1).forceActiveFocus(Qt.TabFocus)
         }
     }

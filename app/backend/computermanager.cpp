@@ -2,6 +2,7 @@
 #include "boxartmanager.h"
 #include "nvhttp.h"
 #include "nvpairingmanager.h"
+#include "identitymanager.h"
 
 #include <Limelight.h>
 #include <QtEndian>
@@ -165,6 +166,10 @@ ComputerManager::ComputerManager(StreamingPreferences* prefs)
       m_CompatFetcher(nullptr),
       m_NeedsDelayedFlush(false)
 {
+    // This constructor runs on the main thread. Create the identity before any
+    // worker can issue an authenticated request.
+    IdentityManager::get();
+
     QSettings settings;
 
     // If there's a hosts backup copy, we must have failed to commit

@@ -29,6 +29,8 @@ SOURCES += \
     ../app/perigee/polaris/polarisadapter.cpp \
     ../app/perigee/polaris/polarisapiclient.cpp \
     ../app/perigee/support/redaction.cpp \
+    ../app/perigee/branding/productidentity.cpp \
+    ../app/settings/moonlightsettingsimport.cpp \
     ../app/backend/nvaddress.cpp \
     ../app/backend/identitymanager.cpp \
     ../app/streaming/input/abstouch.cpp \
@@ -65,6 +67,7 @@ SOURCES += \
     test_streamingpreferences.cpp \
     test_streamsegueqml.cpp \
     input_integration_stubs.cpp \
+    test_branding.cpp \
     test_overlaylayout.cpp \
     test_polarismodels.cpp \
     test_polarisadapter.cpp \
@@ -102,6 +105,8 @@ HEADERS += \
     ../app/perigee/polaris/polarisapiclient.h \
     ../app/perigee/polaris/polarisresponse.h \
     ../app/perigee/support/redaction.h \
+    ../app/perigee/branding/productidentity.h \
+    ../app/settings/moonlightsettingsimport.h \
     ../app/streaming/input/remoteinputstate.h \
     ../app/streaming/sessionexitintent.h \
     ../app/settings/streamingpreferences.h \
@@ -114,4 +119,5 @@ HEADERS += \
     support/fakepolarisserver.h \
     test_registry.h
 
-RESOURCES += ../app/qml.qrc
+RESOURCES += ../app/qml.qrc \
+    ../app/resources.qrc
