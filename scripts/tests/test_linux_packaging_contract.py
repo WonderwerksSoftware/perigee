@@ -189,11 +189,14 @@ class LinuxPackagingContractTest(unittest.TestCase):
             "qml/QtQuick/Controls/libqtquickcontrols2plugin.so": "qtdeclarative",
             "lib/libQt6Core.so.6": "qtbase",
             "plugins/platforms/libqxcb.so": "qtbase",
+            "plugins/tls/libqopensslbackend.so": "qtbase",
         }
         for relative, module in cases.items():
             with self.subTest(relative=relative):
                 self.assertEqual(stage.qt_module_for_source(prefix / relative, prefix), module)
         self.assertIsNone(stage.qt_module_for_source(pathlib.Path("/usr/lib/libQt6Core.so"), prefix))
+        self.assertIsNone(stage.qt_module_for_source(prefix / "lib/libQt6Unexpected.so.6", prefix))
+        self.assertIsNone(stage.qt_module_for_source(prefix / "plugins/unexpected/libplugin.so", prefix))
         self.assertIsNone(stage.qt_module_for_source(prefix / "qml/Unknown/libplugin.so", prefix))
 
     def test_ci_exports_architecture_specific_runtime_libraries_for_spawned_app(self) -> None:

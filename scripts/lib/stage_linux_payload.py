@@ -130,7 +130,28 @@ QT_LICENSE_MODULE_PREFIXES = (
             "qml/QtQuick",
         ),
     ),
-    ("qtbase", ("lib/libQt6", "plugins/")),
+    (
+        "qtbase",
+        (
+            "lib/libQt6Core",
+            "lib/libQt6DBus",
+            "lib/libQt6Gui",
+            "lib/libQt6Network",
+            "lib/libQt6OpenGL",
+            "lib/libQt6XcbQpa",
+            "plugins/iconengines/libqsvgicon",
+            "plugins/imageformats/libqgif",
+            "plugins/imageformats/libqico",
+            "plugins/imageformats/libqjpeg",
+            "plugins/imageformats/libqsvg",
+            "plugins/networkinformation/",
+            "plugins/platforminputcontexts/",
+            "plugins/platforms/libqminimal",
+            "plugins/platforms/libqoffscreen",
+            "plugins/platforms/libqxcb",
+            "plugins/tls/",
+        ),
+    ),
 )
 
 
