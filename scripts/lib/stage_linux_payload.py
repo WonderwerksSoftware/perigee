@@ -136,6 +136,7 @@ QT_LICENSE_MODULE_PREFIXES = (
             "lib/libQt6Core",
             "lib/libQt6DBus",
             "lib/libQt6Gui",
+            "lib/libicu",
             "lib/libQt6Network",
             "lib/libQt6OpenGL",
             "lib/libQt6XcbQpa",
@@ -762,7 +763,7 @@ def stage_licenses(source_root: pathlib.Path, root: pathlib.Path, prefix: pathli
                 else:
                     sources = qt_license_files(origin)
             if not sources:
-                unresolved.append(elf_relative)
+                unresolved.append(f"{elf_relative} (source={origin})")
                 continue
             owner_cache[origin] = sources
             package_sources[origin] = package

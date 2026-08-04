@@ -231,6 +231,7 @@ class LinuxPackagingContractTest(unittest.TestCase):
             "qml/QtCore/libqtqmlcoreplugin.so": "qtdeclarative",
             "qml/QtQuick/Controls/libqtquickcontrols2plugin.so": "qtdeclarative",
             "lib/libQt6Core.so.6": "qtbase",
+            "lib/libicudata.so.73": "qtbase",
             "plugins/platforms/libqxcb.so": "qtbase",
             "plugins/tls/libqopensslbackend.so": "qtbase",
         }
