@@ -131,19 +131,19 @@ Do not publish port numbers, host addresses, certificates, or capability-respons
 
 | Direction | Check | Polaris result | Standard Sunshine result |
 |---|---|---|---|
-| Perigee to host | Pair and authenticate | NOT RUN; Moonlight control-plane probe passed separately | NOT RUN |
+| Perigee to host | Pair and authenticate | PASS; existing paired identity authenticated a Perigee launch | NOT RUN |
 | Perigee to host | Keyboard and mouse input | NOT RUN | NOT RUN |
 | Perigee to host | Controller input and rumble | NOT RUN | NOT RUN |
 | Perigee to host | Authenticated named command | NOT RUN | Not applicable; action must be disabled truthfully |
 | Perigee to host | UTF-8 clipboard action | NOT RUN | Not applicable; action must be disabled truthfully |
 | Perigee to host | Display selection and verified readback | NOT RUN | Not applicable; action must be disabled truthfully |
-| Host to Perigee | Video and decoded-frame evidence | NOT RUN | NOT RUN |
-| Host to Perigee | Audio | NOT RUN | NOT RUN |
-| Host to Perigee | Stream state and error readback | NOT RUN | NOT RUN |
+| Host to Perigee | Video and decoded-frame evidence | PARTIAL; 1280x720x30 video stream started; decoded-frame readback not recorded | NOT RUN |
+| Host to Perigee | Audio | PARTIAL; audio stream and host PipeWire capture started; local playback not recorded | NOT RUN |
+| Host to Perigee | Stream state and error readback | PASS; launch, stream start, client disconnect, and cleanup were observed | NOT RUN |
 | Host to Perigee | Clipboard acknowledgement without content in logs | NOT RUN | Not applicable |
 | Route | Traffic stayed on the verified 10G path | PASS for the authenticated control-plane probe | NOT RUN |
 
-The read-only mTLS probe used a standard Moonlight client identity to verify Polaris endpoints. It is not a Perigee stream acceptance result. The Perigee driver, video, audio, input, clipboard, display mutation, and rollback rows remain open.
+The read-only mTLS probe used a standard Moonlight client identity to verify Polaris endpoints. The Perigee smoke reused that paired identity in a temporary profile and started a 1280x720x30 desktop stream with video, audio, and input channels. It was bounded by a timeout; no input event, clipboard transfer, display mutation, decoded-frame readback, or rollback was tested. Polaris logged a session-termination hang and restarted its side-by-side service; Sunshine remained active.
 
 ## Input and Deck acceptance
 
@@ -209,7 +209,7 @@ For each row, record the observed outcome. Do not infer success from an accepted
 |---|---|
 | All automated suites pass at the tested commits | PASS |
 | Task 19 cold Ubuntu candidates pass independent verification | PASS |
-| Polaris live matrix passes | NOT RUN |
+| Polaris live matrix passes | PARTIAL; control plane and bounded stream smoke passed, full matrix remains open |
 | Standard Sunshine regression passes | NOT RUN |
 | Controller and input-neutralization gates pass | NOT RUN |
 | Display verification and rollback gates pass | NOT RUN |

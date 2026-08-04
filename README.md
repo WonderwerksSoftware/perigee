@@ -32,7 +32,7 @@ Polaris is the primary host for enhanced controls. Standard Sunshine hosts keep 
 - Show controller glyphs for Xbox, PlayStation, Nintendo, and Steam Deck layouts.
 - Preserve ordinary Moonlight shortcuts and controller input while Deck is closed.
 
-Automated tests cover these features with local fixtures and a fake Polaris service. The cold Linux artifact gate is green. A live Polaris control-plane probe also passed on the authorized staging path; video, audio, input, display, controller, and standard Sunshine stream acceptance remain open.
+Automated tests cover these features with local fixtures and a fake Polaris service. The cold Linux artifact gate is green. A live Polaris control-plane probe and a bounded Perigee stream smoke passed on the authorized staging path; full decoded-frame, input, display, controller, and standard Sunshine acceptance remain open.
 
 See the [live acceptance ledger](docs/testing/live-acceptance-2026-08.md) for the current release gate. It contains redacted results only. Exact host evidence stays in an ignored local file.
 
