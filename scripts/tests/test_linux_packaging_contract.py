@@ -137,6 +137,7 @@ class LinuxPackagingContractTest(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)", adapter)
+        self.assertIn("QStringConverter::Flag::Stateless", adapter)
         self.assertIn("#include <QTextCodec>", adapter)
         self.assertIn("QTextCodec::ConverterState", adapter)
         self.assertIn("state.invalidChars == 0 && state.remainingChars == 0", adapter)

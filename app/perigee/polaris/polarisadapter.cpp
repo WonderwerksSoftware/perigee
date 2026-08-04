@@ -188,7 +188,8 @@ bool strictUtf8(const QByteArray& bytes)
         return false;
     }
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    QStringDecoder decoder(QStringDecoder::Utf8);
+    QStringDecoder decoder(
+        QStringDecoder::Utf8, QStringConverter::Flag::Stateless);
     const QString decoded = decoder.decode(bytes);
     Q_UNUSED(decoded);
     return !decoder.hasError();
