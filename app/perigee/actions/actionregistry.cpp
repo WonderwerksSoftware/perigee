@@ -148,12 +148,12 @@ QVector<ActionDescriptor> resolvedDescriptors(
             ActionDescriptor descriptor = *displayTemplate;
             descriptor.id = it.key();
             descriptor.label = metadata.value(QStringLiteral("label")).toString();
-            descriptor.aliases = {
+            descriptor.aliases = QStringList({
                 QStringLiteral("display"), QStringLiteral("monitor"),
                 QStringLiteral("screen"),
                 metadata.value(QStringLiteral("kind")).toString(),
                 metadata.value(QStringLiteral("id")).toString(),
-            };
+            });
             displays.push_back({stableKey, std::move(descriptor)});
         }
         std::sort(displays.begin(), displays.end(),
@@ -197,7 +197,7 @@ QVector<ActionDescriptor> resolvedDescriptors(
         ActionDescriptor descriptor = *commandTemplate;
         descriptor.id = it.key();
         descriptor.label = metadata.value(QStringLiteral("name")).toString();
-        descriptor.aliases = {QStringLiteral("command")};
+        descriptor.aliases = QStringList({QStringLiteral("command")});
         commands.push_back({index, std::move(descriptor)});
     }
     std::sort(commands.begin(), commands.end(),
@@ -265,11 +265,11 @@ bool confirmationRequired(const ActionDescriptor& descriptor,
 bool sameAuthoritativeState(const ActionState& left, const ActionState& right)
 {
     const auto sameValue = [](const QVariant& leftValue, const QVariant& rightValue) {
-        if (leftValue.metaType() != rightValue.metaType()) {
+        if (leftValue.userType() != rightValue.userType()) {
             return false;
         }
 
-        switch (leftValue.metaType().id()) {
+        switch (leftValue.userType()) {
         case QMetaType::Double: {
             const double leftNumber = leftValue.toDouble();
             const double rightNumber = rightValue.toDouble();
