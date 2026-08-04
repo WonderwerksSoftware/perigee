@@ -125,7 +125,11 @@ public:
 
         QOpenGLFramebufferObjectFormat format;
         format.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
         format.setInternalTextureFormat(GL_RGBA8);
+#else
+        format.setInternalTextureFormat(GL_RGBA);
+#endif
         auto candidate = std::make_unique<QOpenGLFramebufferObject>(pixelSize, format);
         if (!candidate->isValid() || !candidate->bind()) {
             setError(error,

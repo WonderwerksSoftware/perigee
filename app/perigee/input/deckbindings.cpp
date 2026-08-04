@@ -3,7 +3,7 @@
 #include <QSettings>
 #include <QStringList>
 
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX) && !defined(STEAM_LINK)
 #include <linux/input-event-codes.h>
 #endif
 
@@ -69,7 +69,7 @@ bool hasOppositeDpadDirections(quint32 buttons)
         (buttons & horizontal) == horizontal;
 }
 
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX) && !defined(STEAM_LINK)
 int sdlScancodeForLinuxEvdev(quint32 code)
 {
     struct Mapping {
@@ -449,7 +449,7 @@ int DeckBindings::sdlScancodeForQtKey(int qtKey)
 int DeckBindings::sdlScancodeForNativeKey(quint32 nativeScanCode,
                                           const QString& platformName)
 {
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX) && !defined(STEAM_LINK)
     if (!platformName.startsWith(QStringLiteral("wayland")) ||
             nativeScanCode <= 8) {
         return SDL_SCANCODE_UNKNOWN;

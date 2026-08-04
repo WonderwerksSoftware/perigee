@@ -124,6 +124,15 @@ class LinuxPackagingContractTest(unittest.TestCase):
             r"#if QT_VERSION >= QT_VERSION_CHECK\(6, 0, 0\)\s+"
             r"m_Impl->renderControl->endFrame\(\);",
         )
+        self.assertIn("format.setInternalTextureFormat(GL_RGBA);", renderer)
+        bindings = (SOURCE_ROOT / "app/perigee/input/deckbindings.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "#if defined(Q_OS_LINUX) && !defined(STEAM_LINK)\n"
+            "#include <linux/input-event-codes.h>",
+            bindings,
+        )
 
     def test_ci_installs_pinned_qt_source_license_texts(self) -> None:
         for module, digest in (
