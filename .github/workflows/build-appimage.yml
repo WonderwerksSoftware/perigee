@@ -74,7 +74,7 @@ jobs:
           {
             printf 'CMAKE_PREFIX_PATH=%s:%s\n' "$DEP_ROOT" "$QT_DIR"
             printf 'LD_LIBRARY_PATH=%s/lib:%s/lib\n' "$DEP_ROOT" "$QT_DIR"
-            printf 'PKG_CONFIG_PATH=%s/lib/pkgconfig:%s/share/pkgconfig\n' "$DEP_ROOT" "$DEP_ROOT"
+            printf 'PKG_CONFIG_PATH=%s/lib/pkgconfig:%s/lib/x86_64-linux-gnu/pkgconfig:%s/share/pkgconfig\n' "$DEP_ROOT" "$DEP_ROOT" "$DEP_ROOT"
           } >> "$GITHUB_ENV"
 
       - name: Cache pinned Qt

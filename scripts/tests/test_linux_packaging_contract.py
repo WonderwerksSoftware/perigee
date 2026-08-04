@@ -61,6 +61,10 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn("perigee_assert_native_wayland", package_common)
         self.assertIn("libwayland-client.so", package_common)
         self.assertIn("libva-wayland.so", package_common)
+        self.assertIn(
+            "PKG_CONFIG_PATH=%s/lib/pkgconfig:%s/lib/x86_64-linux-gnu/pkgconfig:%s/share/pkgconfig",
+            self.workflow,
+        )
 
     def test_ci_installs_and_gates_a_pinned_supported_qt(self) -> None:
         self.assertIn("runs-on: ubuntu-22.04", self.workflow)
