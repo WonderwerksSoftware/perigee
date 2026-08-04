@@ -200,6 +200,7 @@ jobs:
         run: |
           mkdir -p deps
           curl --fail --location --proto '=https' --tlsv1.2 \
+            --retry 5 --retry-delay 5 --connect-timeout 20 --max-time 300 \
             "$SDL2_COMPAT_URL" \
             --output "$RUNNER_TEMP/sdl2-compat-2.32.70.tar.gz"
           printf '%s  %s\n' \
