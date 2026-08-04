@@ -189,7 +189,7 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn("$RUNNER_TEMP/runtime-x86_64", runtime_block.group("body"))
 
         for tool in (
-            "aqt --version",
+            "aqt version",
             "gcc --version",
             "g++ --version",
             "ld --version",
@@ -202,7 +202,7 @@ class LinuxPackagingContractTest(unittest.TestCase):
             "pkg-config --modversion glslang",
         ):
             self.assertIn(tool, self.workflow)
-        self.assertIn("qtdeclarative qtsvg qtwayland qtvirtualkeyboard", self.workflow)
+        self.assertIn("qtvirtualkeyboard (base archives: qtbase qtsvg qtdeclarative qtwayland)", self.workflow)
 
     def test_dependency_cache_fingerprints_all_installed_packages_and_pip_tools(self) -> None:
         self.assertIn(

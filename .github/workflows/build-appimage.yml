@@ -221,7 +221,7 @@ jobs:
           {
             printf 'CC=%s\nCXX=%s\n' "$CC" "$CXX"
             command -v gcc g++ ld as ar objcopy strip readelf qmake6
-            aqt --version
+            aqt version
             gcc --version
             g++ --version
             ld --version
@@ -241,7 +241,7 @@ jobs:
             python3 --version
             qmake6 -query QT_VERSION
             qmake6 -query QT_INSTALL_PREFIX
-            printf '%s\n' 'qtdeclarative qtsvg qtwayland qtvirtualkeyboard'
+            printf '%s\n' 'qtvirtualkeyboard (base archives: qtbase qtsvg qtdeclarative qtwayland)'
             dpkg-query -W -f='${Package}=${Version}\n' | LC_ALL=C sort
             "$AQT_VENV/bin/pip" freeze --all | LC_ALL=C sort
             (
