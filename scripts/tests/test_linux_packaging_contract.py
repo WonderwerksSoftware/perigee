@@ -156,7 +156,7 @@ class LinuxPackagingContractTest(unittest.TestCase):
         ):
             self.assertIn(pin, self.workflow)
         self.assertIn("https://libsdl.org/release/sdl2-compat-2.32.70.tar.gz", self.workflow)
-        self.assertIn("a99b7262525a454d1065cf76dd17240fd808dfc4ef15636990ff83a5d0d9e740", self.workflow)
+        self.assertIn("998fa62557eb46ffe7e5c3e2c123bc332f7df9d9f593b3ceed88ed1158428a44", self.workflow)
         self.assertIn("sha256sum --check --strict", self.workflow)
         self.assertNotIn("repository: libsdl-org/sdl2-compat", self.workflow)
         for repository in ("intel/libva", "FFmpeg/FFmpeg"):
