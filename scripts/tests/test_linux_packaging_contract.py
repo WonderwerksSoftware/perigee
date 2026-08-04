@@ -511,10 +511,16 @@ class LinuxPackagingContractTest(unittest.TestCase):
                         stdout=f"fixture:amd64: {discovered_library.resolve()}\n",
                         stderr="",
                     )
+                if command == ["dpkg-query", "-S", str(discovered_library)]:
+                    return mock.Mock(
+                        returncode=0,
+                        stdout=f"fixture:amd64: {discovered_library}\n",
+                        stderr="",
+                    )
                 if command == ["dpkg-query", "-L", "fixture:amd64"]:
                     return mock.Mock(
                         returncode=0,
-                        stdout=f"{copyright_file}\n",
+                        stdout=f"{discovered_library.resolve()}\n{copyright_file}\n",
                         stderr="",
                     )
                 if command == [
@@ -542,6 +548,62 @@ class LinuxPackagingContractTest(unittest.TestCase):
             assert package is not None
             self.assertEqual(package.package, "fixture:amd64")
             self.assertEqual(package.library, discovered_library.resolve())
+            self.assertEqual(package.licenses, (copyright_file,))
+
+    def test_dpkg_ownership_preserves_legacy_lib_path(self) -> None:
+        stager = load("stage_legacy_lib_test", STAGE_PATH)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            real_library = root / "usr/lib/libfixture.so.1"
+            real_library.parent.mkdir(parents=True)
+            real_library.write_bytes(b"fixture library\n")
+            (root / "lib").symlink_to("usr/lib", target_is_directory=True)
+            discovered_library = root / "lib/libfixture.so.1"
+            payload_library = root / "payload/lib/libfixture.so.1"
+            copyright_file = root / "usr/share/doc/fixture/copyright"
+            copyright_file.parent.mkdir(parents=True)
+            copyright_file.write_text("Fixture license\n", encoding="utf-8")
+
+            def query(command: list[str], **_kwargs: object) -> mock.Mock:
+                if command == ["dpkg-query", "-S", str(discovered_library.resolve())]:
+                    return mock.Mock(returncode=1, stdout="", stderr="not found")
+                if command == ["dpkg-query", "-S", str(discovered_library)]:
+                    return mock.Mock(
+                        returncode=0,
+                        stdout=f"fixture:amd64: {discovered_library}\n",
+                        stderr="",
+                    )
+                if command == ["dpkg-query", "-L", "fixture:amd64"]:
+                    return mock.Mock(
+                        returncode=0,
+                        stdout=f"{discovered_library}\n{copyright_file}\n",
+                        stderr="",
+                    )
+                if command == [
+                    "dpkg-query",
+                    "-W",
+                    "-f=${Version}",
+                    "fixture:amd64",
+                ]:
+                    return mock.Mock(returncode=0, stdout="1.0-1", stderr="")
+                raise AssertionError(command)
+
+            def which(command: str) -> str | None:
+                return "/usr/bin/dpkg-query" if command == "dpkg-query" else None
+
+            stager.COPIED_SOURCES.clear()
+            stager.PACKAGE_LICENSE_CACHE.clear()
+            with mock.patch.object(stager.shutil, "which", side_effect=which), mock.patch.object(
+                stager.subprocess, "run", side_effect=query
+            ):
+                stager.copy_regular(discovered_library, payload_library)
+                recorded_source = stager.COPIED_SOURCES[payload_library.resolve()]
+                package = stager.package_license_files(recorded_source)
+
+            self.assertIsNotNone(package)
+            assert package is not None
+            self.assertEqual(package.package, "fixture:amd64")
+            self.assertEqual(package.library, discovered_library)
             self.assertEqual(package.licenses, (copyright_file,))
 
     def test_stager_and_verifier_share_the_graphics_policy(self) -> None:

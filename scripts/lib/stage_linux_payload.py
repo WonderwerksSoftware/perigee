@@ -439,9 +439,10 @@ def rpm_license_files(package: str) -> list[pathlib.Path]:
 
 def package_license_files(source: pathlib.Path) -> PackageLicenseSource | None:
     # Ubuntu's merged-/usr layout exposes libraries through both /lib and
-    # /usr/lib.  dpkg records the canonical /usr/lib path, so resolve the
-    # discovered runtime path before querying ownership and recording
-    # provenance.
+    # /usr/lib, but the dpkg database contains a mixture of both spellings.
+    # Keep the discovered spelling for a fallback query while preferring the
+    # resolved spelling when both paths are package-owned.
+    discovered_source = source.absolute()
     source = source.resolve()
     if shutil.which("rpm") is not None:
         owner = subprocess.run(
@@ -486,22 +487,32 @@ def package_license_files(source: pathlib.Path) -> PackageLicenseSource | None:
             PACKAGE_LICENSE_CACHE[package] = None
 
     if shutil.which("dpkg-query") is not None:
-        owner = subprocess.run(
-            ["dpkg-query", "-S", str(source)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
-        )
-        if owner.returncode == 0 and owner.stdout.strip():
+        query_paths = [source]
+        if discovered_source != source:
+            query_paths.append(discovered_source)
+        candidates: list[PackageLicenseSource] = []
+        reported_packages: set[str] = set()
+        for query_path in query_paths:
+            owner = subprocess.run(
+                ["dpkg-query", "-S", str(query_path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+            if owner.returncode != 0 or not owner.stdout.strip():
+                continue
             owner_lines = [
                 line.rsplit(": ", 1)
                 for line in owner.stdout.splitlines()
-                if line.endswith(f": {source}")
+                if line.endswith(f": {query_path}")
             ]
             if len(owner_lines) != 1 or len(owner_lines[0]) != 2:
-                raise PackagingError(f"cannot identify unique package owner: {source}")
+                raise PackagingError(f"cannot identify unique package owner: {query_path}")
             package = owner_lines[0][0]
+            reported_packages.add(package)
+            if len(reported_packages) > 1:
+                raise PackagingError(f"conflicting package owners: {source}")
             listing = subprocess.run(
                 ["dpkg-query", "-L", package],
                 stdout=subprocess.PIPE,
@@ -511,9 +522,12 @@ def package_license_files(source: pathlib.Path) -> PackageLicenseSource | None:
             )
             if listing.returncode != 0:
                 raise PackagingError(f"cannot list license files for package: {package}")
+            listed_paths = set(listing.stdout.splitlines())
+            if query_path.as_posix() not in listed_paths:
+                continue
             licenses = [
                 pathlib.Path(line)
-                for line in listing.stdout.splitlines()
+                for line in listed_paths
                 if pathlib.Path(line).is_file()
                 and (line.endswith("/copyright") or "/licenses/" in line)
             ]
@@ -528,13 +542,20 @@ def package_license_files(source: pathlib.Path) -> PackageLicenseSource | None:
             )
             if version.returncode != 0 or not version.stdout.strip():
                 raise PackagingError(f"cannot identify package version: {package}")
-            return PackageLicenseSource(
-                "dpkg",
-                package,
-                version.stdout.strip(),
-                source,
-                tuple(sorted(set(licenses))),
+            candidates.append(
+                PackageLicenseSource(
+                    "dpkg",
+                    package,
+                    version.stdout.strip(),
+                    query_path,
+                    tuple(sorted(set(licenses))),
+                )
             )
+        if candidates:
+            for candidate in candidates:
+                if candidate.library == source:
+                    return candidate
+            return candidates[0]
     return None
 
 
