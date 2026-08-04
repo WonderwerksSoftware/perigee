@@ -2,7 +2,7 @@
 
 ## Status
 
-**PARTIAL. Task 19 is accepted. The Polaris control-plane probe and a bounded Standard Sunshine video/audio smoke passed. Full input, controller, display, and recovery acceptance is still open.**
+**PARTIAL. Task 19 is accepted. The Polaris control-plane probe and a bounded Standard Sunshine video/audio smoke passed. Deck pointer and list-reset regressions pass on Wayland. Live input, controller, display, and recovery acceptance is still open.**
 
 This file is the publishable acceptance ledger. Do not put an exact host name, network address, UUID, certificate, token, clipboard content, private-key path, or user-profile path in this file. Keep exact endpoint and identity evidence in an ignored local file with mode `0600`.
 
@@ -79,7 +79,7 @@ The driver interface is `snapshot`, `open`, `close`, and `physical-cycle`. The h
 |---|---|
 | Collection date and time | 2026-08-04; exact time is local-only |
 | Tester | Perigee acceptance harness |
-| Perigee commit | `957c715d` |
+| Perigee commit | `053de742` |
 | Polaris commit and version | Official Ubuntu 24.04 release package, version `1.3.4` |
 | Standard Sunshine version | Active existing user service; exact version is local-only |
 | Operating system | Ubuntu 24.04 |
@@ -196,6 +196,8 @@ For each row, record the observed outcome. Do not infer success from an accepted
 |---|---|
 | Pair and launch | PASS; launched through the existing Sunshine service with the corrected temporary test profile |
 | Video and audio | PASS; 1280x720x30, H.264 decode test passed, first video packet at 100 ms, first audio packet at 400 ms |
+| Polaris discovery on Sunshine host | PASS; no Polaris endpoint probes in the rebuilt client log |
+| Deck pointer/list regressions | PASS; 20 Qt Quick tests pass on the Wayland compositor |
 | Keyboard, mouse, controller, and rumble | NOT RUN |
 | Statistics shortcut | NOT RUN |
 | Direct legacy shortcuts | NOT RUN |
