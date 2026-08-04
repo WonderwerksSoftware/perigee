@@ -1171,7 +1171,9 @@ QNetworkRequest PolarisApiClient::makeRequest(
 {
     QNetworkRequest request(url);
     request.setSslConfiguration(identity);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
+#endif
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::ManualRedirectPolicy);
     return request;

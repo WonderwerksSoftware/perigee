@@ -133,6 +133,21 @@ class LinuxPackagingContractTest(unittest.TestCase):
             "#include <linux/input-event-codes.h>",
             bindings,
         )
+        adapter = (SOURCE_ROOT / "app/perigee/polaris/polarisadapter.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)", adapter)
+        self.assertIn("#include <QTextCodec>", adapter)
+        self.assertIn("QTextCodec::ConverterState", adapter)
+        api_client = (SOURCE_ROOT / "app/perigee/polaris/polarisapiclient.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertRegex(
+            api_client,
+            r"#if QT_VERSION >= QT_VERSION_CHECK\(6, 0, 0\)\s+"
+            r"request\.setAttribute\(QNetworkRequest::Http2AllowedAttribute, false\);\s+"
+            r"#endif",
+        )
 
     def test_ci_installs_pinned_qt_source_license_texts(self) -> None:
         for module, digest in (

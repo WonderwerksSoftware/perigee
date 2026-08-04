@@ -10,7 +10,11 @@
 #include <QJsonObject>
 #include <QMutex>
 #include <QMutexLocker>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QStringDecoder>
+#else
+#include <QTextCodec>
+#endif
 #include <QThread>
 
 #include <algorithm>
@@ -183,10 +187,21 @@ bool strictUtf8(const QByteArray& bytes)
     if (bytes.contains('\0')) {
         return false;
     }
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     QStringDecoder decoder(QStringDecoder::Utf8);
     const QString decoded = decoder.decode(bytes);
     Q_UNUSED(decoded);
     return !decoder.hasError();
+#else
+    QTextCodec* codec = QTextCodec::codecForName("UTF-8");
+    if (codec == nullptr) {
+        return false;
+    }
+    QTextCodec::ConverterState state;
+    const QString decoded = codec->toUnicode(bytes.constData(), bytes.size(), &state);
+    Q_UNUSED(decoded);
+    return state.invalidChars == 0;
+#endif
 }
 
 class SdlClipboard final : public PolarisClipboard
