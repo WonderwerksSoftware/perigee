@@ -139,13 +139,16 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn("#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)", adapter)
         self.assertIn("#include <QTextCodec>", adapter)
         self.assertIn("QTextCodec::ConverterState", adapter)
+        self.assertIn("state.invalidChars == 0 && state.remainingChars == 0", adapter)
         api_client = (SOURCE_ROOT / "app/perigee/polaris/polarisapiclient.cpp").read_text(
             encoding="utf-8"
         )
         self.assertRegex(
             api_client,
-            r"#if QT_VERSION >= QT_VERSION_CHECK\(6, 0, 0\)\s+"
+            r"#if QT_VERSION >= QT_VERSION_CHECK\(5, 15, 0\)\s+"
             r"request\.setAttribute\(QNetworkRequest::Http2AllowedAttribute, false\);\s+"
+            r"#else\s+"
+            r"request\.setAttribute\(QNetworkRequest::HTTP2AllowedAttribute, false\);\s+"
             r"#endif",
         )
 

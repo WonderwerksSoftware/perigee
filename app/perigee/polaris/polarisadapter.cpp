@@ -200,7 +200,7 @@ bool strictUtf8(const QByteArray& bytes)
     QTextCodec::ConverterState state;
     const QString decoded = codec->toUnicode(bytes.constData(), bytes.size(), &state);
     Q_UNUSED(decoded);
-    return state.invalidChars == 0;
+    return state.invalidChars == 0 && state.remainingChars == 0;
 #endif
 }
 

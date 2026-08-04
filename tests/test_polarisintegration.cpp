@@ -1806,6 +1806,25 @@ void PolarisIntegrationTest::clipboardLimitsUtf8AcknowledgementAndLogsStaySafe()
     QCOMPARE(invalidResult.errorCode, QStringLiteral("invalid_utf8"));
     QVERIFY(harness.clipboardView->remoteText.isEmpty());
 
+    for (const QByteArray& truncated : {
+             QByteArray::fromHex("e2"), QByteArray::fromHex("e282")}) {
+        FakePolarisServer::ResponseScript truncatedUtf8;
+        truncatedUtf8.path = QStringLiteral("/actions/clipboard?type=text");
+        truncatedUtf8.bodyChunks = {truncated};
+        actionServer.enqueue(std::move(truncatedUtf8));
+        ActionResult truncatedResult;
+        bool truncatedComplete = false;
+        harness.registry.execute(
+            QStringLiteral("clipboard.fetch-remote"), {},
+            [&](const ActionResult& result) {
+                truncatedResult = result;
+                truncatedComplete = true;
+            });
+        QVERIFY(waitForAction(harness.adapter, truncatedComplete));
+        QCOMPARE(truncatedResult.errorCode, QStringLiteral("invalid_utf8"));
+        QVERIFY(harness.clipboardView->remoteText.isEmpty());
+    }
+
     FakePolarisServer::ResponseScript validClipboard;
     validClipboard.path = QStringLiteral("/actions/clipboard?type=text");
     validClipboard.bodyChunks = {QByteArrayLiteral("remote text")};
