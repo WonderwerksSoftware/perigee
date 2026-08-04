@@ -184,7 +184,11 @@ def copy_regular(source: pathlib.Path, destination: pathlib.Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     discovered = source.absolute()
     resolved = source.resolve()
-    COPIED_SOURCES[destination.resolve()] = discovered
+    # A dependency can be discovered from a library that was already copied
+    # into the staging tree. Keep the original host path in that case so
+    # package ownership and license lookup use the real source file.
+    origin = COPIED_SOURCES.get(resolved, discovered)
+    COPIED_SOURCES[destination.resolve()] = origin
     if destination.exists():
         if hashlib.sha256(destination.read_bytes()).digest() != hashlib.sha256(resolved.read_bytes()).digest():
             raise PackagingError(f"dependency name collision: {destination.name}")

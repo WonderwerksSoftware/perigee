@@ -607,6 +607,23 @@ class LinuxPackagingContractTest(unittest.TestCase):
             self.assertEqual(package.library, discovered_library)
             self.assertEqual(package.licenses, (copyright_file,))
 
+    def test_copy_regular_propagates_original_source_identity(self) -> None:
+        stager = load("stage_copy_origin_test", STAGE_PATH)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            original = root / "system/libfixture.so.1"
+            original.parent.mkdir(parents=True)
+            original.write_bytes(b"fixture library\n")
+            first = root / "payload/lib/libfixture.so.1"
+            second = root / "payload/lib/libfixture-copy.so.1"
+
+            stager.COPIED_SOURCES.clear()
+            stager.copy_regular(original, first)
+            stager.copy_regular(first, second)
+
+            self.assertEqual(stager.COPIED_SOURCES[first.resolve()], original)
+            self.assertEqual(stager.COPIED_SOURCES[second.resolve()], original)
+
     def test_stager_and_verifier_share_the_graphics_policy(self) -> None:
         stage = load("stage_policy_test", STAGE_PATH)
         verify = load("verify_policy_test", VERIFY_PATH)
