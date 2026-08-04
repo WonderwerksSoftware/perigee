@@ -36,12 +36,17 @@ FocusScope {
         interactive: count > 4
         currentIndex: deckController.actionModel.focusedRow
 
-        onCurrentIndexChanged: {
-            if (currentIndex >= 0) {
+        function positionCurrentAction() {
+            // A model reset can briefly leave the old focused row above the
+            // new count. Do not ask ListView to position that stale delegate.
+            if (currentIndex >= 0 && currentIndex < count) {
                 forceLayout()
                 positionViewAtIndex(currentIndex, ListView.Contain)
             }
         }
+
+        onCurrentIndexChanged: positionCurrentAction()
+        onCountChanged: positionCurrentAction()
 
         delegate: Item {
             width: actionList.width

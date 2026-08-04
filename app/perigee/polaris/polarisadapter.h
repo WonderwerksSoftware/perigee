@@ -141,6 +141,7 @@ private:
     std::shared_ptr<PolarisTransport> m_Transport;
     std::shared_ptr<PolarisClipboard> m_Clipboard;
     std::shared_ptr<SharedState> m_State;
+    bool m_DiscoveryEnabled = true;
     // Application-owned and longer-lived than every streaming Session.
     SessionTransitionCoordinator* m_TransitionCoordinator = nullptr;
 };

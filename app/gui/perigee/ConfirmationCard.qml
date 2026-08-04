@@ -95,6 +95,7 @@ FocusScope {
 
         MouseArea {
             anchors.fill: parent
+            preventStealing: true
             onPressed: card.focusChoice(0)
             onClicked: card.cancelRequested()
         }
@@ -131,6 +132,7 @@ FocusScope {
 
         MouseArea {
             anchors.fill: parent
+            preventStealing: true
             onPressed: card.focusChoice(1)
             onClicked: card.confirmRequested()
         }

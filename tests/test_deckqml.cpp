@@ -23,10 +23,26 @@
 
 #include <SDL.h>
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 
 namespace {
+
+QStringList capturedQtWarnings;
+QtMessageHandler previousQtMessageHandler = nullptr;
+
+void captureQtWarnings(QtMsgType type,
+                       const QMessageLogContext& context,
+                       const QString& message)
+{
+    if (type == QtWarningMsg) {
+        capturedQtWarnings.push_back(message);
+    }
+    if (previousQtMessageHandler != nullptr) {
+        previousQtMessageHandler(type, context, message);
+    }
+}
 
 class DeckQmlHostAdapter final : public HostAdapter
 {
@@ -132,6 +148,19 @@ QQuickItem* findListViewWithCount(QQuickItem* root, int count)
     return nullptr;
 }
 
+QQuickItem* findMouseArea(QQuickItem* root)
+{
+    if (root->property("preventStealing").isValid()) {
+        return root;
+    }
+    for (QQuickItem* child : root->childItems()) {
+        if (QQuickItem* match = findMouseArea(child)) {
+            return match;
+        }
+    }
+    return nullptr;
+}
+
 qreal relativeLuminance(const QColor& color)
 {
     const auto linearChannel = [](qreal channel) {
@@ -180,6 +209,8 @@ private slots:
     void controllerOpenRevealsInitiallyOffscreenFirstEnabledAction();
     void controllerGlyphsFollowEffectiveLayout();
     void focusedActionBorderContrastsAgainstLightAndDarkVideo();
+    void categoryResetDoesNotPositionAnOutOfRangeDelegate();
+    void actionRowRetainsPointerPressForClick();
     void exposesAccessibleNamesAndDisabledReasons();
     void confirmationTrapsFocusUntilAcceptedOrCancelled();
     void rendersControllerLayoutReferencePngs();
@@ -630,6 +661,94 @@ void DeckQmlTest::focusedActionBorderContrastsAgainstLightAndDarkVideo()
                      .arg(border.name(QColor::HexArgb),
                           interior.name(QColor::HexArgb))));
     }
+}
+
+void DeckQmlTest::categoryResetDoesNotPositionAnOutOfRangeDelegate()
+{
+    DeckQmlHostAdapter adapter;
+    QVector<ActionDescriptor> descriptors;
+    for (int actionIndex = 0; actionIndex < 6; ++actionIndex) {
+        const QString actionId = QStringLiteral("display.%1").arg(actionIndex);
+        adapter.currentSnapshot.actionStates.insert(actionId, state(true));
+        descriptors.push_back(descriptor(
+            actionId,
+            QStringLiteral("Display action %1").arg(actionIndex),
+            ActionCategory::Display));
+    }
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("input.capture"), state(true));
+    descriptors.push_back(descriptor(
+        QStringLiteral("input.capture"), QStringLiteral("Input capture"),
+        ActionCategory::Input));
+    ActionRegistry registry(descriptors, adapter);
+    DeckController controller(&registry);
+    controller.openFromKeyboard();
+    controller.focusActions();
+
+    QQmlEngine engine;
+    QQmlComponent component(
+        &engine, QUrl(QStringLiteral("qrc:/gui/perigee/ActionTray.qml")));
+    std::unique_ptr<QObject> object(component.createWithInitialProperties({
+        {QStringLiteral("deckController"), QVariant::fromValue(&controller)},
+    }));
+    QVERIFY2(object != nullptr, qPrintable(component.errorString()));
+    auto* tray = qobject_cast<QQuickItem*>(object.get());
+    QVERIFY(tray != nullptr);
+    tray->setSize(QSizeF(820, 520));
+    QQuickWindow window;
+    window.resize(820, 520);
+    tray->setParentItem(window.contentItem());
+    window.show();
+    QCoreApplication::processEvents();
+
+    QQuickItem* actionList = findListViewWithCount(tray, 6);
+    QVERIFY(actionList != nullptr);
+    controller.focusAction(QStringLiteral("display.5"));
+    QCoreApplication::processEvents();
+    QCOMPARE(actionList->property("currentIndex").toInt(), 5);
+
+    capturedQtWarnings.clear();
+    previousQtMessageHandler = qInstallMessageHandler(captureQtWarnings);
+    controller.setSearchText(QStringLiteral("Display action 5"));
+    QCoreApplication::processEvents();
+    qInstallMessageHandler(previousQtMessageHandler);
+    previousQtMessageHandler = nullptr;
+
+    QVERIFY2(std::none_of(
+                  capturedQtWarnings.cbegin(), capturedQtWarnings.cend(),
+                  [](const QString& warning) {
+                      return warning.contains(
+                          QStringLiteral("DelegateModel::cancel: index out of range"));
+                  }),
+              qPrintable(capturedQtWarnings.join(QStringLiteral("\n"))));
+    QCOMPARE(actionList->property("count").toInt(), 1);
+    QVERIFY(actionList->property("currentIndex").toInt() <
+            actionList->property("count").toInt());
+}
+
+void DeckQmlTest::actionRowRetainsPointerPressForClick()
+{
+    QQmlEngine engine;
+    QQmlComponent component(
+        &engine, QUrl(QStringLiteral("qrc:/gui/perigee/ActionRow.qml")));
+    std::unique_ptr<QObject> object(component.createWithInitialProperties({
+        {QStringLiteral("actionId"), QStringLiteral("display.select")},
+        {QStringLiteral("actionLabel"), QStringLiteral("Choose display")},
+        {QStringLiteral("actionCategory"), QStringLiteral("Display")},
+        {QStringLiteral("valueText"), QString()},
+        {QStringLiteral("actionEnabled"), true},
+        {QStringLiteral("disabledReason"), QString()},
+        {QStringLiteral("phase"), QStringLiteral("idle")},
+        {QStringLiteral("message"), QString()},
+        {QStringLiteral("actionFocused"), false},
+        {QStringLiteral("requiresConfirmation"), false},
+    }));
+    QVERIFY2(object != nullptr, qPrintable(component.errorString()));
+    auto* root = qobject_cast<QQuickItem*>(object.get());
+    QVERIFY(root != nullptr);
+    QQuickItem* mouseArea = findMouseArea(root);
+    QVERIFY(mouseArea != nullptr);
+    QVERIFY(mouseArea->property("preventStealing").toBool());
 }
 
 void DeckQmlTest::exposesAccessibleNamesAndDisabledReasons()

@@ -4,10 +4,12 @@
 #include "perigee/display/sessiontransitioncoordinator.h"
 #include "perigee/polaris/polarisadapter.h"
 #include "test_registry.h"
+#include "backend/nvcomputer.h"
 
 #include <QFile>
 #include <QJsonArray>
 #include <QQueue>
+#include <QHostAddress>
 #include <QtTest>
 
 #include <algorithm>
@@ -336,6 +338,7 @@ class PolarisAdapterTest final : public QObject
     Q_OBJECT
 
 private slots:
+    void standardHostSkipsPolarisDiscovery();
     void initialDiscoveryUsesExactlyThreeRoutesAndBoundedPumping();
     void completionOrderPublishesOneCoherentGeneration_data();
     void completionOrderPublishesOneCoherentGeneration();
@@ -368,6 +371,26 @@ private slots:
     void dependencyFailuresRemainExactAndCompositional();
     void refreshKeepsPreviousSnapshotUntilNewGenerationIsComplete();
 };
+
+void PolarisAdapterTest::standardHostSkipsPolarisDiscovery()
+{
+    FakeSession session;
+    auto gameStream = std::make_unique<GameStreamAdapter>(&session);
+    NvComputer computer;
+    computer.activeAddress = NvAddress(QHostAddress::LocalHost, 47989);
+    computer.activeHttpsPort = 47984;
+    computer.isPolarisServerSoftware = false;
+
+    PolarisAdapter adapter(*gameStream, computer);
+
+    QVERIFY(!adapter.startDiscovery());
+    QVERIFY(!adapter.refresh());
+    const PolarisDiscoverySnapshot snapshot = adapter.discoverySnapshot();
+    QVERIFY(snapshot.complete);
+    QVERIFY(snapshot.standardHost);
+    QCOMPARE(adapter.availability(PolarisOperation::DisplaySwitch).code,
+             PolarisAvailabilityCode::CapabilityNotAdvertised);
+}
 
 void PolarisAdapterTest::initialDiscoveryUsesExactlyThreeRoutesAndBoundedPumping()
 {

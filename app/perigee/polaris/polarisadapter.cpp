@@ -1,5 +1,7 @@
 #include "polarisadapter.h"
 
+#include "backend/nvcomputer.h"
+
 #include "perigee/actions/gamestreamadapter.h"
 #include "perigee/display/sessiontransitioncoordinator.h"
 
@@ -331,6 +333,12 @@ PolarisAdapter::PolarisAdapter(GameStreamAdapter& localAdapter,
                      std::make_unique<ApiClientTransport>(computer), {},
                      transitionCoordinator)
 {
+    m_DiscoveryEnabled = computer.isPolarisServerSoftware;
+    if (!m_DiscoveryEnabled) {
+        QMutexLocker locker(&m_State->mutex);
+        m_State->published.complete = true;
+        m_State->published.standardHost = true;
+    }
 }
 
 PolarisAdapter::~PolarisAdapter()
@@ -408,11 +416,17 @@ QVector<ActionDescriptor> PolarisAdapter::descriptors()
 
 bool PolarisAdapter::startDiscovery()
 {
+    if (!m_DiscoveryEnabled) {
+        return false;
+    }
     return beginGeneration(m_State, m_Transport, true);
 }
 
 bool PolarisAdapter::refresh()
 {
+    if (!m_DiscoveryEnabled) {
+        return false;
+    }
     return beginGeneration(m_State, m_Transport, false);
 }
 

@@ -103,6 +103,7 @@ Rectangle {
         anchors.fill: parent
         enabled: actionEnabled
         hoverEnabled: true
+        preventStealing: true
         onEntered: row.pointed()
         onPressed: row.pointed()
         onClicked: row.chosen()
