@@ -1,5 +1,5 @@
 ---
-name: Build - Linux AppImage
+name: Build - Linux CI target
 permissions:
   contents: read
 
@@ -9,12 +9,38 @@ on:
       ci_version:
         required: true
         type: string
+      job_kind:
+        description: Select artifacts, qttest, or sunshine.
+        required: false
+        type: string
+        default: artifacts
+      appimage_runtime_url:
+        description: Public AppImage type-2 runtime URL. The digest is the trust anchor.
+        required: false
+        type: string
+        default: https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64
+      appimage_runtime_sha256:
+        description: Reviewed SHA-256 for the AppImage type-2 runtime.
+        required: false
+        type: string
+        default: 1cc49bcf1e2ccd593c379adb17c9f85a36d619088296504de95b1d06215aebbf
 
 jobs:
   build:
-    env:
-      CI_VERSION: ${{ inputs.ci_version }}
     runs-on: ubuntu-22.04
+    env:
+      AQT_VENV: ${{ runner.temp }}/perigee-aqt
+      CC: gcc
+      CI_VERSION: ${{ inputs.ci_version }}
+      CPATH: ${{ github.workspace }}/dep_root/include
+      CXX: g++
+      DEP_ROOT: ${{ github.workspace }}/dep_root
+      JOB_KIND: ${{ inputs.job_kind }}
+      MESON_VERSION: 1.6.1
+      PYTHON_WHEEL_DIR: ${{ runner.temp }}/perigee-python-wheels
+      QT_DIR: ${{ runner.temp }}/perigee-qt/6.8.3/gcc_64
+      QT_ROOT: ${{ runner.temp }}/perigee-qt
+      QT_VERSION: 6.8.3
 
     steps:
       - name: Checkout Repository
@@ -23,20 +49,92 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 1
 
-      - name: Setup environment
+      - name: Validate requested target
         run: |
-          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-1.4.313-jammy.list https://packages.lunarg.com/vulkan/1.4.313/lunarg-vulkan-1.4.313-jammy.list
-          sudo apt update
-          sudo apt install -y qt6-base-dev qt6-declarative-dev libqt6svg6-dev qml6-module-qtquick-controls qml6-module-qtquick-templates qml6-module-qtquick-layouts \
-            qml6-module-qtqml-workerscript qml6-module-qtquick-window qml6-module-qtquick python3-pip nasm libgbm-dev libdrm-dev libfreetype-dev libasound2-dev \
-            libdbus-1-dev libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libglu1-mesa-dev libibus-1.0-dev libpulse-dev libudev-dev libx11-dev libxcursor-dev \
-            libxext-dev libxi-dev libxinerama-dev libxkbcommon-dev libxrandr-dev libxss-dev libxt-dev libxv-dev libxxf86vm-dev libxcb-dri3-dev libx11-xcb-dev \
-            libxfixes-dev libxtst-dev wayland-protocols libopus-dev libvdpau-dev libgl-dev libpipewire-0.3-dev liburing-dev vulkan-sdk cmake
-          sudo pip3 install meson
-          mkdir -p dep_root/{bin,include,lib}
-          echo "DEP_ROOT=$PWD/dep_root" >> "${GITHUB_ENV}"
-          echo "$PWD/dep_root/bin" >> "${GITHUB_PATH}"
+          case "$JOB_KIND" in
+            artifacts|qttest|sunshine) ;;
+            *) printf 'unsupported job_kind: %s\n' "$JOB_KIND" >&2; exit 2 ;;
+          esac
+
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          xargs -r sudo apt-get install --yes \
+            < scripts/ci/ubuntu-22.04-packages.txt
+          python3 -m venv "$AQT_VENV"
+          mkdir -p "$PYTHON_WHEEL_DIR"
+          "$AQT_VENV/bin/pip" download --disable-pip-version-check \
+            --only-binary=:all: --dest "$PYTHON_WHEEL_DIR" \
+            aqtinstall==3.3.0 meson=="$MESON_VERSION"
+          "$AQT_VENV/bin/pip" install --disable-pip-version-check \
+            --no-index --find-links "$PYTHON_WHEEL_DIR" \
+            aqtinstall==3.3.0 meson=="$MESON_VERSION"
+          mkdir -p "$DEP_ROOT"
+          printf '%s\n' "$AQT_VENV/bin" "$QT_DIR/bin" "$DEP_ROOT/bin" >> "$GITHUB_PATH"
+          {
+            printf 'CMAKE_PREFIX_PATH=%s:%s\n' "$DEP_ROOT" "$QT_DIR"
+            printf 'LD_LIBRARY_PATH=%s/lib:%s/lib\n' "$DEP_ROOT" "$QT_DIR"
+            printf 'PKG_CONFIG_PATH=%s/lib/pkgconfig:%s/share/pkgconfig\n' "$DEP_ROOT" "$DEP_ROOT"
+          } >> "$GITHUB_ENV"
+
+      - name: Cache pinned Qt
+        id: qt-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.QT_ROOT }}
+          key: perigee-qt-${{ runner.os }}-${{ runner.arch }}-6.8.3-aqt-3.3.0-qtdeclarative-qtsvg-qtwayland-qtvirtualkeyboard
+
+      - name: Install pinned Qt
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        run: |
+          aqt install-qt linux desktop 6.8.3 gcc_64 \
+            -O "$QT_ROOT" \
+            -m qtdeclarative qtsvg qtwayland qtvirtualkeyboard
+
+      - name: Validate Qt version
+        run: |
+          test -x "$QT_DIR/bin/qmake6" || {
+            printf 'Perigee requires Qt 6.7 or newer: qmake6 is missing\n' >&2
+            exit 1
+          }
+          test "$(command -v qmake6)" = "$QT_DIR/bin/qmake6" || {
+            printf 'Perigee requires Qt 6.7 or newer: qmake6 is not from pinned Qt\n' >&2
+            exit 1
+          }
+          actual_qt_version="$(qmake6 -query QT_VERSION)"
+          test "$actual_qt_version" = "$QT_VERSION" || {
+            printf 'Perigee requires Qt 6.7 or newer: expected %s, found %s\n' \
+              "$QT_VERSION" "$actual_qt_version" >&2
+            exit 1
+          }
+          test "$(printf '%s\n%s\n' 6.7.0 "$actual_qt_version" | sort -V | head -n 1)" = 6.7.0 || {
+            printf 'Perigee requires Qt 6.7 or newer\n' >&2
+            exit 1
+          }
+          test -d "$QT_DIR/qml/QtQuick/Controls"
+          test -d "$QT_DIR/qml/QtQuick/VirtualKeyboard"
+          test -d "$QT_DIR/plugins/platforms"
+          test -d "$QT_DIR/plugins/imageformats"
+
+      - name: Validate pinned Meson version
+        run: |
+          test "$(command -v meson)" = "$AQT_VENV/bin/meson" || {
+            printf 'Meson is not from the pinned tool environment\n' >&2
+            exit 1
+          }
+          actual_meson_version="$(meson --version)"
+          test "$actual_meson_version" = "$MESON_VERSION" || {
+            printf 'expected Meson %s, found %s\n' \
+              "$MESON_VERSION" "$actual_meson_version" >&2
+            exit 1
+          }
+
+      - name: Checkout Vulkan-Headers
+        uses: actions/checkout@v5
+        with:
+          repository: KhronosGroup/Vulkan-Headers
+          ref: 409c16be502e39fe70dd6fe2d9ad4842ef2c9a53
+          path: deps/Vulkan-Headers
 
       - name: Checkout SDL3
         uses: actions/checkout@v5
@@ -45,26 +143,22 @@ jobs:
           ref: c9ad296376ed6091e0fdec9844461fdf09af7845
           path: deps/SDL
 
-      - name: Build SDL3
-        working-directory: deps/SDL
+      - name: Download sdl2-compat source
+        env:
+          SDL2_COMPAT_SHA256: a99b7262525a454d1065cf76dd17240fd808dfc4ef15636990ff83a5d0d9e740
+          SDL2_COMPAT_URL: https://libsdl.org/release/sdl2-compat-2.32.70.tar.gz
         run: |
-          cmake -DSDL_KMSDRM=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_INSTALL_DOCS=OFF -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -S . -B build
-          cmake --build build -j
-          sudo cmake --install build
-
-      - name: Checkout sdl2-compat
-        uses: actions/checkout@v5
-        with:
-          repository: libsdl-org/sdl2-compat
-          ref: release-2.32.70
-          path: deps/sdl2-compat
-
-      - name: Build sdl2-compat
-        working-directory: deps/sdl2-compat
-        run: |
-          cmake -DSDL2COMPAT_TESTS=OFF -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -S . -B build
-          cmake --build build -j
-          sudo cmake --install build
+          mkdir -p deps
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "$SDL2_COMPAT_URL" \
+            --output "$RUNNER_TEMP/sdl2-compat-2.32.70.tar.gz"
+          printf '%s  %s\n' \
+            "$SDL2_COMPAT_SHA256" \
+            "$RUNNER_TEMP/sdl2-compat-2.32.70.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip \
+            --file "$RUNNER_TEMP/sdl2-compat-2.32.70.tar.gz" \
+            --directory deps
+          mv deps/sdl2-compat-2.32.70 deps/sdl2-compat
 
       - name: Checkout SDL_ttf
         uses: actions/checkout@v5
@@ -74,28 +168,12 @@ jobs:
           path: deps/SDL_ttf
           submodules: 'recursive'
 
-      - name: Build SDL_ttf
-        working-directory: deps/SDL_ttf
-        run: |
-          ./autogen.sh
-          ./configure
-          make -j$(nproc)
-          sudo make install
-
       - name: Checkout libva
         uses: actions/checkout@v5
         with:
           repository: intel/libva
-          ref: 2.24.1
+          ref: 710eb465c6277ee2cac3e6948767b01eebe7e77a
           path: deps/libva
-
-      - name: Build libva
-        working-directory: deps/libva
-        run: |
-          ./autogen.sh
-          ./configure --enable-x11
-          make -j$(nproc)
-          sudo make install
 
       - name: Checkout libplacebo
         uses: actions/checkout@v5
@@ -105,62 +183,345 @@ jobs:
           path: deps/libplacebo
           submodules: 'recursive'
 
-      - name: Build libplacebo
-        working-directory: deps/libplacebo
-        run: |
-          git apply ../../app/deploy/linux/appimage/*.patch
-          meson setup build -Dvulkan=enabled -Dopengl=disabled -Ddemos=false
-          ninja -C build
-          sudo ninja install -C build
-
-      - name: Build dav1d
-        working-directory: deps
+      - name: Checkout dav1d
         env:
-          DAV1D_VER: 1.5.4
+          DAV1D_COMMIT: 54706fc6bc0cdecab7e9593974a4039cc038fca7
         run: |
-          git clone --branch $DAV1D_VER --depth 1 https://code.videolan.org/videolan/dav1d.git
-          pushd dav1d
-          meson setup build -Ddefault_library=static -Dbuildtype=release -Denable_tools=false -Denable_tests=false
-          ninja -C build
-          sudo ninja install -C build
-          popd
+          git clone --filter=blob:none --no-checkout \
+            https://code.videolan.org/videolan/dav1d.git deps/dav1d
+          git -C deps/dav1d checkout --detach "$DAV1D_COMMIT"
 
       - name: Checkout FFmpeg
         uses: actions/checkout@v5
         with:
           repository: FFmpeg/FFmpeg
-          ref: n8.1.1
+          ref: 239f2c733de417201d7ad3b3b8b0d9b63285b2b1
           path: deps/FFmpeg
 
+      - name: Fingerprint dependency sources
+        id: sources
+        run: |
+          {
+            for source in Vulkan-Headers SDL SDL_ttf libva libplacebo dav1d FFmpeg; do
+              printf '%s\n' "$source"
+              git -C "deps/$source" rev-parse HEAD
+              git -C "deps/$source" submodule status --recursive
+            done
+            sha256sum "$RUNNER_TEMP/sdl2-compat-2.32.70.tar.gz"
+            sha256sum scripts/lib/reviewed_linux_license_digests.tsv
+            sha256sum scripts/ci/ubuntu-22.04-packages.txt
+          } > "$RUNNER_TEMP/perigee-sources.txt"
+          printf 'fingerprint=%s\n' \
+            "$(sha256sum "$RUNNER_TEMP/perigee-sources.txt" | awk '{print $1}')" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Fingerprint dependency toolchain
+        id: toolchain
+        run: |
+          {
+            printf 'CC=%s\nCXX=%s\n' "$CC" "$CXX"
+            command -v gcc g++ ld as ar objcopy strip readelf qmake6
+            aqt --version
+            gcc --version
+            g++ --version
+            ld --version
+            as --version
+            ar --version
+            objcopy --version
+            strip --version
+            readelf --version
+            nasm -v
+            cmake --version
+            meson --version
+            ninja --version
+            pkg-config --version
+            pkg-config --modversion vulkan
+            pkg-config --modversion glslang
+            glslangValidator --version
+            python3 --version
+            qmake6 -query QT_VERSION
+            qmake6 -query QT_INSTALL_PREFIX
+            printf '%s\n' 'qtdeclarative qtsvg qtwayland qtvirtualkeyboard'
+            dpkg-query -W -f='${Package}=${Version}\n' | LC_ALL=C sort
+            "$AQT_VENV/bin/pip" freeze --all | LC_ALL=C sort
+            (
+              cd "$PYTHON_WHEEL_DIR"
+              sha256sum -- * | LC_ALL=C sort
+            )
+          } > "$RUNNER_TEMP/perigee-toolchain.txt"
+          printf 'fingerprint=%s\n' \
+            "$(sha256sum "$RUNNER_TEMP/perigee-toolchain.txt" | awk '{print $1}')" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Cache immutable dependencies
+        id: dependency-cache
+        uses: actions/cache@v4
+        with:
+          path: dep_root
+          key: perigee-deps-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.fingerprint }}-${{ steps.sources.outputs.fingerprint }}-${{ hashFiles('.github/workflows/build-appimage.yml', 'app/app.pro', 'globaldefs.pri') }}
+
+      - name: Install pinned Vulkan headers
+        if: steps.dependency-cache.outputs.cache-hit != 'true'
+        working-directory: deps/Vulkan-Headers
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEP_ROOT"
+          cmake --install build
+
+      - name: Validate pinned Vulkan headers
+        run: |
+          test -f "$DEP_ROOT/include/vulkan/vulkan_core.h"
+          actual_header_version="$(
+            printf '%s\n' \
+              '#include <vulkan/vulkan_core.h>' \
+              'VK_HEADER_VERSION' | gcc -E -P -x c - | tail -n 1
+          )"
+          test "$actual_header_version" = 313
+          printf '%s\n' \
+            '#include <vulkan/vulkan_core.h>' \
+            '#ifndef VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME' \
+            '#error VK_KHR_video_decode_av1 is unavailable' \
+            '#endif' \
+            'int main(void) { return 0; }' | gcc -x c -fsyntax-only -
+
+      - name: Build SDL3
+        if: steps.dependency-cache.outputs.cache-hit != 'true'
+        working-directory: deps/SDL
+        run: |
+          cmake -DCMAKE_INSTALL_PREFIX="$DEP_ROOT" -DSDL_KMSDRM=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_INSTALL_DOCS=OFF -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -S . -B build
+          cmake --build build -j
+          cmake --install build
+
+      - name: Build sdl2-compat
+        if: steps.dependency-cache.outputs.cache-hit != 'true'
+        working-directory: deps/sdl2-compat
+        run: |
+          cmake -DCMAKE_INSTALL_PREFIX="$DEP_ROOT" -DSDL2COMPAT_TESTS=OFF -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -S . -B build
+          cmake --build build -j
+          cmake --install build
+
+      - name: Build SDL_ttf
+        if: steps.dependency-cache.outputs.cache-hit != 'true'
+        working-directory: deps/SDL_ttf
+        run: |
+          ./autogen.sh
+          ./configure --prefix="$DEP_ROOT"
+          make -j"$(nproc)"
+          make install
+
+      - name: Build libva
+        if: steps.dependency-cache.outputs.cache-hit != 'true'
+        working-directory: deps/libva
+        run: |
+          ./autogen.sh
+          ./configure --prefix="$DEP_ROOT" --enable-x11 --enable-wayland --enable-drm
+          make -j"$(nproc)"
+          make install
+
+      - name: Build libplacebo
+        if: steps.dependency-cache.outputs.cache-hit != 'true'
+        working-directory: deps/libplacebo
+        run: |
+          git apply ../../app/deploy/linux/appimage/*.patch
+          meson setup build --prefix="$DEP_ROOT" -Dvulkan=enabled -Dglslang=enabled -Dshaderc=disabled -Dopengl=disabled -Ddemos=false
+          ninja -C build
+          ninja install -C build
+
+      - name: Build dav1d
+        if: steps.dependency-cache.outputs.cache-hit != 'true'
+        working-directory: deps/dav1d
+        run: |
+          meson setup build --prefix="$DEP_ROOT" -Ddefault_library=static -Dbuildtype=release -Denable_tools=false -Denable_tests=false
+          ninja -C build
+          ninja install -C build
+
       - name: Build FFmpeg
+        if: steps.dependency-cache.outputs.cache-hit != 'true'
         working-directory: deps/FFmpeg
         run: |
-          ./configure --enable-pic --enable-lto --disable-static --enable-shared --disable-all --disable-autodetect \
+          ./configure --prefix="$DEP_ROOT" --enable-pic --enable-lto --disable-static --enable-shared --disable-all --disable-autodetect \
             --enable-avcodec --enable-avformat --enable-swscale \
             --enable-decoder=h264 --enable-decoder=hevc --enable-decoder=av1 \
             --enable-vaapi --enable-hwaccel=h264_vaapi --enable-hwaccel=hevc_vaapi --enable-hwaccel=av1_vaapi \
-            --enable-vdpau --enable-hwaccel=h264_vdpau  --enable-hwaccel=hevc_vdpau --enable-hwaccel=av1_vdpau \
+            --enable-vdpau --enable-hwaccel=h264_vdpau --enable-hwaccel=hevc_vdpau --enable-hwaccel=av1_vdpau \
             --enable-libdrm --enable-vulkan --enable-hwaccel=h264_vulkan --enable-hwaccel=hevc_vulkan --enable-hwaccel=av1_vulkan \
             --enable-libdav1d --enable-decoder=libdav1d
-          make -j$(nproc)
-          sudo make install
+          make -j"$(nproc)"
+          make install
 
-      - name: Install linuxdeploy
-        working-directory: dep_root/bin
+      - name: Install pinned AppImage runtime
+        if: inputs.job_kind == 'artifacts'
+        env:
+          APPIMAGE_RUNTIME_SHA256: ${{ inputs.appimage_runtime_sha256 }}
+          APPIMAGE_RUNTIME_URL: ${{ inputs.appimage_runtime_url }}
         run: |
-          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          wget https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-          chmod +x linuxdeploy*.AppImage
+          [[ "$APPIMAGE_RUNTIME_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            printf 'invalid AppImage runtime SHA-256\n' >&2
+            exit 2
+          }
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "$APPIMAGE_RUNTIME_URL" \
+            --output "$RUNNER_TEMP/runtime-x86_64"
+          printf '%s  %s\n' \
+            "$APPIMAGE_RUNTIME_SHA256" \
+            "$RUNNER_TEMP/runtime-x86_64" | sha256sum --check --strict
+          chmod 0755 "$RUNNER_TEMP/runtime-x86_64"
+          printf 'PERIGEE_APPIMAGE_RUNTIME=%s\n' \
+            "$RUNNER_TEMP/runtime-x86_64" >> "$GITHUB_ENV"
 
-      - name: Build Binaries
+      - name: Build isolated release candidates
+        if: inputs.job_kind == 'artifacts'
         run: |
-          sudo ldconfig
-          scripts/build-appimage.sh
+          for candidate in a b; do
+            build_dir="$GITHUB_WORKSPACE/build/package-$candidate"
+            tar_stage="$GITHUB_WORKSPACE/build/stage-tar-$candidate"
+            appimage_stage="$GITHUB_WORKSPACE/build/stage-appimage-$candidate"
+            output_dir="$GITHUB_WORKSPACE/build/artifacts-$candidate"
+            PERIGEE_BUILD_DIR="$build_dir" \
+            PERIGEE_STAGE_DIR="$tar_stage" \
+            PERIGEE_OUTPUT_DIR="$output_dir" \
+              scripts/build-linux-tar.sh
+            PERIGEE_BINARY="$build_dir/app/perigee" \
+            PERIGEE_BUILD_DIR="$build_dir" \
+            PERIGEE_STAGE_DIR="$appimage_stage" \
+            PERIGEE_OUTPUT_DIR="$output_dir" \
+              scripts/build-appimage.sh
+          done
 
-      - name: Upload Binaries
+      - name: Compare isolated release candidates
+        if: inputs.job_kind == 'artifacts'
+        run: |
+          version="$(tr -d '\r\n' < app/version.txt)"
+          cmp --silent build/artifacts-a/Perigee-$version-x86_64.AppImage \
+            build/artifacts-b/Perigee-$version-x86_64.AppImage
+          cmp --silent build/artifacts-a/Perigee-$version-linux-x86_64.tar.zst \
+            build/artifacts-b/Perigee-$version-linux-x86_64.tar.zst
+          sha256sum \
+            build/artifacts-a/Perigee-$version-x86_64.AppImage \
+            build/artifacts-b/Perigee-$version-x86_64.AppImage \
+            build/artifacts-a/Perigee-$version-linux-x86_64.tar.zst \
+            build/artifacts-b/Perigee-$version-linux-x86_64.tar.zst
+
+      - name: Build tests
+        if: inputs.job_kind == 'qttest' || inputs.job_kind == 'sunshine'
+        run: |
+          mkdir -p build-tests
+          cd build-tests
+          qmake6 ../moonlight-qt.pro CONFIG+=debug CONFIG+=perigee-tests
+          CCACHE_DISABLE=1 make -j2 debug
+
+      - name: Prepare temporary test profile
+        if: inputs.job_kind == 'qttest' || inputs.job_kind == 'sunshine'
+        run: |
+          mkdir -p \
+            "$RUNNER_TEMP/perigee-test/config" \
+            "$RUNNER_TEMP/perigee-test/cache" \
+            "$RUNNER_TEMP/perigee-test/data" \
+            "$RUNNER_TEMP/perigee-test/runtime" \
+            "$RUNNER_TEMP/perigee-test/home"
+          chmod 0700 "$RUNNER_TEMP/perigee-test/runtime"
+
+      - name: Run QtTest suite
+        if: inputs.job_kind == 'qttest'
+        env:
+          HOME: ${{ runner.temp }}/perigee-test/home
+          XDG_CACHE_HOME: ${{ runner.temp }}/perigee-test/cache
+          XDG_CONFIG_HOME: ${{ runner.temp }}/perigee-test/config
+          XDG_DATA_HOME: ${{ runner.temp }}/perigee-test/data
+          XDG_RUNTIME_DIR: ${{ runner.temp }}/perigee-test/runtime
+        run: |
+          xvfb-run -a -s '-screen 0 1280x720x24' \
+            env LIBGL_ALWAYS_SOFTWARE=1 QT_QPA_PLATFORM=xcb SDL_VIDEODRIVER=dummy \
+            ./build-tests/tests/perigee-tests -silent
+
+      - name: Run standard Sunshine fixtures
+        if: inputs.job_kind == 'sunshine'
+        env:
+          HOME: ${{ runner.temp }}/perigee-test/home
+          XDG_CACHE_HOME: ${{ runner.temp }}/perigee-test/cache
+          XDG_CONFIG_HOME: ${{ runner.temp }}/perigee-test/config
+          XDG_DATA_HOME: ${{ runner.temp }}/perigee-test/data
+          XDG_RUNTIME_DIR: ${{ runner.temp }}/perigee-test/runtime
+        run: |
+          env QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
+            QML_DISABLE_DISK_CACHE=1 SDL_VIDEODRIVER=dummy \
+            ./build-tests/tests/perigee-tests PolarisAdapterTest -silent
+
+      - name: Record Ubuntu package provenance
+        if: inputs.job_kind == 'artifacts'
+        run: |
+          dpkg-query -W -f='${Package}=${Version}\n' | LC_ALL=C sort \
+            > "$RUNNER_TEMP/perigee-dpkg-packages.txt"
+
+      - name: Upload candidate A AppImage
+        if: inputs.job_kind == 'artifacts'
         uses: actions/upload-artifact@v6
         with:
-          name: Perigee-LinuxAppImage-${{ env.CI_VERSION }}
-          path: build/installer-release/Perigee-${{ env.CI_VERSION }}-x86_64.AppImage
+          name: Perigee-LinuxAppImage-a-${{ env.CI_VERSION }}
+          path: build/artifacts-a/Perigee-*-x86_64.AppImage
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload candidate A AppImage package provenance
+        if: inputs.job_kind == 'artifacts'
+        uses: actions/upload-artifact@v6
+        with:
+          name: Perigee-LinuxAppImage-a-dpkg-${{ env.CI_VERSION }}
+          path: ${{ runner.temp }}/perigee-dpkg-packages.txt
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload candidate A Linux tar
+        if: inputs.job_kind == 'artifacts'
+        uses: actions/upload-artifact@v6
+        with:
+          name: Perigee-LinuxTar-a-${{ env.CI_VERSION }}
+          path: build/artifacts-a/Perigee-*-linux-x86_64.tar.zst
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload candidate A Linux tar package provenance
+        if: inputs.job_kind == 'artifacts'
+        uses: actions/upload-artifact@v6
+        with:
+          name: Perigee-LinuxTar-a-dpkg-${{ env.CI_VERSION }}
+          path: ${{ runner.temp }}/perigee-dpkg-packages.txt
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload candidate B AppImage
+        if: inputs.job_kind == 'artifacts'
+        uses: actions/upload-artifact@v6
+        with:
+          name: Perigee-LinuxAppImage-b-${{ env.CI_VERSION }}
+          path: build/artifacts-b/Perigee-*-x86_64.AppImage
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload candidate B AppImage package provenance
+        if: inputs.job_kind == 'artifacts'
+        uses: actions/upload-artifact@v6
+        with:
+          name: Perigee-LinuxAppImage-b-dpkg-${{ env.CI_VERSION }}
+          path: ${{ runner.temp }}/perigee-dpkg-packages.txt
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload candidate B Linux tar
+        if: inputs.job_kind == 'artifacts'
+        uses: actions/upload-artifact@v6
+        with:
+          name: Perigee-LinuxTar-b-${{ env.CI_VERSION }}
+          path: build/artifacts-b/Perigee-*-linux-x86_64.tar.zst
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload candidate B Linux tar package provenance
+        if: inputs.job_kind == 'artifacts'
+        uses: actions/upload-artifact@v6
+        with:
+          name: Perigee-LinuxTar-b-dpkg-${{ env.CI_VERSION }}
+          path: ${{ runner.temp }}/perigee-dpkg-packages.txt
           compression-level: 0
           if-no-files-found: error

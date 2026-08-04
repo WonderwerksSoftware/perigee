@@ -8,6 +8,7 @@
 build/
 /build*/
 *.AppImage
+*.tar.zst
 /acceptance-logs/
 libs/
 config.tests/*/.qmake.stash

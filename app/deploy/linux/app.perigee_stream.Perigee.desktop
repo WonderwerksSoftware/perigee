@@ -2,7 +2,7 @@
 Name=Perigee
 Comment=Stream games and workstations with an in-stream control deck
 Exec=perigee
-Icon=perigee
+Icon=app.perigee_stream.Perigee
 Terminal=false
 Type=Application
 Categories=Qt;Network;RemoteAccess;

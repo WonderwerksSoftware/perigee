@@ -372,7 +372,7 @@ void BrandingTest::desktopMetadataUsesPerigeeIdentity()
     QCOMPARE(desktop.value(QStringLiteral("Exec")).toString(),
              QStringLiteral("perigee"));
     QCOMPARE(desktop.value(QStringLiteral("Icon")).toString(),
-             QStringLiteral("perigee"));
+             QStringLiteral("app.perigee_stream.Perigee"));
 }
 
 void BrandingTest::appStreamMetadataUsesPerigeeIdentity()
@@ -560,8 +560,10 @@ void BrandingTest::allArtifactConsumersUsePerigeeNames()
         QStringLiteral(".github/workflows/build-win-mac.yml"),
         QStringLiteral(".github/workflows/build-steamlink.yml"),
         QStringLiteral(".github/workflows/build-appimage.yml"),
+        QStringLiteral(".github/workflows/perigee-ci.yml"),
         QStringLiteral("scripts/build-steamlink-app.sh"),
         QStringLiteral("scripts/build-appimage.sh"),
+        QStringLiteral("scripts/build-linux-tar.sh"),
         QStringLiteral("scripts/generate-src.sh"),
         QStringLiteral("app/deploy/steamlink/toc.txt"),
         QStringLiteral("app/deploy/steamlink/perigee.sh"),
@@ -609,8 +611,11 @@ void BrandingTest::allArtifactConsumersUsePerigeeNames()
     QVERIFY(appImageWorkflow.open(QIODevice::ReadOnly | QIODevice::Text));
     const QByteArray appImageWorkflowContents = appImageWorkflow.readAll();
     QVERIFY(appImageWorkflowContents.contains("name: Perigee-LinuxAppImage-"));
-    QVERIFY(appImageWorkflowContents.contains(
-        "build/installer-release/Perigee-${{ env.CI_VERSION }}-x86_64.AppImage"));
+    QVERIFY(appImageWorkflowContents.contains("path: Perigee-*-x86_64.AppImage"));
+    QVERIFY(appImageWorkflowContents.contains("name: Perigee-LinuxTar-"));
+    QVERIFY(appImageWorkflowContents.contains("path: Perigee-*-linux-x86_64.tar.zst"));
+    QVERIFY(!appImageWorkflowContents.contains(
+        "Perigee-${{ env.CI_VERSION }}-x86_64.AppImage"));
 
     QFile toc(QDir(sourceRoot()).filePath(
         QStringLiteral("app/deploy/steamlink/toc.txt")));

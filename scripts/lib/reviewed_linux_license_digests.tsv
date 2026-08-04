@@ -1,0 +1,8 @@
+# Perigee reviewed Linux dependency license digests, schema 1.
+# Reviewed non-system profile: local FFmpeg 8.0.1 dependency only.
+# Ubuntu 22.04 source-built and aqt Qt 6.8.3 inputs remain open and must fail closed.
+# Format: sha256, two spaces, deterministic staged component/path.
+# Regenerate a candidate with scripts/lib/generate_linux_license_catalog.py;
+# review every changed source identity and legal text before replacing this file.
+2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af  elf/soname-libavcodec.so.62/LICENSE.md
+8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643  elf/soname-libavcodec.so.62/COPYING.GPLv2

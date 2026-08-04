@@ -1,0 +1,425 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import importlib.util
+import inspect
+import pathlib
+import re
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+
+SOURCE_ROOT = pathlib.Path(__file__).resolve().parents[2]
+WORKFLOW = SOURCE_ROOT / ".github/workflows/build-appimage.yml"
+PIPELINE = SOURCE_ROOT / ".github/workflows/perigee-ci.yml"
+STAGE_PATH = SOURCE_ROOT / "scripts/lib/stage_linux_payload.py"
+VERIFY_PATH = SOURCE_ROOT / "scripts/lib/verify_linux_artifacts.py"
+LICENSE_CATALOG_PATH = SOURCE_ROOT / "scripts/lib/reviewed_linux_license_digests.tsv"
+LICENSE_CATALOG_GENERATOR = SOURCE_ROOT / "scripts/lib/generate_linux_license_catalog.py"
+UBUNTU_PACKAGE_SET = SOURCE_ROOT / "scripts/ci/ubuntu-22.04-packages.txt"
+
+
+def load(name: str, path: pathlib.Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(path.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module
+
+
+class LinuxPackagingContractTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.ubuntu_packages = UBUNTU_PACKAGE_SET.read_text(encoding="utf-8").splitlines()
+
+    def test_workflow_validates_job_kind_before_setup(self) -> None:
+        self.assertIn('case "$JOB_KIND" in', self.workflow)
+        self.assertIn("artifacts|qttest|sunshine", self.workflow)
+        self.assertIn("unsupported job_kind", self.workflow)
+
+    def test_runtime_inputs_enter_shell_only_through_environment(self) -> None:
+        self.assertIn("APPIMAGE_RUNTIME_URL: ${{ inputs.appimage_runtime_url }}", self.workflow)
+        self.assertIn("APPIMAGE_RUNTIME_SHA256: ${{ inputs.appimage_runtime_sha256 }}", self.workflow)
+        self.assertNotIn("'${{ inputs.appimage_runtime_url }}'", self.workflow)
+        self.assertNotIn("'${{ inputs.appimage_runtime_sha256 }}'", self.workflow)
+        self.assertRegex(self.workflow, r"\[\[ \"\$APPIMAGE_RUNTIME_SHA256\" =~ \^\[0-9a-f\]\{64\}\$ \]\]")
+
+    def test_ci_build_inputs_and_native_wayland_assertion_are_present(self) -> None:
+        self.assertIn("libwayland-dev", self.ubuntu_packages)
+        self.assertRegex(self.workflow, r"configure[^\n]*--enable-x11[^\n]*--enable-wayland[^\n]*--enable-drm")
+        self.assertNotIn("libshaderc-dev", self.workflow)
+        self.assertIn("-Dglslang=enabled -Dshaderc=disabled", self.workflow)
+        package_common = (SOURCE_ROOT / "scripts/lib/package_linux_common.sh").read_text(encoding="utf-8")
+        self.assertIn("perigee_assert_native_wayland", package_common)
+        self.assertIn("libwayland-client.so", package_common)
+        self.assertIn("libva-wayland.so", package_common)
+
+    def test_ci_installs_and_gates_a_pinned_supported_qt(self) -> None:
+        self.assertIn("runs-on: ubuntu-22.04", self.workflow)
+        verifier_workflow = (SOURCE_ROOT / ".github/workflows/perigee-ci.yml").read_text(encoding="utf-8")
+        self.assertIn("runs-on: ubuntu-22.04", verifier_workflow)
+        self.assertIn("aqtinstall==3.3.0", self.workflow)
+        self.assertIn("QT_VERSION: 6.8.3", self.workflow)
+        for module in ("qtdeclarative", "qtsvg", "qtwayland", "qtvirtualkeyboard"):
+            self.assertIn(module, self.workflow)
+        self.assertIn("QT_ROOT", self.workflow)
+        self.assertRegex(self.workflow, r"qmake6[^\n]*-query QT_VERSION")
+        self.assertIn("Perigee requires Qt 6.7 or newer", self.workflow)
+        self.assertIn('command -v qmake6', self.workflow)
+        self.assertIn('"$QT_DIR/bin/qmake6"', self.workflow)
+        self.assertLess(self.workflow.index("Validate Qt version"), self.workflow.index("Cache immutable dependencies"))
+
+    def test_ci_installs_and_gates_a_pinned_supported_meson(self) -> None:
+        self.assertIn("MESON_VERSION: 1.6.1", self.workflow)
+        self.assertIn('meson=="$MESON_VERSION"', self.workflow)
+        self.assertIn('test "$(command -v meson)" = "$AQT_VENV/bin/meson"', self.workflow)
+        self.assertIn('actual_meson_version="$(meson --version)"', self.workflow)
+        self.assertIn('test "$actual_meson_version" = "$MESON_VERSION"', self.workflow)
+        self.assertLess(
+            self.workflow.index("Validate pinned Meson version"),
+            self.workflow.index("Fingerprint dependency toolchain"),
+        )
+
+        apt_block = re.search(
+            r"- name: Install build prerequisites(?P<body>.*?)(?=\n\s+- name:)",
+            self.workflow,
+            re.S,
+        )
+        self.assertIsNotNone(apt_block)
+        assert apt_block is not None
+        apt_install = apt_block.group("body").split("python3 -m venv", 1)[0]
+        self.assertNotRegex(apt_install, r"\bmeson\b")
+
+    def test_ci_uses_reviewed_vulkan_headers_for_video_decode(self) -> None:
+        self.assertIn("repository: KhronosGroup/Vulkan-Headers", self.workflow)
+        self.assertIn("ref: 409c16be502e39fe70dd6fe2d9ad4842ef2c9a53", self.workflow)
+        self.assertRegex(
+            self.workflow,
+            r"for source in[^\n]*Vulkan-Headers",
+        )
+        self.assertIn("CPATH: ${{ github.workspace }}/dep_root/include", self.workflow)
+        self.assertIn("Install pinned Vulkan headers", self.workflow)
+        self.assertIn('cmake --install build', self.workflow)
+        self.assertIn("Validate pinned Vulkan headers", self.workflow)
+        self.assertIn("VK_HEADER_VERSION", self.workflow)
+        self.assertIn("VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME", self.workflow)
+        self.assertIn('test "$actual_header_version" = 313', self.workflow)
+        self.assertLess(
+            self.workflow.index("Validate pinned Vulkan headers"),
+            self.workflow.index("Build libplacebo"),
+        )
+        self.assertLess(
+            self.workflow.index("Validate pinned Vulkan headers"),
+            self.workflow.index("Build FFmpeg"),
+        )
+        self.assertIn("libvulkan-dev", self.ubuntu_packages)
+        self.assertNotIn("packages.lunarg.com", self.workflow)
+        self.assertNotIn("vulkan-sdk", self.workflow.lower())
+
+    def test_ci_qttest_uses_source_root_compatible_build_layout(self) -> None:
+        self.assertIn("mkdir -p build-tests", self.workflow)
+        self.assertIn("cd build-tests", self.workflow)
+        self.assertIn("qmake6 ../moonlight-qt.pro", self.workflow)
+        self.assertIn("./build-tests/tests/perigee-tests -silent", self.workflow)
+        self.assertNotIn("build/ci-tests", self.workflow)
+
+    def test_cache_contains_only_immutable_dependency_outputs(self) -> None:
+        self.assertIn("uses: actions/cache@", self.workflow)
+        self.assertRegex(self.workflow, r"(?m)^\s+path: dep_root$")
+        self.assertIn("steps.toolchain.outputs.fingerprint", self.workflow)
+        self.assertIn("steps.sources.outputs.fingerprint", self.workflow)
+        self.assertIn("hashFiles('.github/workflows/build-appimage.yml'", self.workflow)
+        for pin in (
+            "c9ad296376ed6091e0fdec9844461fdf09af7845",
+            "a883e490e30fb44a5336ea3dcb990c6982c5216f",
+            "2d0979fb54e025e904c7372666fffbf5dae40f66",
+        ):
+            self.assertIn(pin, self.workflow)
+        self.assertIn("https://libsdl.org/release/sdl2-compat-2.32.70.tar.gz", self.workflow)
+        self.assertIn("a99b7262525a454d1065cf76dd17240fd808dfc4ef15636990ff83a5d0d9e740", self.workflow)
+        self.assertIn("sha256sum --check --strict", self.workflow)
+        self.assertNotIn("repository: libsdl-org/sdl2-compat", self.workflow)
+        for repository in ("intel/libva", "FFmpeg/FFmpeg"):
+            block = re.search(
+                rf"repository: {re.escape(repository)}\n\s+ref: (?P<ref>[^\n]+)",
+                self.workflow,
+            )
+            self.assertIsNotNone(block)
+            assert block is not None
+            self.assertRegex(block.group("ref"), r"^[0-9a-f]{40}$")
+        self.assertIn("710eb465c6277ee2cac3e6948767b01eebe7e77a", self.workflow)
+        self.assertIn("239f2c733de417201d7ad3b3b8b0d9b63285b2b1", self.workflow)
+        self.assertRegex(self.workflow, r"DAV1D_COMMIT: [0-9a-f]{40}")
+        self.assertIn("54706fc6bc0cdecab7e9593974a4039cc038fca7", self.workflow)
+        self.assertRegex(self.workflow, r'git(?: -C [^\n]+)? checkout --detach "\$DAV1D_COMMIT"')
+        self.assertLess(self.workflow.index("Fingerprint dependency sources"), self.workflow.index("Cache immutable dependencies"))
+        cache_block = re.search(r"- name: Cache immutable dependencies(?P<body>.*?)(?=\n\s+- name:)", self.workflow, re.S)
+        self.assertIsNotNone(cache_block)
+        assert cache_block is not None
+        self.assertNotRegex(cache_block.group("body"), r"HOME|XDG|config|profile|certificate|clipboard|host")
+
+        runtime_block = re.search(
+            r"- name: Install pinned AppImage runtime(?P<body>.*?)(?=\n\s+- name:)",
+            self.workflow,
+            re.S,
+        )
+        self.assertIsNotNone(runtime_block)
+        assert runtime_block is not None
+        self.assertNotIn("working-directory: dep_root", runtime_block.group("body"))
+        self.assertIn("$RUNNER_TEMP/runtime-x86_64", runtime_block.group("body"))
+
+        for tool in (
+            "aqt --version",
+            "gcc --version",
+            "g++ --version",
+            "ld --version",
+            "nasm -v",
+            "cmake --version",
+            "meson --version",
+            "ninja --version",
+            "pkg-config --version",
+            "pkg-config --modversion vulkan",
+            "pkg-config --modversion glslang",
+        ):
+            self.assertIn(tool, self.workflow)
+        self.assertIn("qtdeclarative qtsvg qtwayland qtvirtualkeyboard", self.workflow)
+
+    def test_dependency_cache_fingerprints_all_installed_packages_and_pip_tools(self) -> None:
+        self.assertIn(
+            "dpkg-query -W -f='${Package}=${Version}\\n' | LC_ALL=C sort",
+            self.workflow,
+        )
+        self.assertIn('"$AQT_VENV/bin/pip" freeze --all | LC_ALL=C sort', self.workflow)
+        self.assertIn("--only-binary=:all: --dest", self.workflow)
+        self.assertIn('--no-index --find-links "$PYTHON_WHEEL_DIR"', self.workflow)
+        self.assertIn("sha256sum -- * | LC_ALL=C sort", self.workflow)
+        self.assertNotIn('find "$AQT_VENV" -type f', self.workflow)
+        self.assertIn("steps.toolchain.outputs.fingerprint", self.workflow)
+        self.assertIn("steps.sources.outputs.fingerprint", self.workflow)
+        self.assertIn("hashFiles('.github/workflows/build-appimage.yml'", self.workflow)
+
+    def test_build_and_verifier_install_the_same_sorted_ubuntu_package_set(self) -> None:
+        verifier_workflow = (
+            SOURCE_ROOT / ".github/workflows/perigee-ci.yml"
+        ).read_text(encoding="utf-8")
+        package_file = "scripts/ci/ubuntu-22.04-packages.txt"
+        self.assertEqual(self.ubuntu_packages, sorted(set(self.ubuntu_packages)))
+        self.assertIn(package_file, self.workflow)
+        self.assertIn(package_file, verifier_workflow)
+        self.assertIn("xargs -r sudo apt-get install --yes", self.workflow)
+        self.assertIn("xargs -r sudo apt-get install --yes", verifier_workflow)
+        self.assertIn("dpkg-query -W -f='${Package}=${Version}\\n'", verifier_workflow)
+
+    def test_ci_uploads_and_matches_producer_dpkg_package_provenance(self) -> None:
+        verifier_workflow = PIPELINE.read_text(encoding="utf-8")
+        for candidate in ("a", "b"):
+            for kind in ("AppImage", "Tar"):
+                self.assertIn(
+                    f"Perigee-Linux{kind}-{candidate}-dpkg-${{{{ env.CI_VERSION }}}}",
+                    self.workflow,
+                )
+                self.assertIn(
+                    f"Perigee-Linux{kind}-{candidate}-dpkg-${{{{ github.sha }}}}",
+                    verifier_workflow,
+                )
+        self.assertIn("cmp --silent ci-provenance/verifier-dpkg-packages.txt", verifier_workflow)
+        self.assertIn("verifier package set differs from producer", verifier_workflow)
+
+    def test_ci_runs_packaging_tests_before_artifact_production(self) -> None:
+        pipeline = PIPELINE.read_text(encoding="utf-8")
+        self.assertIn("packaging-tests:", pipeline)
+        self.assertIn(
+            "PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \\\n"
+            "            -s scripts/tests -p 'test_*.py'",
+            pipeline,
+        )
+        self.assertRegex(
+            pipeline,
+            r"(?s)linux-artifacts:.*?needs: packaging-tests.*?job_kind: artifacts",
+        )
+
+    def test_ci_builds_compares_and_verifies_two_isolated_candidate_sets(self) -> None:
+        pipeline = PIPELINE.read_text(encoding="utf-8")
+        self.assertIn("for candidate in a b; do", self.workflow)
+        self.assertIn('PERIGEE_BUILD_DIR="$build_dir"', self.workflow)
+        self.assertIn('PERIGEE_STAGE_DIR="$tar_stage"', self.workflow)
+        self.assertIn('PERIGEE_STAGE_DIR="$appimage_stage"', self.workflow)
+        self.assertIn('PERIGEE_BINARY="$build_dir/app/perigee"', self.workflow)
+        self.assertIn("scripts/build-linux-tar.sh", self.workflow)
+        self.assertIn("scripts/build-appimage.sh", self.workflow)
+        self.assertRegex(
+            self.workflow,
+            r"cmp --silent build/artifacts-a/Perigee-\$version-x86_64\.AppImage \\\n"
+            r"\s+build/artifacts-b/Perigee-\$version-x86_64\.AppImage",
+        )
+        self.assertRegex(
+            self.workflow,
+            r"cmp --silent build/artifacts-a/Perigee-\$version-linux-x86_64\.tar\.zst \\\n"
+            r"\s+build/artifacts-b/Perigee-\$version-linux-x86_64\.tar\.zst",
+        )
+        for candidate in ("a", "b"):
+            for kind in ("AppImage", "Tar"):
+                self.assertIn(
+                    f"Perigee-Linux{kind}-{candidate}-${{{{ env.CI_VERSION }}}}",
+                    self.workflow,
+                )
+                self.assertIn(
+                    f"Perigee-Linux{kind}-{candidate}-${{{{ github.sha }}}}",
+                    pipeline,
+                )
+            self.assertIn(
+                f"PERIGEE_ARTIFACT_DIR: ${{{{ github.workspace }}}}/ci-artifacts/{candidate}",
+                pipeline,
+            )
+        self.assertIn("Compare downloaded candidate bytes", pipeline)
+
+    def test_reviewed_license_catalog_is_external_and_deterministic(self) -> None:
+        self.assertTrue(LICENSE_CATALOG_PATH.is_file())
+        catalog = LICENSE_CATALOG_PATH.read_text(encoding="utf-8")
+        entries = [line for line in catalog.splitlines() if line and not line.startswith("#")]
+        self.assertTrue(entries)
+        self.assertEqual(entries, sorted(entries))
+        self.assertTrue(LICENSE_CATALOG_GENERATOR.is_file())
+        generator = LICENSE_CATALOG_GENERATOR.read_text(encoding="utf-8")
+        verifier = VERIFY_PATH.read_text(encoding="utf-8")
+        self.assertIn("reviewed_linux_license_digests.tsv", generator)
+        self.assertIn("reviewed_linux_license_digests.tsv", verifier)
+        self.assertIn("reviewed license catalog", verifier)
+
+    def test_rpm_license_discovery_never_walks_runtime_dependencies(self) -> None:
+        stager = STAGE_PATH.read_text(encoding="utf-8")
+        self.assertIn('"-ql", package', stager)
+        self.assertIn('"%{SOURCERPM}"', stager)
+        self.assertNotIn('"--requires"', stager)
+        self.assertNotIn("rpm_declared_license_files", stager)
+
+    def test_source_build_licenses_never_fall_back_to_system_packages(self) -> None:
+        stager = load("stage_source_license_test", STAGE_PATH)
+        source = inspect.getsource(stager.existing_source_licenses)
+        self.assertNotIn("/usr/share", source)
+        with self.assertRaisesRegex(stager.PackagingError, "missing source-build"):
+            stager.existing_source_licenses(pathlib.Path("/does/not/exist"), "ffmpeg")
+
+    def test_dpkg_ownership_uses_the_discovered_merged_usr_path(self) -> None:
+        stager = load("stage_merged_usr_test", STAGE_PATH)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            real_library = root / "usr/lib/libfixture.so.1"
+            real_library.parent.mkdir(parents=True)
+            real_library.write_bytes(b"fixture library\n")
+            (root / "lib").symlink_to("usr/lib", target_is_directory=True)
+            discovered_library = root / "lib/libfixture.so.1"
+            payload_library = root / "payload/lib/libfixture.so.1"
+            copyright_file = root / "usr/share/doc/fixture/copyright"
+            copyright_file.parent.mkdir(parents=True)
+            copyright_file.write_text("Fixture license\n", encoding="utf-8")
+
+            def query(command: list[str], **_kwargs: object) -> mock.Mock:
+                if command == ["dpkg-query", "-S", str(discovered_library)]:
+                    return mock.Mock(
+                        returncode=0,
+                        stdout=f"fixture:amd64: {discovered_library}\n",
+                        stderr="",
+                    )
+                if command == ["dpkg-query", "-L", "fixture:amd64"]:
+                    return mock.Mock(
+                        returncode=0,
+                        stdout=f"{copyright_file}\n",
+                        stderr="",
+                    )
+                if command == [
+                    "dpkg-query",
+                    "-W",
+                    "-f=${Version}",
+                    "fixture:amd64",
+                ]:
+                    return mock.Mock(returncode=0, stdout="1.0-1", stderr="")
+                raise AssertionError(command)
+
+            def which(command: str) -> str | None:
+                return "/usr/bin/dpkg-query" if command == "dpkg-query" else None
+
+            stager.COPIED_SOURCES.clear()
+            stager.PACKAGE_LICENSE_CACHE.clear()
+            with mock.patch.object(stager.shutil, "which", side_effect=which), mock.patch.object(
+                stager.subprocess, "run", side_effect=query
+            ):
+                stager.copy_regular(discovered_library, payload_library)
+                recorded_source = stager.COPIED_SOURCES[payload_library.resolve()]
+                package = stager.package_license_files(recorded_source)
+
+            self.assertIsNotNone(package)
+            assert package is not None
+            self.assertEqual(package.package, "fixture:amd64")
+            self.assertEqual(package.library, discovered_library)
+            self.assertEqual(package.licenses, (copyright_file,))
+
+    def test_stager_and_verifier_share_the_graphics_policy(self) -> None:
+        stage = load("stage_policy_test", STAGE_PATH)
+        verify = load("verify_policy_test", VERIFY_PATH)
+        self.assertEqual(stage.HOST_GRAPHICS_AND_WAYLAND_PREFIXES, verify.HOST_GRAPHICS_AND_WAYLAND_PREFIXES)
+        expected = {
+            "libwayland-client.so",
+            "libwayland-egl.so",
+            "libEGL.so",
+            "libGL.so",
+            "libGLES",
+            "libGLX.so",
+            "libOpenGL.so",
+            "libGLdispatch.so",
+            "libgbm.so",
+            "libEGL_mesa.so",
+            "libGLX_mesa.so",
+        }
+        self.assertTrue(expected.issubset(set(stage.HOST_GRAPHICS_AND_WAYLAND_PREFIXES)))
+
+    def test_source_component_license_set_is_complete(self) -> None:
+        stage = load("stage_license_test", STAGE_PATH)
+        expected = {
+            "moonlight-common",
+            "enet",
+            "nanors",
+            "qmdnsengine",
+            "h264bitstream",
+            "sdl-controller-db",
+        }
+        self.assertTrue(expected.issubset(set(stage.SOURCE_COMPONENT_LICENSES)))
+
+    def test_verifier_targets_the_whole_appimage(self) -> None:
+        wrapper = (SOURCE_ROOT / "scripts/verify-linux-artifacts.sh").read_text(encoding="utf-8")
+        self.assertIn('verify-version "$APPIMAGE"', wrapper)
+        self.assertRegex(wrapper, r'launch-gate \\\n\s+"\$APPIMAGE"')
+        self.assertIn('"$APPIMAGE_ROOT/usr/bin/perigee"', wrapper)
+        self.assertIn('"$TAR_ROOT/bin/perigee" "$VERIFY_ROOT/launch-tar" "$TAR_ROOT/bin/perigee"', wrapper)
+        self.assertNotIn('verify-version "$APPIMAGE_ROOT/AppRun"', wrapper)
+        self.assertNotIn('launch-gate "$APPIMAGE_ROOT/AppRun"', wrapper)
+
+    def test_packaging_python_entrypoints_disable_bytecode_writes(self) -> None:
+        for relative in (
+            "scripts/build-appimage.sh",
+            "scripts/lib/package_linux_common.sh",
+            "scripts/verify-linux-artifacts.sh",
+        ):
+            with self.subTest(path=relative):
+                script = (SOURCE_ROOT / relative).read_text(encoding="utf-8")
+                python_invocations = [
+                    line.strip()
+                    for line in script.splitlines()
+                    if line.strip().startswith("python3 ")
+                ]
+                self.assertTrue(python_invocations)
+                self.assertTrue(
+                    all(line.startswith("python3 -B ") for line in python_invocations),
+                    python_invocations,
+                )
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

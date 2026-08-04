@@ -1,0 +1,163 @@
+---
+name: Perigee CI
+permissions:
+  contents: read
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: perigee-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qt-test:
+    name: QtTest
+    uses: ./.github/workflows/build-appimage.yml
+    with:
+      ci_version: ${{ github.sha }}
+      job_kind: qttest
+
+  sunshine-fixture:
+    name: Standard Sunshine fixture
+    uses: ./.github/workflows/build-appimage.yml
+    with:
+      ci_version: ${{ github.sha }}
+      job_kind: sunshine
+
+  packaging-tests:
+    name: Packaging and verifier tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install packaging test tools
+        run: |
+          sudo apt-get update
+          xargs -r sudo apt-get install --yes \
+            < scripts/ci/ubuntu-22.04-packages.txt
+
+      - name: Run packaging and verifier unit suite
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+            -s scripts/tests -p 'test_*.py'
+
+  linux-artifacts:
+    name: Reproducible Linux artifacts
+    needs: packaging-tests
+    uses: ./.github/workflows/build-appimage.yml
+    with:
+      ci_version: ${{ github.sha }}
+      job_kind: artifacts
+
+  verify-artifacts:
+    name: Artifact verification
+    needs: linux-artifacts
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install verifier tools
+        run: |
+          sudo apt-get update
+          xargs -r sudo apt-get install --yes \
+            < scripts/ci/ubuntu-22.04-packages.txt
+
+      - name: Fingerprint verifier package set
+        run: |
+          sha256sum scripts/ci/ubuntu-22.04-packages.txt
+          dpkg-query -W -f='${Package}=${Version}\n' | LC_ALL=C sort
+
+      - name: Download candidate A AppImage
+        uses: actions/download-artifact@v6
+        with:
+          name: Perigee-LinuxAppImage-a-${{ github.sha }}
+          path: ci-artifacts/a
+
+      - name: Download candidate A Linux tar
+        uses: actions/download-artifact@v6
+        with:
+          name: Perigee-LinuxTar-a-${{ github.sha }}
+          path: ci-artifacts/a
+
+      - name: Download candidate A AppImage package provenance
+        uses: actions/download-artifact@v6
+        with:
+          name: Perigee-LinuxAppImage-a-dpkg-${{ github.sha }}
+          path: ci-provenance/appimage-a
+
+      - name: Download candidate A Linux tar package provenance
+        uses: actions/download-artifact@v6
+        with:
+          name: Perigee-LinuxTar-a-dpkg-${{ github.sha }}
+          path: ci-provenance/tar-a
+
+      - name: Download candidate B AppImage
+        uses: actions/download-artifact@v6
+        with:
+          name: Perigee-LinuxAppImage-b-${{ github.sha }}
+          path: ci-artifacts/b
+
+      - name: Download candidate B Linux tar
+        uses: actions/download-artifact@v6
+        with:
+          name: Perigee-LinuxTar-b-${{ github.sha }}
+          path: ci-artifacts/b
+
+      - name: Download candidate B AppImage package provenance
+        uses: actions/download-artifact@v6
+        with:
+          name: Perigee-LinuxAppImage-b-dpkg-${{ github.sha }}
+          path: ci-provenance/appimage-b
+
+      - name: Download candidate B Linux tar package provenance
+        uses: actions/download-artifact@v6
+        with:
+          name: Perigee-LinuxTar-b-dpkg-${{ github.sha }}
+          path: ci-provenance/tar-b
+
+      - name: Match verifier package set to build package set
+        run: |
+          dpkg-query -W -f='${Package}=${Version}\n' | LC_ALL=C sort \
+            > ci-provenance/verifier-dpkg-packages.txt
+          for producer in \
+            ci-provenance/appimage-a/perigee-dpkg-packages.txt \
+            ci-provenance/tar-a/perigee-dpkg-packages.txt \
+            ci-provenance/appimage-b/perigee-dpkg-packages.txt \
+            ci-provenance/tar-b/perigee-dpkg-packages.txt; do
+            cmp --silent ci-provenance/verifier-dpkg-packages.txt "$producer" || {
+              printf 'verifier package set differs from producer: %s\n' "$producer" >&2
+              exit 1
+            }
+          done
+
+      - name: Compare downloaded candidate bytes
+        run: |
+          version="$(tr -d '\r\n' < app/version.txt)"
+          cmp --silent ci-artifacts/a/Perigee-$version-x86_64.AppImage \
+            ci-artifacts/b/Perigee-$version-x86_64.AppImage
+          cmp --silent ci-artifacts/a/Perigee-$version-linux-x86_64.tar.zst \
+            ci-artifacts/b/Perigee-$version-linux-x86_64.tar.zst
+
+      - name: Restore AppImage executable mode
+        run: chmod 0755 ci-artifacts/a/Perigee-*-x86_64.AppImage ci-artifacts/b/Perigee-*-x86_64.AppImage
+
+      - name: Verify candidate A release artifacts
+        env:
+          PERIGEE_ARTIFACT_DIR: ${{ github.workspace }}/ci-artifacts/a
+        run: scripts/verify-linux-artifacts.sh
+
+      - name: Verify candidate B release artifacts
+        env:
+          PERIGEE_ARTIFACT_DIR: ${{ github.workspace }}/ci-artifacts/b
+        run: scripts/verify-linux-artifacts.sh
