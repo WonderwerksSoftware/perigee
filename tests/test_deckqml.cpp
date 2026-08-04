@@ -217,6 +217,7 @@ private slots:
     void rendersAndPublishesOwnedArgbSurface();
     void realPointerEventSelectsCategoryThroughRenderer();
     void pointerClickActivatesActionAfterFocus();
+    void pointerClickOnSearchFrameFocusesSearchField();
     void realTextInputCommitsThroughRenderer();
 };
 
@@ -1139,6 +1140,52 @@ void DeckQmlTest::pointerClickActivatesActionAfterFocus()
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
     QCOMPARE(adapter.executedActionIds,
              QStringList({QStringLiteral("display.second")}));
+}
+
+void DeckQmlTest::pointerClickOnSearchFrameFocusesSearchField()
+{
+    DeckQmlHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.select"), state(true));
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.select"), QStringLiteral("Choose display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+
+    QQmlEngine engine;
+    DeckSurfaceRenderer renderer;
+    QString error;
+    QImage image;
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    renderer.resize(QSize(960, 540), 1.0);
+    QVERIFY2(renderer.render(&image, &error), qPrintable(error));
+
+    QQuickItem* searchField = renderer.rootObject()->findChild<QQuickItem*>(
+        QStringLiteral("searchField"));
+    QVERIFY(searchField != nullptr);
+    QVERIFY(!searchField->hasActiveFocus());
+
+    // Click the search frame's icon/padding rather than the TextInput text area.
+    const QPointF searchFrameIcon(110.0, 60.0);
+    QMouseEvent press(QEvent::MouseButtonPress, searchFrameIcon,
+                      searchFrameIcon, searchFrameIcon,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QVERIFY(renderer.sendPointerEvent(&press));
+    QMouseEvent release(QEvent::MouseButtonRelease, searchFrameIcon,
+                        searchFrameIcon, searchFrameIcon,
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QVERIFY(renderer.sendPointerEvent(&release));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+
+    QVERIFY(searchField->hasActiveFocus());
+    QCOMPARE(controller.focusRegion(), DeckController::SearchRegion);
 }
 
 void DeckQmlTest::realTextInputCommitsThroughRenderer()

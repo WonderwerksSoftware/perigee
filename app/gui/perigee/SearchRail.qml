@@ -46,6 +46,12 @@ FocusScope {
             font.pixelSize: 24
         }
 
+        MouseArea {
+            anchors.fill: parent
+            preventStealing: true
+            onPressed: searchField.forceActiveFocus()
+        }
+
         TextInput {
             id: searchField
             objectName: "searchField"
