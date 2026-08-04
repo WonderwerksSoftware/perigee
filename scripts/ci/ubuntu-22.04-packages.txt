@@ -13,6 +13,7 @@ git
 glslang-dev
 glslang-tools
 kwin-wayland
+kwin-wayland-backend-virtual
 libasound2-dev
 libdbus-1-dev
 libdrm-dev

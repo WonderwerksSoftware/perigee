@@ -56,6 +56,7 @@ class LinuxPackagingContractTest(unittest.TestCase):
     def test_ci_build_inputs_and_native_wayland_assertion_are_present(self) -> None:
         self.assertIn("attr", self.ubuntu_packages)
         self.assertIn("libwayland-dev", self.ubuntu_packages)
+        self.assertIn("kwin-wayland-backend-virtual", self.ubuntu_packages)
         self.assertRegex(self.workflow, r"configure[^\n]*--enable-x11[^\n]*--enable-wayland[^\n]*--enable-drm")
         self.assertNotIn("libshaderc-dev", self.workflow)
         self.assertIn("-Dglslang=enabled -Dshaderc=disabled", self.workflow)
