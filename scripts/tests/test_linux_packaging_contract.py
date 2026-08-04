@@ -66,6 +66,22 @@ class LinuxPackagingContractTest(unittest.TestCase):
             self.workflow,
         )
 
+    def test_ci_exposes_sdl2_compat_under_the_qmake_package_name(self) -> None:
+        sdl2_block = re.search(
+            r"- name: Build sdl2-compat(?P<body>.*?)(?=\n\s+- name:)",
+            self.workflow,
+            re.S,
+        )
+        self.assertIsNotNone(sdl2_block)
+        assert sdl2_block is not None
+        self.assertIn('"$DEP_ROOT/lib/pkgconfig/sdl2-compat.pc"', sdl2_block.group("body"))
+        self.assertIn('"$DEP_ROOT/lib/pkgconfig/sdl2.pc"', sdl2_block.group("body"))
+        self.assertRegex(
+            sdl2_block.group("body"),
+            r'install -m 0644 "\$DEP_ROOT/lib/pkgconfig/sdl2-compat\.pc" '
+            r'\\\s*"\$DEP_ROOT/lib/pkgconfig/sdl2\.pc"',
+        )
+
     def test_ci_installs_and_gates_a_pinned_supported_qt(self) -> None:
         self.assertIn("runs-on: ubuntu-22.04", self.workflow)
         verifier_workflow = (SOURCE_ROOT / ".github/workflows/perigee-ci.yml").read_text(encoding="utf-8")

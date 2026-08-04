@@ -300,6 +300,10 @@ jobs:
           cmake -DCMAKE_INSTALL_PREFIX="$DEP_ROOT" -DSDL2COMPAT_TESTS=OFF -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -S . -B build
           cmake --build build -j
           cmake --install build
+          # sdl2-compat publishes the virtual package as sdl2-compat.pc.
+          # qmake's PKGCONFIG resolver requires the conventional sdl2.pc name.
+          install -m 0644 "$DEP_ROOT/lib/pkgconfig/sdl2-compat.pc" \
+            "$DEP_ROOT/lib/pkgconfig/sdl2.pc"
 
       - name: Build SDL_ttf
         if: steps.dependency-cache.outputs.cache-hit != 'true'
