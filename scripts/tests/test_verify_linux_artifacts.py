@@ -1084,6 +1084,11 @@ class VerifyLinuxArtifactsTest(unittest.TestCase):
             process.terminate()
             process.wait(timeout=2)
 
+    def test_launch_environment_selects_qt_quick_software_backend(self) -> None:
+        environment = VERIFY.launch_environment(self.root / "launch-work", "perigee-test")
+        self.assertEqual(environment["QT_QPA_PLATFORM"], "wayland")
+        self.assertEqual(environment["QT_QUICK_BACKEND"], "software")
+
     def test_duplicate_tar_path_is_rejected(self) -> None:
         archive = self.root / "duplicate.tar.zst"
         entry = tar_info("NOTICE.md")

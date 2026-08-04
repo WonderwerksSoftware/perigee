@@ -1468,6 +1468,33 @@ def assert_launch_liveness(
         fail("packaged process executable identity changed during isolated Wayland launch")
 
 
+def launch_environment(work_root: pathlib.Path, socket_name: str) -> dict[str, str]:
+    """Build the hermetic environment used by the clean Wayland launch gate."""
+    runtime = work_root / "runtime"
+    config = work_root / "config"
+    cache = work_root / "cache"
+    data = work_root / "data"
+    home = work_root / "home"
+    return {
+        "HOME": str(home),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TZ": "UTC",
+        "XDG_CONFIG_HOME": str(config),
+        "XDG_CACHE_HOME": str(cache),
+        "XDG_DATA_HOME": str(data),
+        "XDG_RUNTIME_DIR": str(runtime),
+        "WAYLAND_DISPLAY": socket_name,
+        "QT_QPA_PLATFORM": "wayland",
+        "QT_QUICK_BACKEND": "software",
+        "SDL_VIDEODRIVER": "wayland",
+        "LIBGL_ALWAYS_SOFTWARE": "1",
+        "NO_AT_BRIDGE": "1",
+        "APPIMAGE_EXTRACT_AND_RUN": "1",
+    }
+
+
 def launch_gate(
     executable: pathlib.Path,
     work_root: pathlib.Path,
@@ -1487,23 +1514,7 @@ def launch_gate(
         directory.mkdir(parents=True, exist_ok=True)
     os.chmod(runtime, 0o700)
     socket_name = "perigee-artifact-wayland"
-    environment = {
-        "HOME": str(home),
-        "PATH": "/usr/bin:/bin",
-        "LANG": "C.UTF-8",
-        "LC_ALL": "C.UTF-8",
-        "TZ": "UTC",
-        "XDG_CONFIG_HOME": str(config),
-        "XDG_CACHE_HOME": str(cache),
-        "XDG_DATA_HOME": str(data),
-        "XDG_RUNTIME_DIR": str(runtime),
-        "WAYLAND_DISPLAY": socket_name,
-        "QT_QPA_PLATFORM": "wayland",
-        "SDL_VIDEODRIVER": "wayland",
-        "LIBGL_ALWAYS_SOFTWARE": "1",
-        "NO_AT_BRIDGE": "1",
-        "APPIMAGE_EXTRACT_AND_RUN": "1",
-    }
+    environment = launch_environment(work_root, socket_name)
     command = [
         "dbus-run-session",
         "--",
