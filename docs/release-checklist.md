@@ -192,7 +192,7 @@ Do not mark these items complete in Task 19:
 
 Record the host type, server version, display topology, controller type, and result during Task 20. Do not copy a live profile into test data.
 
-Task 20 scaffolding is in `scripts/acceptance/`. Environment collection is local and read-only by default. Deck cycle testing is a dry run by default and requires both `--live` and `PERIGEE_ACCEPT_LIVE_TESTS=YES` before it invokes an audited driver. Use `docs/testing/live-acceptance-2026-08.md` as the redacted acceptance ledger. The ledger records a passed Task 19 artifact gate and a partial Polaris control-plane probe; the unchecked live stream, input, display, controller, and publication gates remain open.
+Task 20 scaffolding is in `scripts/acceptance/`. Environment collection is local and read-only by default. Deck cycle testing is a dry run by default and requires both `--live` and `PERIGEE_ACCEPT_LIVE_TESTS=YES` before it invokes an audited driver. Use `docs/testing/live-acceptance-2026-08.md` as the redacted acceptance ledger. The ledger records a passed Task 19 artifact gate, a passed Polaris control-plane probe, and a bounded Perigee stream smoke. The unchecked full stream, input, display, controller, standard Sunshine, and publication gates remain open.
 
 Use the Task 20 harness and publishable ledger:
 
