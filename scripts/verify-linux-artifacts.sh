@@ -60,10 +60,26 @@ xmllint --noout \
 python3 -B "$PYTHON_HELPER" verify-version "$APPIMAGE" "Perigee $VERSION" "$VERIFY_ROOT/version-appimage"
 python3 -B "$PYTHON_HELPER" verify-version "$TAR_ROOT/bin/perigee" "Perigee $VERSION" "$VERIFY_ROOT/version-tar"
 
+run_launch_gate()
+{
+    local executable="$1"
+    local work_root="$2"
+    local expected_payload_executable="$3"
+    if python3 -B "$PYTHON_HELPER" launch-gate \
+        "$executable" "$work_root" "$expected_payload_executable"; then
+        return 0
+    fi
+    if [ -f "$work_root/launch.log" ]; then
+        printf 'isolated launch log (%s):\n' "$(basename -- "$work_root")" >&2
+        tail -n 80 -- "$work_root/launch.log" >&2
+    fi
+    return 1
+}
+
 if [ "${PERIGEE_SKIP_WAYLAND_LAUNCH:-0}" != 1 ]; then
-    python3 -B "$PYTHON_HELPER" launch-gate \
+    run_launch_gate \
         "$APPIMAGE" "$VERIFY_ROOT/launch-appimage" "$APPIMAGE_ROOT/usr/bin/perigee"
-    python3 -B "$PYTHON_HELPER" launch-gate \
+    run_launch_gate \
         "$TAR_ROOT/bin/perigee" "$VERIFY_ROOT/launch-tar" "$TAR_ROOT/bin/perigee"
 fi
 

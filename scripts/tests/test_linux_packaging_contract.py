@@ -773,9 +773,11 @@ class LinuxPackagingContractTest(unittest.TestCase):
     def test_verifier_targets_the_whole_appimage(self) -> None:
         wrapper = (SOURCE_ROOT / "scripts/verify-linux-artifacts.sh").read_text(encoding="utf-8")
         self.assertIn('verify-version "$APPIMAGE"', wrapper)
-        self.assertRegex(wrapper, r'launch-gate \\\n\s+"\$APPIMAGE"')
+        self.assertRegex(wrapper, r'run_launch_gate \\\n\s+"\$APPIMAGE"')
+        self.assertIn('python3 -B "$PYTHON_HELPER" launch-gate', wrapper)
         self.assertIn('"$APPIMAGE_ROOT/usr/bin/perigee"', wrapper)
         self.assertIn('"$TAR_ROOT/bin/perigee" "$VERIFY_ROOT/launch-tar" "$TAR_ROOT/bin/perigee"', wrapper)
+        self.assertIn('tail -n 80 -- "$work_root/launch.log"', wrapper)
         self.assertNotIn('verify-version "$APPIMAGE_ROOT/AppRun"', wrapper)
         self.assertNotIn('launch-gate "$APPIMAGE_ROOT/AppRun"', wrapper)
 
