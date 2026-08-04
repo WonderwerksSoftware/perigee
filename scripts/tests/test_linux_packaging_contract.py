@@ -113,6 +113,7 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn('mkdir -p -- "$QT_DIR/LICENSES"', self.workflow)
         self.assertIn("sha256sum --check --strict", self.workflow)
         self.assertIn("tar --extract --xz", self.workflow)
+        self.assertIn("--wildcards", self.workflow)
         self.assertIn("qtbase-everywhere-src-6.8.3/LICENSES/*", self.workflow)
         self.assertIn('test -f "$QT_DIR/LICENSES/LicenseRef-Qt-Commercial.txt"', self.workflow)
         self.assertIn("qtbase source license archive sha256 56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80", self.workflow)
