@@ -505,10 +505,10 @@ class LinuxPackagingContractTest(unittest.TestCase):
             copyright_file.write_text("Fixture license\n", encoding="utf-8")
 
             def query(command: list[str], **_kwargs: object) -> mock.Mock:
-                if command == ["dpkg-query", "-S", str(discovered_library)]:
+                if command == ["dpkg-query", "-S", str(discovered_library.resolve())]:
                     return mock.Mock(
                         returncode=0,
-                        stdout=f"fixture:amd64: {discovered_library}\n",
+                        stdout=f"fixture:amd64: {discovered_library.resolve()}\n",
                         stderr="",
                     )
                 if command == ["dpkg-query", "-L", "fixture:amd64"]:
@@ -541,7 +541,7 @@ class LinuxPackagingContractTest(unittest.TestCase):
             self.assertIsNotNone(package)
             assert package is not None
             self.assertEqual(package.package, "fixture:amd64")
-            self.assertEqual(package.library, discovered_library)
+            self.assertEqual(package.library, discovered_library.resolve())
             self.assertEqual(package.licenses, (copyright_file,))
 
     def test_stager_and_verifier_share_the_graphics_policy(self) -> None:

@@ -438,6 +438,11 @@ def rpm_license_files(package: str) -> list[pathlib.Path]:
 
 
 def package_license_files(source: pathlib.Path) -> PackageLicenseSource | None:
+    # Ubuntu's merged-/usr layout exposes libraries through both /lib and
+    # /usr/lib.  dpkg records the canonical /usr/lib path, so resolve the
+    # discovered runtime path before querying ownership and recording
+    # provenance.
+    source = source.resolve()
     if shutil.which("rpm") is not None:
         owner = subprocess.run(
             ["rpm", "-qf", "--qf", "%{NAME}.%{ARCH}\n", str(source)],
