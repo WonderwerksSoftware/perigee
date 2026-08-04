@@ -183,14 +183,18 @@ class LinuxPackagingContractTest(unittest.TestCase):
         cases = {
             "lib/libQt6VirtualKeyboard.so.6": "qtvirtualkeyboard",
             "plugins/platforms/libqwayland-generic.so": "qtwayland",
+            "lib/libQt6WlShellIntegration.so.6": "qtwayland",
             "plugins/imageformats/libqsvg.so": "qtsvg",
-            "qml/QtQuick/Controls/qmldir": "qtdeclarative",
+            "qml/QtCore/libqtqmlcoreplugin.so": "qtdeclarative",
+            "qml/QtQuick/Controls/libqtquickcontrols2plugin.so": "qtdeclarative",
             "lib/libQt6Core.so.6": "qtbase",
+            "plugins/platforms/libqxcb.so": "qtbase",
         }
         for relative, module in cases.items():
             with self.subTest(relative=relative):
                 self.assertEqual(stage.qt_module_for_source(prefix / relative, prefix), module)
         self.assertIsNone(stage.qt_module_for_source(pathlib.Path("/usr/lib/libQt6Core.so"), prefix))
+        self.assertIsNone(stage.qt_module_for_source(prefix / "qml/Unknown/libplugin.so", prefix))
 
     def test_ci_exports_architecture_specific_runtime_libraries_for_spawned_app(self) -> None:
         self.assertIn(

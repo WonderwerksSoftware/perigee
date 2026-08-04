@@ -107,6 +107,7 @@ QT_LICENSE_MODULE_PREFIXES = (
         "qtwayland",
         (
             "lib/libQt6Wayland",
+            "lib/libQt6WlShellIntegration",
             "plugins/platforms/libqwayland",
             "plugins/wayland-",
         ),
@@ -125,9 +126,11 @@ QT_LICENSE_MODULE_PREFIXES = (
             "lib/libQt6Qml",
             "lib/libQt6Quick",
             "qml/QtQml",
+            "qml/QtCore",
             "qml/QtQuick",
         ),
     ),
+    ("qtbase", ("lib/libQt6", "plugins/")),
 )
 
 
@@ -588,7 +591,7 @@ def qt_module_for_source(source: pathlib.Path, qt_prefix: pathlib.Path) -> str |
     for module, prefixes in QT_LICENSE_MODULE_PREFIXES:
         if any(relative.startswith(prefix) for prefix in prefixes):
             return module
-    return "qtbase"
+    return None
 
 
 def qt_license_files(source: pathlib.Path) -> list[pathlib.Path]:
