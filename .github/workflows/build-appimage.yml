@@ -120,23 +120,48 @@ jobs:
 
       - name: Install pinned Qt source license texts
         env:
-          QT_SOURCE_LICENSE_SHA256: 56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80
-          QT_SOURCE_LICENSE_URL: https://download.qt.io/official_releases/qt/6.8/6.8.3/submodules/qtbase-everywhere-src-6.8.3.tar.xz
+          QTBASE_SOURCE_LICENSE_SHA256: 56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80
+          QTBASE_SOURCE_LICENSE_URL: https://download.qt.io/official_releases/qt/6.8/6.8.3/submodules/qtbase-everywhere-src-6.8.3.tar.xz
+          QTDECLARATIVE_SOURCE_LICENSE_SHA256: 1f03a2b8f5588b4face7da87926e9b2c1372b3a32157c52df07a75067a9db1af
+          QTDECLARATIVE_SOURCE_LICENSE_URL: https://download.qt.io/official_releases/qt/6.8/6.8.3/submodules/qtdeclarative-everywhere-src-6.8.3.tar.xz
+          QTSVG_SOURCE_LICENSE_SHA256: 35eb516460f00f264eb504baa253432384351cf23fb9980a5857190e8deef438
+          QTSVG_SOURCE_LICENSE_URL: https://download.qt.io/official_releases/qt/6.8/6.8.3/submodules/qtsvg-everywhere-src-6.8.3.tar.xz
+          QTVIRTUALKEYBOARD_SOURCE_LICENSE_SHA256: 8111061261ed8d88ec40b79083f8ed025650eb1807a05528615265d36213bb1d
+          QTVIRTUALKEYBOARD_SOURCE_LICENSE_URL: https://download.qt.io/official_releases/qt/6.8/6.8.3/submodules/qtvirtualkeyboard-everywhere-src-6.8.3.tar.xz
+          QTWAYLAND_SOURCE_LICENSE_SHA256: 20fe385887d21190165a3180c17dcfc8b9a0e1da4ec76865b6334bdc709994b0
+          QTWAYLAND_SOURCE_LICENSE_URL: https://download.qt.io/official_releases/qt/6.8/6.8.3/submodules/qtwayland-everywhere-src-6.8.3.tar.xz
         run: |
-          archive="$RUNNER_TEMP/qtbase-everywhere-src-6.8.3.tar.xz"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            "$QT_SOURCE_LICENSE_URL" \
-            --output "$archive"
-          printf '%s  %s\n' \
-            "$QT_SOURCE_LICENSE_SHA256" \
-            "$archive" | sha256sum --check --strict
-          mkdir -p -- "$QT_DIR/LICENSES"
-          tar --extract --xz \
-            --file "$archive" \
-            --directory "$QT_DIR/LICENSES" \
-            --strip-components=2 \
-            --wildcards \
-            'qtbase-everywhere-src-6.8.3/LICENSES/*'
+          archive_dir="$RUNNER_TEMP/qt-source-license-archives"
+          mkdir -- "$archive_dir"
+          : > "$RUNNER_TEMP/qt-source-license-fingerprint.txt"
+          declare -a qt_source_archives=()
+          download_qt_source_license() {
+            local module="$1" url="$2" digest="$3"
+            local archive="$archive_dir/${module}-everywhere-src-6.8.3.tar.xz"
+            curl --fail --location --proto '=https' --tlsv1.2 \
+              "$url" \
+              --output "$archive"
+            printf '%s  %s\n' "$digest" "$archive" | sha256sum --check --strict
+            printf '%s %s\n' "$module" "$digest" \
+              >> "$RUNNER_TEMP/qt-source-license-fingerprint.txt"
+            qt_source_archives+=("$archive")
+          }
+          download_qt_source_license qtbase \
+            "$QTBASE_SOURCE_LICENSE_URL" "$QTBASE_SOURCE_LICENSE_SHA256"
+          download_qt_source_license qtsvg \
+            "$QTSVG_SOURCE_LICENSE_URL" "$QTSVG_SOURCE_LICENSE_SHA256"
+          download_qt_source_license qtdeclarative \
+            "$QTDECLARATIVE_SOURCE_LICENSE_URL" "$QTDECLARATIVE_SOURCE_LICENSE_SHA256"
+          download_qt_source_license qtwayland \
+            "$QTWAYLAND_SOURCE_LICENSE_URL" "$QTWAYLAND_SOURCE_LICENSE_SHA256"
+          download_qt_source_license qtvirtualkeyboard \
+            "$QTVIRTUALKEYBOARD_SOURCE_LICENSE_URL" "$QTVIRTUALKEYBOARD_SOURCE_LICENSE_SHA256"
+          qt_license_stage="$RUNNER_TEMP/qt-source-license-texts"
+          python3 scripts/lib/extract_qt_license_archives.py \
+            --destination "$qt_license_stage" \
+            "${qt_source_archives[@]}"
+          rm -rf -- "$QT_DIR/LICENSES"
+          mv -- "$qt_license_stage" "$QT_DIR/LICENSES"
           test -f "$QT_DIR/LICENSES/LicenseRef-Qt-Commercial.txt"
           test -f "$QT_DIR/LICENSES/LGPL-3.0-only.txt"
 
@@ -266,7 +291,8 @@ jobs:
             qmake6 -query QT_VERSION
             qmake6 -query QT_INSTALL_PREFIX
             printf '%s\n' 'qtvirtualkeyboard (base archives: qtbase qtsvg qtdeclarative qtwayland)'
-            printf '%s\n' 'qtbase source license archive sha256 56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80'
+            printf '%s\n' 'qt source license archives'
+            cat "$RUNNER_TEMP/qt-source-license-fingerprint.txt"
             dpkg-query -W -f='${Package}=${Version}\n' | LC_ALL=C sort
             "$AQT_VENV/bin/pip" freeze --all | LC_ALL=C sort
             (

@@ -19,6 +19,7 @@ STAGE_PATH = SOURCE_ROOT / "scripts/lib/stage_linux_payload.py"
 VERIFY_PATH = SOURCE_ROOT / "scripts/lib/verify_linux_artifacts.py"
 LICENSE_CATALOG_PATH = SOURCE_ROOT / "scripts/lib/reviewed_linux_license_digests.tsv"
 LICENSE_CATALOG_GENERATOR = SOURCE_ROOT / "scripts/lib/generate_linux_license_catalog.py"
+QT_LICENSE_EXTRACTOR = SOURCE_ROOT / "scripts/lib/extract_qt_license_archives.py"
 UBUNTU_PACKAGE_SET = SOURCE_ROOT / "scripts/ci/ubuntu-22.04-packages.txt"
 
 
@@ -101,26 +102,71 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertLess(self.workflow.index("Validate Qt version"), self.workflow.index("Cache immutable dependencies"))
 
     def test_ci_installs_pinned_qt_source_license_texts(self) -> None:
-        self.assertIn(
-            "QT_SOURCE_LICENSE_URL: https://download.qt.io/official_releases/qt/6.8/6.8.3/submodules/qtbase-everywhere-src-6.8.3.tar.xz",
-            self.workflow,
-        )
-        self.assertIn(
-            "QT_SOURCE_LICENSE_SHA256: 56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80",
-            self.workflow,
-        )
+        for module, digest in (
+            ("qtbase", "56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80"),
+            ("qtsvg", "35eb516460f00f264eb504baa253432384351cf23fb9980a5857190e8deef438"),
+            ("qtdeclarative", "1f03a2b8f5588b4face7da87926e9b2c1372b3a32157c52df07a75067a9db1af"),
+            ("qtwayland", "20fe385887d21190165a3180c17dcfc8b9a0e1da4ec76865b6334bdc709994b0"),
+            ("qtvirtualkeyboard", "8111061261ed8d88ec40b79083f8ed025650eb1807a05528615265d36213bb1d"),
+        ):
+            self.assertIn(
+                f"{module.upper()}_SOURCE_LICENSE_URL: https://download.qt.io/official_releases/qt/6.8/6.8.3/submodules/{module}-everywhere-src-6.8.3.tar.xz",
+                self.workflow,
+            )
+            self.assertIn(f"{module.upper()}_SOURCE_LICENSE_SHA256: {digest}", self.workflow)
         self.assertIn("Install pinned Qt source license texts", self.workflow)
-        self.assertIn('mkdir -p -- "$QT_DIR/LICENSES"', self.workflow)
+        self.assertIn("extract_qt_license_archives.py", self.workflow)
+        self.assertIn('rm -rf -- "$QT_DIR/LICENSES"', self.workflow)
+        self.assertIn('mv -- "$qt_license_stage" "$QT_DIR/LICENSES"', self.workflow)
         self.assertIn("sha256sum --check --strict", self.workflow)
-        self.assertIn("tar --extract --xz", self.workflow)
-        self.assertIn("--wildcards", self.workflow)
-        self.assertIn("qtbase-everywhere-src-6.8.3/LICENSES/*", self.workflow)
         self.assertIn('test -f "$QT_DIR/LICENSES/LicenseRef-Qt-Commercial.txt"', self.workflow)
-        self.assertIn("qtbase source license archive sha256 56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80", self.workflow)
+        self.assertIn("qt source license archives", self.workflow)
         self.assertLess(
             self.workflow.index("Install pinned Qt source license texts"),
             self.workflow.index("Validate pinned Meson version"),
         )
+
+    def test_qt_license_extractor_rejects_unsafe_members_and_preserves_module_texts(self) -> None:
+        extractor = load("extract_qt_license_archives", QT_LICENSE_EXTRACTOR)
+
+        def make_archive(path: pathlib.Path, root: str, members: list[tuple[str, bytes, str]]) -> None:
+            import tarfile
+
+            with tarfile.open(path, "w:xz") as handle:
+                for name, content, kind in members:
+                    info = tarfile.TarInfo(f"{root}/LICENSES/{name}")
+                    if kind == "file":
+                        info.size = len(content)
+                        handle.addfile(info, __import__("io").BytesIO(content))
+                    else:
+                        info.type = tarfile.SYMTYPE
+                        info.linkname = "../../outside"
+                        handle.addfile(info)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            base = root / "qtbase-everywhere-src-6.8.3.tar.xz"
+            virtual = root / "qtvirtualkeyboard-everywhere-src-6.8.3.tar.xz"
+            make_archive(base, "qtbase-everywhere-src-6.8.3", [("Module.txt", b"base\n", "file")])
+            make_archive(
+                virtual,
+                "qtvirtualkeyboard-everywhere-src-6.8.3",
+                [("Module.txt", b"virtual keyboard\n", "file")],
+            )
+            destination = root / "licenses"
+            extractor.extract_archives([base, virtual], destination)
+            self.assertEqual((destination / "Module.txt").read_bytes(), b"base\n")
+            self.assertEqual(
+                (destination / "Module.txt.9189697282c2").read_bytes(),
+                b"virtual keyboard\n",
+            )
+            with self.assertRaises(extractor.LicenseArchiveError):
+                extractor.extract_archives([base], destination)
+
+            unsafe = root / "qtwayland-everywhere-src-6.8.3.tar.xz"
+            make_archive(unsafe, "qtwayland-everywhere-src-6.8.3", [("escape", b"", "symlink")])
+            with self.assertRaises(extractor.LicenseArchiveError):
+                extractor.extract_archives([unsafe], root / "unsafe")
 
     def test_ci_exports_architecture_specific_runtime_libraries_for_spawned_app(self) -> None:
         self.assertIn(
