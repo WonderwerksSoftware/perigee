@@ -80,7 +80,7 @@ jobs:
 
       - name: Cache pinned Qt
         id: qt-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6.1.0
         with:
           path: ${{ env.QT_ROOT }}
           key: perigee-qt-${{ runner.os }}-${{ runner.arch }}-6.8.3-aqt-3.3.0-linux-gcc-64-qtvirtualkeyboard-qtwayland
@@ -308,7 +308,7 @@ jobs:
 
       - name: Cache immutable dependencies
         id: dependency-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6.1.0
         with:
           path: dep_root
           key: perigee-deps-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.fingerprint }}-${{ steps.sources.outputs.fingerprint }}-${{ hashFiles('.github/workflows/build-appimage.yml', 'app/app.pro', 'globaldefs.pri') }}
