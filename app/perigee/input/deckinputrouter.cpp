@@ -163,6 +163,14 @@ void DeckInputRouter::syncDeckOpen(bool open)
 void DeckInputRouter::setPointerMapping(const QRect& streamViewport,
                                         const QSize& deckLogicalSize)
 {
+    // SDL may report a zero-sized client area while a window is entering or
+    // leaving fullscreen. Keep the last usable map through that transition;
+    // replacing it with an empty viewport makes every Deck pointer event look
+    // consumed while silently dropping the click.
+    if (!streamViewport.isValid() || streamViewport.isEmpty() ||
+            !deckLogicalSize.isValid() || deckLogicalSize.isEmpty()) {
+        return;
+    }
     m_StreamViewport = streamViewport;
     m_DeckLogicalSize = deckLogicalSize;
 }

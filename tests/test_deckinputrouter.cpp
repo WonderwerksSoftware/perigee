@@ -118,6 +118,7 @@ private slots:
     void heldStickRepeatsFromTicksAndNeutralResetsTiming();
     void stickRepeatStopsBelowPressThresholdAndRestartsDeterministically();
     void mouseMapsViewportAndRejectsOrClampsOutOfBoundsInput();
+    void transientInvalidViewportKeepsLastUsablePointerMap();
     void statsChordPassesThroughWhenClosedAndStaysLocalWhenOpen();
     void openStatsChordHonorsFaceSwapAndWinsOverDeckCandidate();
     void keyboardChordAcceptsAlternatePressOrderAndIgnoresRepeat();
@@ -455,6 +456,24 @@ void DeckInputRouterTest::mouseMapsViewportAndRejectsOrClampsOutOfBoundsInput()
     const auto wheel = router.route(mouseWheel(2, -3));
     QCOMPARE(wheel.action, DeckInputRouter::Action::PointerWheel);
     QCOMPARE(wheel.wheelDelta, QPoint(240, -360));
+}
+
+void DeckInputRouterTest::transientInvalidViewportKeepsLastUsablePointerMap()
+{
+    DeckInputRouter router;
+    router.openForKeyboard();
+    router.setPointerMapping(QRect(0, 0, 1920, 1080), QSize(1920, 1080));
+
+    // SDL can report a zero-sized client area during a fullscreen transition.
+    // That transient value must not discard the last valid map while the Deck
+    // remains visible.
+    router.setPointerMapping(QRect(0, 0, 0, 0), QSize(1920, 1080));
+
+    const DeckInputRouter::Result result = router.route(
+        mouseButton(SDL_MOUSEBUTTONDOWN, SDL_BUTTON_LEFT, 960, 540));
+    QCOMPARE(result.disposition, DeckInputRouter::Disposition::Consumed);
+    QCOMPARE(result.action, DeckInputRouter::Action::PointerPress);
+    QCOMPARE(result.position, QPointF(960.0, 540.0));
 }
 
 void DeckInputRouterTest::statsChordPassesThroughWhenClosedAndStaysLocalWhenOpen()

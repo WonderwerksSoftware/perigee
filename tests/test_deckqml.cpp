@@ -219,6 +219,7 @@ private slots:
     void pointerClickActivatesActionAfterFocus();
     void pointerClickOnSearchFrameFocusesSearchField();
     void realTextInputCommitsThroughRenderer();
+    void realKeyInputEditsSearchTextThroughRenderer();
 };
 
 void DeckQmlTest::initTestCase()
@@ -1219,6 +1220,39 @@ void DeckQmlTest::realTextInputCommitsThroughRenderer()
 
     QVERIFY(renderer.sendTextInput(QString::fromUtf8("hé")));
     QTRY_COMPARE(controller.searchText(), QString::fromUtf8("hé"));
+}
+
+void DeckQmlTest::realKeyInputEditsSearchTextThroughRenderer()
+{
+    DeckController controller;
+    controller.openFromKeyboard();
+    QQmlEngine engine;
+    DeckSurfaceRenderer renderer;
+    QString error;
+    QImage image;
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    renderer.resize(QSize(960, 540), 1.0);
+    QVERIFY2(renderer.render(&image, &error), qPrintable(error));
+
+    QVERIFY(renderer.sendTextInput(QStringLiteral("abc")));
+    QTRY_COMPARE(controller.searchText(), QStringLiteral("abc"));
+
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_Backspace, Qt::NoModifier);
+    QVERIFY(renderer.sendKeyEvent(&press));
+    QKeyEvent release(QEvent::KeyRelease, Qt::Key_Backspace, Qt::NoModifier);
+    QVERIFY(renderer.sendKeyEvent(&release));
+    QTRY_COMPARE(controller.searchText(), QStringLiteral("ab"));
+
+    QKeyEvent deletePress(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    QVERIFY(renderer.sendKeyEvent(&deletePress));
+    QKeyEvent deleteRelease(QEvent::KeyRelease, Qt::Key_Delete, Qt::NoModifier);
+    QVERIFY(renderer.sendKeyEvent(&deleteRelease));
+    QTRY_COMPARE(controller.searchText(), QStringLiteral("ab"));
 }
 
 REGISTER_PERIGEE_TEST(DeckQmlTest);
