@@ -214,6 +214,7 @@ private slots:
     void actionRowRetainsPointerPressForClick();
     void exposesAccessibleNamesAndDisabledReasons();
     void confirmationTrapsFocusUntilAcceptedOrCancelled();
+    void confirmationBlocksPointerHoverFromChangingUnderlyingAction();
     void rendersControllerLayoutReferencePngs();
     void rendersAndPublishesOwnedArgbSurface();
     void realPointerEventSelectsCategoryThroughRenderer();
@@ -915,6 +916,89 @@ void DeckQmlTest::confirmationTrapsFocusUntilAcceptedOrCancelled()
     QCOMPARE(cancelSpy.count(), 1);
 }
 
+void DeckQmlTest::confirmationBlocksPointerHoverFromChangingUnderlyingAction()
+{
+    DeckQmlHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("session.disconnect"), state(true));
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("session.other"), state(true));
+    ActionRegistry registry({
+        descriptor(QStringLiteral("session.disconnect"),
+                   QStringLiteral("Disconnect client"),
+                   ActionCategory::Display,
+                   ConfirmationPolicy::Always),
+        descriptor(QStringLiteral("session.other"),
+                   QStringLiteral("Other action"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromKeyboard();
+    controller.focusActions();
+
+    QQmlEngine engine;
+    DeckSurfaceRenderer renderer;
+    QString error;
+    QImage image;
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    auto* rootItem = qobject_cast<QQuickItem*>(renderer.rootObject());
+    QVERIFY(rootItem != nullptr);
+    renderer.resize(QSize(960, 540), 1.0);
+    QVERIFY2(renderer.render(&image, &error), qPrintable(error));
+
+    const QPointF disconnectCenter(480.0, 189.0);
+    QMouseEvent press(QEvent::MouseButtonPress, disconnectCenter,
+                      disconnectCenter, disconnectCenter,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QVERIFY(renderer.sendPointerEvent(&press));
+    QMouseEvent release(QEvent::MouseButtonRelease, disconnectCenter,
+                        disconnectCenter, disconnectCenter,
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QVERIFY(renderer.sendPointerEvent(&release));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    QVERIFY(controller.confirmationVisible());
+    QCOMPARE(focusedActionId(controller.actionModel()),
+             QStringLiteral("session.disconnect"));
+
+    // The natural path from the first action to the confirmation buttons
+    // crosses the second action. That hover must not dismiss the modal.
+    const QPointF secondActionCenter(480.0, 257.0);
+    QMouseEvent move(QEvent::MouseMove, secondActionCenter,
+                     secondActionCenter, secondActionCenter,
+                     Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QVERIFY(renderer.sendPointerEvent(&move));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    QVERIFY(controller.confirmationVisible());
+    QCOMPARE(focusedActionId(controller.actionModel()),
+             QStringLiteral("session.disconnect"));
+
+    QVERIFY2(renderer.render(&image, &error), qPrintable(error));
+    QQuickItem* confirmButton = renderer.rootObject()->findChild<QQuickItem*>(
+        QStringLiteral("confirmationConfirm"));
+    QVERIFY(confirmButton != nullptr);
+    const QPointF confirmCenter = confirmButton->mapToItem(
+        rootItem,
+        QPointF(confirmButton->width() * 0.5,
+                confirmButton->height() * 0.5));
+    QMouseEvent confirmPress(QEvent::MouseButtonPress, confirmCenter,
+                             confirmCenter, confirmCenter,
+                             Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QVERIFY(renderer.sendPointerEvent(&confirmPress));
+    QMouseEvent confirmRelease(QEvent::MouseButtonRelease, confirmCenter,
+                               confirmCenter, confirmCenter,
+                               Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QVERIFY(renderer.sendPointerEvent(&confirmRelease));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+
+    QCOMPARE(adapter.executedActionIds,
+             QStringList({QStringLiteral("session.disconnect")}));
+}
+
 void DeckQmlTest::rendersControllerLayoutReferencePngs()
 {
     DeckQmlHostAdapter adapter;
@@ -1068,6 +1152,7 @@ void DeckQmlTest::rendersAndPublishesOwnedArgbSurface()
     QCOMPARE(surface->h, 640);
     QVERIFY(surface->pitch >= surface->w * 4);
     QCOMPARE(presentation.anchor, Overlay::OverlayAnchor::TopCenter);
+    QVERIFY(!presentation.allowUpscale);
 
     const QImage view(static_cast<const uchar*>(surface->pixels),
                       surface->w,

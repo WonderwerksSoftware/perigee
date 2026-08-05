@@ -26,6 +26,7 @@ FocusScope {
 
     ListView {
         id: actionList
+        enabled: !deckController.confirmationVisible
         x: 12
         y: 12
         width: parent.width - 24
@@ -105,6 +106,20 @@ FocusScope {
             color: "#91a0b3"
             font.pixelSize: 15
         }
+    }
+
+    // Keep the action rows visible for context, but make confirmation modal.
+    // A normal diagonal path from a row to the buttons crosses other rows;
+    // without this shield, their hover handlers change focus and cancel the
+    // pending confirmation before the pointer reaches Confirm or Cancel.
+    MouseArea {
+        anchors.fill: actionList
+        z: 2
+        visible: deckController.confirmationVisible
+        enabled: visible
+        hoverEnabled: true
+        preventStealing: true
+        acceptedButtons: Qt.AllButtons
     }
 
     ConfirmationCard {

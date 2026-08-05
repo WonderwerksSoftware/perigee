@@ -1229,12 +1229,18 @@ void Session::updateDeckPointerMapping()
     if (m_DeckInputRouter == nullptr || m_Window == nullptr) {
         return;
     }
-    SDL_Rect source {0, 0, m_StreamConfig.width, m_StreamConfig.height};
-    SDL_Rect destination {0, 0, 0, 0};
-    SDL_GetWindowSize(m_Window, &destination.w, &destination.h);
-    StreamUtils::scaleSourceToDestinationSurface(&source, &destination);
+    int viewportWidth = 0;
+    int viewportHeight = 0;
+    SDL_GetWindowSize(m_Window, &viewportWidth, &viewportHeight);
+    const SDL_FRect deckRect = Overlay::calculateOverlayRect(
+        {Overlay::OverlayAnchor::TopCenter, 0, 1.0f, 1.0f},
+        m_StreamConfig.width,
+        m_StreamConfig.height,
+        viewportWidth,
+        viewportHeight);
     m_DeckInputRouter->setPointerMapping(
-        QRect(destination.x, destination.y, destination.w, destination.h),
+        QRect(qRound(deckRect.x), qRound(deckRect.y),
+              qRound(deckRect.w), qRound(deckRect.h)),
         QSize(m_StreamConfig.width, m_StreamConfig.height));
 }
 
