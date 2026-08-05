@@ -747,6 +747,7 @@ class LinuxPackagingContractTest(unittest.TestCase):
         expected = {
             "libwayland-client.so",
             "libwayland-egl.so",
+            "libwayland-cursor.so",
             "libEGL.so",
             "libGL.so",
             "libGLES",
@@ -756,6 +757,17 @@ class LinuxPackagingContractTest(unittest.TestCase):
             "libgbm.so",
             "libEGL_mesa.so",
             "libGLX_mesa.so",
+            "libvulkan.so",
+            "libva.so",
+            "libdrm.so",
+            "libX11.so",
+            "libX11-xcb.so",
+            "libXext.so",
+            "libXau.so",
+            "libXdmcp.so",
+            "libxcb",
+            "libstdc++.so",
+            "libgcc_s.so",
         }
         self.assertTrue(expected.issubset(set(stage.HOST_GRAPHICS_AND_WAYLAND_PREFIXES)))
 

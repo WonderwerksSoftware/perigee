@@ -822,6 +822,16 @@ class VerifyLinuxArtifactsTest(unittest.TestCase):
             "libGL.so.1",
             "libEGL_mesa.so.0",
             "libGLX_mesa.so.0",
+            "libwayland-cursor.so.0",
+            "libvulkan.so.1",
+            "libva.so.2",
+            "libdrm.so.2",
+            "libX11.so.6",
+            "libX11-xcb.so.1",
+            "libxcb.so.1",
+            "libxkbcommon.so.0",
+            "libstdc++.so.6",
+            "libgcc_s.so.1",
         ):
             with self.subTest(name=name):
                 root = self.root / name
