@@ -37,6 +37,8 @@ public:
 
     void submitFrame(AVFrame* frame);
 
+    void requestRedraw();
+
     bool initialize(SDL_Window* window, int maxVideoFps, bool enablePacing);
 
     void signalVsync();
@@ -68,6 +70,7 @@ private:
     SDL_Thread* m_VsyncThread;
     AVFrame* m_DeferredFreeFrame;
     bool m_Stopping;
+    bool m_RedrawRequested;
 
     IVsyncSource* m_VsyncSource;
     IFFmpegRenderer* m_VsyncRenderer;

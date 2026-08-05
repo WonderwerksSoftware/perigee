@@ -31,7 +31,10 @@ SDL_FRect Overlay::calculateOverlayRect(OverlayPresentation presentation,
     float width = 0.0f;
     float height = 0.0f;
     if (surfaceWidth > 0 && surfaceHeight > 0) {
-        const float scale = std::min({1.0f,
+        const float maximumScale = presentation.allowUpscale
+            ? std::numeric_limits<float>::max()
+            : 1.0f;
+        const float scale = std::min({maximumScale,
                                       maxWidth / static_cast<float>(surfaceWidth),
                                       maxHeight / static_cast<float>(surfaceHeight)});
         width = static_cast<float>(surfaceWidth) * scale;

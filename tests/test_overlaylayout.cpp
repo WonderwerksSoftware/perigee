@@ -223,6 +223,7 @@ class OverlayLayoutTest : public QObject
 private slots:
     void placesAndConstrainsOverlays_data();
     void placesAndConstrainsOverlays();
+    void upscalesDeckToMatchFullscreenVideoViewport();
     void layoutStateRecomputesAfterResizeWithoutSurfaceUpdate();
     void defersOverlayConsumptionUntilRendererIsReady();
     void failedSetupDoesNotConsumePendingOverlay_data();
@@ -326,6 +327,24 @@ void OverlayLayoutTest::placesAndConstrainsOverlays()
     QVERIFY(qFuzzyCompare(actual.y + 1.0f, expectedY + 1.0f));
     QVERIFY(qFuzzyCompare(actual.w + 1.0f, expectedWidth + 1.0f));
     QVERIFY(qFuzzyCompare(actual.h + 1.0f, expectedHeight + 1.0f));
+}
+
+void OverlayLayoutTest::upscalesDeckToMatchFullscreenVideoViewport()
+{
+    // A 720p Deck composited into a 1080p fullscreen stream must use the
+    // same aspect-fitted rectangle as the video. Otherwise SDL pointer
+    // coordinates are mapped as if Deck were 1080p while it remains drawn
+    // at 720p, shifting hover and click targets up and to the right.
+    const Overlay::OverlayPresentation presentation {
+        Overlay::OverlayAnchor::TopCenter, 0, 1.0f, 1.0f, true};
+
+    const SDL_FRect actual = Overlay::calculateOverlayRect(
+        presentation, 1280, 720, 1920, 1080);
+
+    QCOMPARE(actual.x, 0.0f);
+    QCOMPARE(actual.y, 0.0f);
+    QCOMPARE(actual.w, 1920.0f);
+    QCOMPARE(actual.h, 1080.0f);
 }
 
 void OverlayLayoutTest::layoutStateRecomputesAfterResizeWithoutSurfaceUpdate()

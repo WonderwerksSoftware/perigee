@@ -30,6 +30,7 @@ struct OverlayPresentation {
     int marginPx = 0;
     float maxWidthRatio = 1.0f;
     float maxHeightRatio = 1.0f;
+    bool allowUpscale = false;
 };
 
 using OverlaySurfaceDeleter = std::function<void(SDL_Surface*)>;

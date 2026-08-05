@@ -34,6 +34,7 @@ Pacer::Pacer(IFFmpegRenderer* renderer, PVIDEO_STATS videoStats) :
     m_VsyncThread(nullptr),
     m_DeferredFreeFrame(nullptr),
     m_Stopping(false),
+    m_RedrawRequested(false),
     m_VsyncSource(nullptr),
     m_VsyncRenderer(renderer),
     m_MaxVideoFps(0),
@@ -90,14 +91,46 @@ void Pacer::renderOnMainThread()
 
     m_FrameQueueLock.lock();
 
+    AVFrame* frame = nullptr;
+    bool isNewFrame = false;
     if (!m_RenderQueue.isEmpty()) {
-        AVFrame* frame = m_RenderQueue.dequeue();
-        m_FrameQueueLock.unlock();
+        frame = m_RenderQueue.dequeue();
+        isNewFrame = true;
+        m_RedrawRequested = false;
+    }
+    else if (m_RedrawRequested) {
+        frame = m_DeferredFreeFrame;
+        m_RedrawRequested = false;
+    }
+    m_FrameQueueLock.unlock();
 
+    if (isNewFrame) {
         renderFrame(frame);
     }
-    else {
+    else if (frame != nullptr) {
+        m_VsyncRenderer->renderFrame(frame);
+    }
+}
+
+void Pacer::requestRedraw()
+{
+    m_FrameQueueLock.lock();
+    if (m_Stopping || m_RedrawRequested) {
         m_FrameQueueLock.unlock();
+        return;
+    }
+    m_RedrawRequested = true;
+    const bool usesRenderThread = m_RenderThread != nullptr;
+    m_FrameQueueLock.unlock();
+
+    if (usesRenderThread) {
+        m_RenderQueueNotEmpty.wakeOne();
+    }
+    else {
+        SDL_Event event;
+        event.type = SDL_USEREVENT;
+        event.user.code = SDL_CODE_FRAME_READY;
+        SDL_PushEvent(&event);
     }
 }
 
@@ -153,7 +186,8 @@ int Pacer::renderThread(void* context)
         me->m_FrameQueueLock.lock();
 
         // Wait for a frame to be ready to render
-        while (!me->m_Stopping && me->m_RenderQueue.isEmpty()) {
+        while (!me->m_Stopping && me->m_RenderQueue.isEmpty() &&
+               !me->m_RedrawRequested) {
             me->m_RenderQueueNotEmpty.wait(&me->m_FrameQueueLock);
         }
 
@@ -163,10 +197,24 @@ int Pacer::renderThread(void* context)
             break;
         }
 
-        AVFrame* frame = me->m_RenderQueue.dequeue();
+        AVFrame* frame = nullptr;
+        bool isNewFrame = false;
+        if (!me->m_RenderQueue.isEmpty()) {
+            frame = me->m_RenderQueue.dequeue();
+            isNewFrame = true;
+        }
+        else {
+            frame = me->m_DeferredFreeFrame;
+        }
+        me->m_RedrawRequested = false;
         me->m_FrameQueueLock.unlock();
 
-        me->renderFrame(frame);
+        if (isNewFrame) {
+            me->renderFrame(frame);
+        }
+        else if (frame != nullptr) {
+            me->m_VsyncRenderer->renderFrame(frame);
+        }
     }
 
     // Notify the renderer that it is being destroyed soon

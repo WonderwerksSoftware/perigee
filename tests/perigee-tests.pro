@@ -43,6 +43,7 @@ SOURCES += \
     ../app/settings/streamingpreferences.cpp \
     ../app/gui/sdlgamepadkeynavigation.cpp \
     ../app/path.cpp \
+    ../app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp \
     ../app/streaming/video/overlaymanager.cpp \
     support/fakepolarisserver.cpp \
     test_main.cpp \
@@ -69,6 +70,7 @@ SOURCES += \
     input_integration_stubs.cpp \
     test_branding.cpp \
     test_overlaylayout.cpp \
+    test_pacer.cpp \
     test_polarismodels.cpp \
     test_polarisadapter.cpp \
     test_polarisactions.cpp \
@@ -83,7 +85,7 @@ INCLUDEPATH += \
     $$PWD/../qmdnsengine/qmdnsengine/src/include \
     $$PWD/../qmdnsengine
 
-PKGCONFIG += sdl2 SDL2_ttf opus openssl
+PKGCONFIG += sdl2 SDL2_ttf opus openssl libavcodec libavutil
 
 HEADERS += \
     ../app/perigee/actions/actionregistry.h \
@@ -113,6 +115,7 @@ HEADERS += \
     ../app/gui/sdlgamepadkeynavigation.h \
     input_integration_stubs.h \
     ../app/path.h \
+    ../app/streaming/video/ffmpeg-renderers/pacer/pacer.h \
     ../app/streaming/video/overlaymanager.h \
     ../app/perigee/polaris/polarismodels.h \
     ../app/perigee/polaris/polarisadapter.h \

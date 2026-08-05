@@ -505,7 +505,7 @@ bool DeckSurfaceRenderer::renderAndPublishDeck(
     overlayManager->updateOverlaySurface(
         Overlay::OverlayDeck,
         surface,
-        { Overlay::OverlayAnchor::TopCenter, 0, 1.0f, 1.0f });
+        { Overlay::OverlayAnchor::TopCenter, 0, 1.0f, 1.0f, true });
     return true;
 }
 

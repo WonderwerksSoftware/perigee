@@ -1218,6 +1218,9 @@ bool Session::renderAndPublishDeck(QSize logicalSize, qreal devicePixelRatio)
                     qUtf8Printable(deckError));
         return false;
     }
+    if (m_VideoDecoder != nullptr) {
+        m_VideoDecoder->requestOverlayRedraw();
+    }
     return true;
 }
 
