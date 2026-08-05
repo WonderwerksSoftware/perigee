@@ -204,6 +204,7 @@ private slots:
     void actionRowRendersSucceededEvidence();
     void loadsShellAndReachesCategoriesAndActionsFromKeyboard();
     void disabledRowCannotActivatePreviouslyFocusedAction();
+    void pointerPressFocusesDisabledRowWithoutActivating();
     void realKeysKeepControllerAndQmlFocusInSync();
     void keyboardFocusKeepsFifthActionVisible();
     void controllerOpenRevealsInitiallyOffscreenFirstEnabledAction();
@@ -401,6 +402,52 @@ void DeckQmlTest::disabledRowCannotActivatePreviouslyFocusedAction()
     QVERIFY(adapter.executedActionIds.isEmpty());
     QCOMPARE(focusedActionId(controller.actionModel()),
              QStringLiteral("display.enabled"));
+}
+
+void DeckQmlTest::pointerPressFocusesDisabledRowWithoutActivating()
+{
+    DeckQmlHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.enabled"), state(true));
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.disabled"),
+        state(false, {}, QStringLiteral("Display is unavailable.")));
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.enabled"), QStringLiteral("Enabled display"),
+                   ActionCategory::Display),
+        descriptor(QStringLiteral("display.disabled"), QStringLiteral("Disabled display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+
+    QQmlEngine engine;
+    DeckSurfaceRenderer renderer;
+    QString error;
+    QImage frame;
+    QVERIFY2(renderer.initialize(
+                 &engine,
+                 QUrl(QStringLiteral("qrc:/gui/perigee/PerigeeDeck.qml")),
+                 &controller,
+                 &error),
+             qPrintable(error));
+    renderer.resize(QSize(960, 540), 1.0);
+    QVERIFY2(renderer.render(&frame, &error), qPrintable(error));
+
+    const QPointF disabledActionCenter(480.0, 257.0);
+    QMouseEvent press(QEvent::MouseButtonPress, disabledActionCenter,
+                      disabledActionCenter, disabledActionCenter,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QVERIFY(renderer.sendPointerEvent(&press));
+    QMouseEvent release(QEvent::MouseButtonRelease, disabledActionCenter,
+                        disabledActionCenter, disabledActionCenter,
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QVERIFY(renderer.sendPointerEvent(&release));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+
+    QCOMPARE(focusedActionId(controller.actionModel()),
+             QStringLiteral("display.disabled"));
+    QVERIFY(adapter.executedActionIds.isEmpty());
 }
 
 void DeckQmlTest::realKeysKeepControllerAndQmlFocusInSync()

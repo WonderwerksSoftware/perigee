@@ -122,6 +122,7 @@ private slots:
     void statsChordPassesThroughWhenClosedAndStaysLocalWhenOpen();
     void openStatsChordHonorsFaceSwapAndWinsOverDeckCandidate();
     void keyboardChordAcceptsAlternatePressOrderAndIgnoresRepeat();
+    void keyboardChordIgnoresCapsLockState();
     void controllerCloseConsumesEveryChordReleaseTail();
     void touchInputIsSuppressedOnlyWhileDeckIsOpen();
     void textInsertionComesOnlyFromSdlTextInput();
@@ -572,6 +573,26 @@ void DeckInputRouterTest::keyboardChordAcceptsAlternatePressOrderAndIgnoresRepea
         SDL_Keymod(KMOD_SHIFT | KMOD_CTRL | KMOD_ALT), 1));
     QCOMPARE(repeatedSpace.disposition, DeckInputRouter::Disposition::Consumed);
     QCOMPARE(repeatedSpace.action, DeckInputRouter::Action::None);
+    QVERIFY(router.isDeckOpen());
+}
+
+void DeckInputRouterTest::keyboardChordIgnoresCapsLockState()
+{
+    DeckInputRouter router;
+    const SDL_Keymod caps = KMOD_CAPS;
+    router.route(keyEvent(SDL_KEYDOWN, SDL_SCANCODE_CAPSLOCK,
+                          SDLK_CAPSLOCK, caps));
+    router.route(keyEvent(SDL_KEYDOWN, SDL_SCANCODE_LCTRL, SDLK_LCTRL,
+                          SDL_Keymod(caps | KMOD_CTRL)));
+    router.route(keyEvent(SDL_KEYDOWN, SDL_SCANCODE_LALT, SDLK_LALT,
+                          SDL_Keymod(caps | KMOD_CTRL | KMOD_ALT)));
+    router.route(keyEvent(SDL_KEYDOWN, SDL_SCANCODE_LSHIFT, SDLK_LSHIFT,
+                          SDL_Keymod(caps | KMOD_CTRL | KMOD_ALT | KMOD_SHIFT)));
+
+    const auto open = router.route(keyEvent(
+        SDL_KEYDOWN, SDL_SCANCODE_SPACE, SDLK_SPACE,
+        SDL_Keymod(caps | KMOD_CTRL | KMOD_ALT | KMOD_SHIFT)));
+    QCOMPARE(open.action, DeckInputRouter::Action::OpenFromKeyboard);
     QVERIFY(router.isDeckOpen());
 }
 

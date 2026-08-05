@@ -53,6 +53,7 @@ FocusScope {
             height: 62
 
             ActionRow {
+                id: actionRow
                 anchors.fill: parent
                 actionId: model.id
                 actionLabel: model.label
@@ -69,7 +70,28 @@ FocusScope {
                     deckController.activateAction(actionId)
                 }
                 onPointed: {
-                    deckController.focusAction(actionId)
+                    // Pointer hover/press may land on an unavailable action.
+                    // Let it become the focused row so its disabled reason is
+                    // visible; activation still checks enabled state.
+                    deckController.focusActionWithoutActivation(actionId)
+                }
+            }
+
+            // Keep ActionRow disabled for accessibility while allowing a
+            // pointer to focus an unavailable action and show its reason.
+            MouseArea {
+                anchors.fill: parent
+                z: 1
+                hoverEnabled: true
+                preventStealing: true
+                Accessible.ignored: true
+                onEntered: deckController.focusActionWithoutActivation(
+                               actionRow.actionId)
+                onPressed: deckController.focusActionWithoutActivation(
+                               actionRow.actionId)
+                onClicked: {
+                    if (actionRow.actionEnabled)
+                        deckController.activateAction(actionRow.actionId)
                 }
             }
         }
