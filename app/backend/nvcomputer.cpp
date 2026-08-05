@@ -231,8 +231,8 @@ bool NvComputer::wake() const
             return true;
         }
 
-        if (macAddress.isEmpty()) {
-            qWarning() << name << "has no MAC address stored";
+        if (macAddress.size() != 6) {
+            qWarning() << name << "has no valid MAC address stored";
             return false;
         }
 
@@ -241,7 +241,10 @@ bool NvComputer::wake() const
         for (int i = 0; i < 16; i++) {
             wolPayload.append(macAddress);
         }
-        Q_ASSERT(wolPayload.size() == 102);
+        if (wolPayload.size() != 102) {
+            qWarning() << name << "could not build a valid WoL payload";
+            return false;
+        }
     }
 
     // Ports used as-is
