@@ -104,6 +104,23 @@ public:
     {
         return m_Session && m_Session->setFullscreenEnabled(enabled);
     }
+    int physicalDisplayCount() const override
+    {
+        return 3;
+    }
+    int lastRequestedPhysicalDisplay() const override
+    {
+        return 0;
+    }
+    bool physicalDisplaySwitchActive() const override
+    {
+        return false;
+    }
+    bool requestPhysicalDisplay(
+        int, PhysicalDisplayCompletion) override
+    {
+        return false;
+    }
     bool requestClientDisconnect() override
     {
         return m_Session && m_Session->requestClientDisconnect(

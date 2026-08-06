@@ -2,6 +2,7 @@
 
 #include "perigee/actions/actionregistry.h"
 #include "perigee/actions/actioncategories.h"
+#include "perigee/actions/gamestreamadapter.h"
 #include "perigee/deck/actionlistmodel.h"
 #include "perigee/deck/deckcontroller.h"
 #include "perigee/polaris/polarisadapter.h"
@@ -109,6 +110,7 @@ private slots:
     void categoryCyclingMakesActionsReachableWithoutSearchText();
     void authoritativeCategoryOrderReachesEveryCoreAction();
     void productionCatalogIsReachableByCategoryWithoutSearch();
+    void controllerOperatesPhysicalDisplaysAndKeepsDeckOpen();
     void controllerOpenPublishesEffectiveGlyphLayout();
     void refreshPreservesFocusedActionAndUpdatesItsState();
     void backUnwindsConfirmationActionsSearchAndDeck();
@@ -263,6 +265,19 @@ void DeckControllerTest::productionCatalogIsReachableByCategoryWithoutSearch()
     adapter.currentSnapshot.actionStates.insert(
         QStringLiteral("host.command.0"), commandState);
 
+    ActionState physicalStatus;
+    physicalStatus.value = QStringLiteral("Unknown");
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.physical-status"), physicalStatus);
+    for (int displayNumber = 1; displayNumber <= 13; ++displayNumber) {
+        ActionState physicalDisplay;
+        physicalDisplay.visible = displayNumber <= 3;
+        physicalDisplay.enabled = displayNumber <= 3;
+        adapter.currentSnapshot.actionStates.insert(
+            QStringLiteral("display.physical.%1").arg(displayNumber),
+            physicalDisplay);
+    }
+
     const QHash<QString, ActionCategory> expected {
         {QStringLiteral("input.mouse-capture"), ActionCategory::Input},
         {QStringLiteral("input.keyboard-capture"), ActionCategory::Input},
@@ -276,6 +291,10 @@ void DeckControllerTest::productionCatalogIsReachableByCategoryWithoutSearch()
         {QStringLiteral("clipboard.fetch-remote"), ActionCategory::Clipboard},
         {QStringLiteral("session.end-host"), ActionCategory::Session},
         {QStringLiteral("host.command.0"), ActionCategory::Session},
+        {QStringLiteral("display.physical-status"), ActionCategory::Display},
+        {QStringLiteral("display.physical.1"), ActionCategory::Display},
+        {QStringLiteral("display.physical.2"), ActionCategory::Display},
+        {QStringLiteral("display.physical.3"), ActionCategory::Display},
     };
     for (auto it = expected.cbegin(); it != expected.cend(); ++it) {
         if (!adapter.currentSnapshot.actionStates.contains(it.key())) {
@@ -309,6 +328,15 @@ void DeckControllerTest::productionCatalogIsReachableByCategoryWithoutSearch()
     QCOMPARE(reached, QSet<QString>(expected.keyBegin(), expected.keyEnd()));
 
     MutableHostAdapter fallbackAdapter;
+    ActionState hiddenPhysicalState;
+    hiddenPhysicalState.visible = false;
+    fallbackAdapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.physical-status"), hiddenPhysicalState);
+    for (int displayNumber = 1; displayNumber <= 13; ++displayNumber) {
+        fallbackAdapter.currentSnapshot.actionStates.insert(
+            QStringLiteral("display.physical.%1").arg(displayNumber),
+            hiddenPhysicalState);
+    }
     ActionRegistry fallbackRegistry(
         PolarisAdapter::descriptors(), fallbackAdapter);
     DeckController fallbackController(&fallbackRegistry);
@@ -318,6 +346,74 @@ void DeckControllerTest::productionCatalogIsReachableByCategoryWithoutSearch()
                  fallbackController.actionModel()->index(0, 0),
                  ActionListModel::IdRole).toString(),
              QStringLiteral("display.switch"));
+}
+
+void DeckControllerTest::controllerOperatesPhysicalDisplaysAndKeepsDeckOpen()
+{
+    MutableHostAdapter adapter;
+    ActionState status;
+    status.value = QStringLiteral("Unknown");
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.physical-status"), status);
+    for (int displayNumber = 1; displayNumber <= 13; ++displayNumber) {
+        ActionState displayState;
+        displayState.visible = displayNumber <= 3;
+        displayState.enabled = displayNumber <= 3;
+        adapter.currentSnapshot.actionStates.insert(
+            QStringLiteral("display.physical.%1").arg(displayNumber),
+            displayState);
+    }
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("session.disconnect-client"), availableState());
+
+    ActionRegistry registry(GameStreamAdapter::descriptors(), adapter);
+    DeckController controller(&registry);
+    controller.openFromController();
+
+    QCOMPARE(controller.activeCategory(), 0);
+    QStringList reachedDisplays;
+    for (int row = 0; row < controller.actionModel()->rowCount(); ++row) {
+        const QModelIndex index = controller.actionModel()->index(row, 0);
+        const QString id = controller.actionModel()->data(
+            index, ActionListModel::IdRole).toString();
+        if (id.startsWith(QStringLiteral("display.physical."))) {
+            reachedDisplays.push_back(id);
+        }
+    }
+    QCOMPARE(reachedDisplays,
+             QStringList({QStringLiteral("display.physical.1"),
+                          QStringLiteral("display.physical.2"),
+                          QStringLiteral("display.physical.3")}));
+
+    QCOMPARE(focusedActionId(controller),
+             QStringLiteral("display.physical.1"));
+    controller.moveActionFocus(1);
+    QCOMPARE(focusedActionId(controller),
+             QStringLiteral("display.physical.2"));
+    controller.activateFocusedAction();
+    QCOMPARE(adapter.executedActionIds,
+             QStringList({QStringLiteral("display.physical.2")}));
+    QVERIFY(controller.isOpen());
+
+    auto successCompletion = std::move(adapter.pendingCompletion);
+    successCompletion({true, QStringLiteral("Display 2 requested; video resumed"),
+                       {}, {}});
+    controller.pumpPendingWork();
+    QVERIFY(controller.isOpen());
+
+    controller.focusAction(QStringLiteral("display.physical.3"));
+    controller.activateFocusedAction();
+    auto failureCompletion = std::move(adapter.pendingCompletion);
+    failureCompletion({false, {},
+                       QStringLiteral("display_verification_timeout"),
+                       QStringLiteral(
+                           "Perigee did not receive fresh video after the display request.")});
+    controller.pumpPendingWork();
+    QVERIFY(controller.isOpen());
+
+    controller.selectCategory(5);
+    QCOMPARE(focusedActionId(controller),
+             QStringLiteral("session.disconnect-client"));
 }
 
 void DeckControllerTest::controllerOpenPublishesEffectiveGlyphLayout()

@@ -195,6 +195,13 @@ public:
     bool setMouseCaptureEnabled(bool value) override { mouse = value; return true; }
     bool setKeyboardCaptureEnabled(bool value) override { keyboard = value; return true; }
     bool setFullscreenEnabled(bool value) override { fullscreen = value; return true; }
+    int physicalDisplayCount() const override { return 3; }
+    int lastRequestedPhysicalDisplay() const override { return 0; }
+    bool physicalDisplaySwitchActive() const override { return false; }
+    bool requestPhysicalDisplay(int, PhysicalDisplayCompletion) override
+    {
+        return false;
+    }
     bool requestClientDisconnect() override { return true; }
     bool requestPerigeeQuit() override { return true; }
 

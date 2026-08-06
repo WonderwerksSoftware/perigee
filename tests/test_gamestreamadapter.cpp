@@ -79,6 +79,18 @@ public:
         return acceptQuitRequest;
     }
 
+    int physicalDisplayCount() const override { return physicalCount; }
+    int lastRequestedPhysicalDisplay() const override { return lastPhysicalDisplay; }
+    bool physicalDisplaySwitchActive() const override { return physicalSwitchActive; }
+    bool requestPhysicalDisplay(
+        int displayNumber,
+        PhysicalDisplayCompletion completion) override
+    {
+        requestedPhysicalDisplay = displayNumber;
+        physicalCompletion = std::move(completion);
+        return acceptPhysicalRequest;
+    }
+
     bool stats = false;
     bool mouse = false;
     bool keyboard = false;
@@ -89,6 +101,12 @@ public:
     bool ignoreFullscreenRequest = false;
     bool acceptDisconnectRequest = true;
     bool acceptQuitRequest = true;
+    bool acceptPhysicalRequest = true;
+    int physicalCount = 3;
+    int lastPhysicalDisplay = 0;
+    bool physicalSwitchActive = false;
+    int requestedPhysicalDisplay = 0;
+    std::function<void(const ActionResult&)> physicalCompletion;
     mutable std::function<void()> destroyAfterFullscreenRead;
     int statsSetCount = 0;
     int mouseSetCount = 0;
@@ -156,6 +174,9 @@ class GameStreamAdapterTest : public QObject
 private slots:
     void exposesExactLocalActionMetadata();
     void snapshotReadsCurrentSessionState();
+    void physicalDisplaySnapshotIsBoundedAndTruthful();
+    void requestsPhysicalDisplayAsynchronously();
+    void rejectedPhysicalDisplayRequestIsReportedTruthfully();
     void togglesStatisticsWithObservedEvidence();
     void refusesStatisticsSuccessWhenReadbackDisagrees();
     void togglesMouseCaptureWithObservedEvidence();
@@ -186,8 +207,8 @@ private slots:
 void GameStreamAdapterTest::exposesExactLocalActionMetadata()
 {
     const auto descriptors = descriptorMap();
-    QCOMPARE(descriptors.size(), 7);
-    const QSet<QString> expectedIds {
+    QCOMPARE(descriptors.size(), 21);
+    QSet<QString> expectedIds {
         QStringLiteral("input.mouse-capture"),
         QStringLiteral("input.keyboard-capture"),
         QStringLiteral("input.release-captured"),
@@ -195,7 +216,12 @@ void GameStreamAdapterTest::exposesExactLocalActionMetadata()
         QStringLiteral("window.fullscreen"),
         QStringLiteral("session.disconnect-client"),
         QStringLiteral("session.quit-perigee"),
+        QStringLiteral("display.physical-status"),
     };
+    for (int displayNumber = 1; displayNumber <= 13; ++displayNumber) {
+        expectedIds.insert(QStringLiteral("display.physical.%1")
+                               .arg(displayNumber));
+    }
     QCOMPARE(QSet<QString>(descriptors.keyBegin(), descriptors.keyEnd()), expectedIds);
 
     QCOMPARE(descriptors.value(QStringLiteral("input.mouse-capture")).category,
@@ -219,6 +245,13 @@ void GameStreamAdapterTest::exposesExactLocalActionMetadata()
              ConfirmationPolicy::Always);
     QCOMPARE(descriptors.value(QStringLiteral("stats.overlay")).confirmation,
              ConfirmationPolicy::Never);
+    QCOMPARE(descriptors.value(QStringLiteral("display.physical.1")).label,
+             QStringLiteral("Display 1"));
+    QCOMPARE(descriptors.value(QStringLiteral("display.physical.13")).label,
+             QStringLiteral("Display 13"));
+    QCOMPARE(
+        descriptors.value(QStringLiteral("display.physical.1")).resourceKey,
+        QStringLiteral("display.physical"));
 }
 
 void GameStreamAdapterTest::snapshotReadsCurrentSessionState()
@@ -231,12 +264,111 @@ void GameStreamAdapterTest::snapshotReadsCurrentSessionState()
     GameStreamAdapter adapter(&session);
 
     const HostSnapshot snapshot = adapter.snapshot();
-    QCOMPARE(snapshot.actionStates.size(), 7);
+    QCOMPARE(snapshot.actionStates.size(), 21);
     QVERIFY(snapshot.actionStates.value(QStringLiteral("stats.overlay")).enabled);
     QCOMPARE(snapshot.actionStates.value(QStringLiteral("stats.overlay")).value.toBool(), true);
     QCOMPARE(snapshot.actionStates.value(QStringLiteral("input.mouse-capture")).value.toBool(), false);
     QCOMPARE(snapshot.actionStates.value(QStringLiteral("input.keyboard-capture")).value.toBool(), true);
     QCOMPARE(snapshot.actionStates.value(QStringLiteral("window.fullscreen")).value.toBool(), false);
+}
+
+void GameStreamAdapterTest::physicalDisplaySnapshotIsBoundedAndTruthful()
+{
+    FakeSession session;
+    session.physicalCount = 3;
+    GameStreamAdapter adapter(&session);
+
+    HostSnapshot snapshot = adapter.snapshot();
+    const ActionState status = snapshot.actionStates.value(
+        QStringLiteral("display.physical-status"));
+    QVERIFY(!status.enabled);
+    QCOMPARE(status.value.toString(), QStringLiteral("Unknown"));
+    QCOMPARE(
+        status.disabledReason,
+        QStringLiteral(
+            "The host does not report an authoritative active physical display."));
+    for (int displayNumber = 1; displayNumber <= 3; ++displayNumber) {
+        const ActionState state = snapshot.actionStates.value(
+            QStringLiteral("display.physical.%1").arg(displayNumber));
+        QVERIFY(state.visible);
+        QVERIFY(state.enabled);
+    }
+    QVERIFY(!snapshot.actionStates.value(
+        QStringLiteral("display.physical.4")).visible);
+
+    session.lastPhysicalDisplay = 2;
+    snapshot = adapter.snapshot();
+    QCOMPARE(snapshot.actionStates.value(
+                 QStringLiteral("display.physical-status")).value.toString(),
+             QStringLiteral("Last requested: Display 2"));
+    QCOMPARE(snapshot.actionStates.value(
+                 QStringLiteral("display.physical.2")).value.toString(),
+             QStringLiteral("Last requested"));
+
+    session.physicalSwitchActive = true;
+    snapshot = adapter.snapshot();
+    QVERIFY(!snapshot.actionStates.value(
+        QStringLiteral("display.physical.1")).enabled);
+}
+
+void GameStreamAdapterTest::requestsPhysicalDisplayAsynchronously()
+{
+    FakeSession session;
+    GameStreamAdapter adapter(&session);
+    ActionRegistry registry(GameStreamAdapter::descriptors(), adapter);
+    ActionResult result;
+    int completionCount = 0;
+
+    registry.execute(
+        QStringLiteral("display.physical.2"), {},
+        [&](const ActionResult& completed) {
+            result = completed;
+            ++completionCount;
+        });
+
+    QCOMPARE(session.requestedPhysicalDisplay, 2);
+    QCOMPARE(completionCount, 0);
+    QVERIFY(bool(session.physicalCompletion));
+    QCOMPARE(registry.state(QStringLiteral("display.physical.2")).phase,
+             ActionPhase::Working);
+
+    session.lastPhysicalDisplay = 2;
+    session.physicalSwitchActive = false;
+    auto completion = std::move(session.physicalCompletion);
+    completion({true, QStringLiteral("Display 2 requested; video resumed"),
+                {}, {}});
+
+    QCOMPARE(completionCount, 1);
+    QVERIFY(result.ok);
+    const ActionState finished = registry.state(
+        QStringLiteral("display.physical.2"));
+    QCOMPARE(finished.phase, ActionPhase::Succeeded);
+    QCOMPARE(finished.message,
+             QStringLiteral("Display 2 requested; video resumed"));
+}
+
+void GameStreamAdapterTest::rejectedPhysicalDisplayRequestIsReportedTruthfully()
+{
+    FakeSession session;
+    session.acceptPhysicalRequest = false;
+    GameStreamAdapter adapter(&session);
+    ActionRegistry registry(GameStreamAdapter::descriptors(), adapter);
+    ActionResult result;
+    int completionCount = 0;
+
+    registry.execute(
+        QStringLiteral("display.physical.2"), {},
+        [&](const ActionResult& completed) {
+            result = completed;
+            ++completionCount;
+        });
+
+    QCOMPARE(completionCount, 1);
+    QVERIFY(!result.ok);
+    QCOMPARE(result.errorCode, QStringLiteral("request_rejected"));
+    QCOMPARE(
+        result.userMessage,
+        QStringLiteral("The physical display request could not be queued."));
 }
 
 void GameStreamAdapterTest::togglesStatisticsWithObservedEvidence()

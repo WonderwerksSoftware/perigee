@@ -13,6 +13,11 @@ constexpr auto StatsOverlayId = "stats.overlay";
 constexpr auto FullscreenId = "window.fullscreen";
 constexpr auto DisconnectClientId = "session.disconnect-client";
 constexpr auto QuitPerigeeId = "session.quit-perigee";
+constexpr auto PhysicalDisplayStatusId = "display.physical-status";
+constexpr auto PhysicalDisplayPrefix = "display.physical.";
+constexpr auto PhysicalDisplayResource = "display.physical";
+constexpr int MinimumPhysicalDisplay = 1;
+constexpr int MaximumPhysicalDisplay = 13;
 
 ActionDescriptor descriptor(const char* id,
                             const char* label,
@@ -116,6 +121,100 @@ void complete(const HostAdapter::Completion& completion,
     }
 }
 
+QString physicalDisplayId(int displayNumber)
+{
+    return QString::fromLatin1(PhysicalDisplayPrefix) +
+        QString::number(displayNumber);
+}
+
+bool physicalDisplayNumber(const QString& actionId, int* displayNumber)
+{
+    const QString prefix = QString::fromLatin1(PhysicalDisplayPrefix);
+    if (!actionId.startsWith(prefix)) {
+        return false;
+    }
+    const QString suffix = actionId.mid(prefix.size());
+    if (suffix.isEmpty() ||
+            (suffix.size() > 1 && suffix.startsWith(QLatin1Char('0')))) {
+        return false;
+    }
+    for (const QChar character : suffix) {
+        if (character < QLatin1Char('0') ||
+                character > QLatin1Char('9')) {
+            return false;
+        }
+    }
+    bool parsed = false;
+    const int number = suffix.toInt(&parsed);
+    if (!parsed || number < MinimumPhysicalDisplay ||
+            number > MaximumPhysicalDisplay) {
+        return false;
+    }
+    if (displayNumber != nullptr) {
+        *displayNumber = number;
+    }
+    return true;
+}
+
+ActionState physicalDisplayState(SessionFacade* authority, int displayNumber)
+{
+    if (authority == nullptr) {
+        return unavailableState();
+    }
+
+    const QPointer<SessionFacade> guardedAuthority(authority);
+    const int displayCount = qBound(
+        MinimumPhysicalDisplay, authority->physicalDisplayCount(),
+        MaximumPhysicalDisplay);
+    if (guardedAuthority.isNull()) {
+        return unavailableState();
+    }
+    const int lastRequested = authority->lastRequestedPhysicalDisplay();
+    if (guardedAuthority.isNull()) {
+        return unavailableState();
+    }
+    const bool switchActive = authority->physicalDisplaySwitchActive();
+    if (guardedAuthority.isNull()) {
+        return unavailableState();
+    }
+
+    ActionState state;
+    state.visible = displayNumber <= displayCount;
+    state.enabled = state.visible && !switchActive;
+    if (displayNumber == lastRequested) {
+        state.value = QStringLiteral("Last requested");
+    }
+    if (state.visible && switchActive) {
+        state.disabledCode = QStringLiteral("display_request_in_progress");
+        state.disabledReason = QStringLiteral(
+            "A physical display request is in progress.");
+    }
+    return state;
+}
+
+ActionState physicalDisplayStatusState(SessionFacade* authority)
+{
+    if (authority == nullptr) {
+        return unavailableState();
+    }
+
+    const QPointer<SessionFacade> guardedAuthority(authority);
+    const int lastRequested = authority->lastRequestedPhysicalDisplay();
+    if (guardedAuthority.isNull()) {
+        return unavailableState();
+    }
+
+    ActionState state;
+    state.value = lastRequested == 0
+        ? QStringLiteral("Unknown")
+        : QStringLiteral("Last requested: Display %1")
+              .arg(lastRequested);
+    state.disabledCode = QStringLiteral("informational");
+    state.disabledReason = QStringLiteral(
+        "The host does not report an authoritative active physical display.");
+    return state;
+}
+
 }
 
 GameStreamAdapter::GameStreamAdapter(SessionFacade* session)
@@ -125,7 +224,7 @@ GameStreamAdapter::GameStreamAdapter(SessionFacade* session)
 
 QVector<ActionDescriptor> GameStreamAdapter::descriptors()
 {
-    return {
+    QVector<ActionDescriptor> result {
         descriptor(MouseCaptureId, "Mouse capture", ActionCategory::Input,
                    {QStringLiteral("mouse"), QStringLiteral("grab")}, "input.mouse"),
         descriptor(KeyboardCaptureId, "Keyboard capture", ActionCategory::Input,
@@ -153,6 +252,23 @@ QVector<ActionDescriptor> GameStreamAdapter::descriptors()
             ConfirmationPolicy::Always,
             "Quit Perigee? The client will close, and the host session will continue."),
     };
+
+    result.push_back(descriptor(
+        PhysicalDisplayStatusId, "Physical display", ActionCategory::Display,
+        {QStringLiteral("display status"), QStringLiteral("monitor status")}));
+    for (int displayNumber = MinimumPhysicalDisplay;
+         displayNumber <= MaximumPhysicalDisplay; ++displayNumber) {
+        result.push_back({
+            physicalDisplayId(displayNumber),
+            QStringLiteral("Display %1").arg(displayNumber),
+            ActionCategory::Display,
+            {QStringLiteral("display"), QStringLiteral("monitor"),
+             QStringLiteral("screen"), QString::number(displayNumber)},
+            QString::fromLatin1(PhysicalDisplayResource),
+            {}, 0, ConfirmationPolicy::Never, {},
+        });
+    }
+    return result;
 }
 
 HostSnapshot GameStreamAdapter::snapshot()
@@ -178,10 +294,26 @@ HostSnapshot GameStreamAdapter::snapshot()
                                availableState(authority->statsOverlayEnabled()));
     result.actionStates.insert(QString::fromLatin1(FullscreenId),
                                availableState(authority->fullscreenEnabled()));
+    authority = session();
+    if (authority == nullptr) {
+        return result;
+    }
     result.actionStates.insert(QString::fromLatin1(DisconnectClientId),
                                availableState());
     result.actionStates.insert(QString::fromLatin1(QuitPerigeeId),
                                availableState());
+    result.actionStates.insert(QString::fromLatin1(PhysicalDisplayStatusId),
+                               physicalDisplayStatusState(authority));
+    for (int displayNumber = MinimumPhysicalDisplay;
+         displayNumber <= MaximumPhysicalDisplay; ++displayNumber) {
+        authority = session();
+        if (authority == nullptr) {
+            return result;
+        }
+        result.actionStates.insert(
+            physicalDisplayId(displayNumber),
+            physicalDisplayState(authority, displayNumber));
+    }
     return result;
 }
 
@@ -256,6 +388,31 @@ void GameStreamAdapter::execute(const QString& actionId,
                              QStringLiteral("Window mode: fullscreen"),
                              QStringLiteral("Window mode: windowed"),
                              QStringLiteral("Window mode")));
+        return;
+    }
+    int displayNumber = 0;
+    if (physicalDisplayNumber(actionId, &displayNumber)) {
+        const QPointer<SessionFacade> guardedAuthority(authority);
+        const bool accepted = authority->requestPhysicalDisplay(
+            displayNumber,
+            [guardedAuthority, displayNumber,
+             completion](
+                const ActionResult& completed) mutable {
+                ActionResult observedResult = completed;
+                observedResult.observedState = physicalDisplayState(
+                    guardedAuthority.data(), displayNumber);
+                complete(completion, observedResult);
+            });
+        if (!accepted) {
+            ActionResult rejected {
+                false, {},
+                QStringLiteral("request_rejected"),
+                QStringLiteral(
+                    "The physical display request could not be queued."),
+                physicalDisplayState(authority, displayNumber),
+            };
+            complete(completion, rejected);
+        }
         return;
     }
     if (actionId == QString::fromLatin1(DisconnectClientId)) {
