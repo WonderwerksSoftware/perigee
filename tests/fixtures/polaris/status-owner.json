@@ -4,7 +4,30 @@
   "session_token": "fixture-owner-token",
   "client_role": "owner",
   "owned_by_client": true,
+  "adaptive_bitrate_enabled": true,
+  "adaptive_target_bitrate_kbps": 28000,
+  "adaptive_bitrate_state": "steady",
+  "adaptive_bitrate_reason": "Network is stable",
+  "ai_auto_quality_enabled": true,
+  "ai_optimizer_enabled": true,
+  "tuning": {
+    "adaptive_bitrate_enabled": true,
+    "adaptive_target_bitrate_kbps": 28000,
+    "adaptive_base_bitrate_kbps": 35000,
+    "adaptive_min_bitrate_kbps": 2000,
+    "adaptive_max_bitrate_kbps": 100000,
+    "adaptive_bitrate_state": "steady",
+    "adaptive_bitrate_reason": "Network is stable",
+    "adaptive_packet_loss_ewma": 0.002,
+    "adaptive_rtt_ewma_ms": 18.5,
+    "ai_auto_quality_enabled": true,
+    "ai_optimizer_enabled": true
+  },
+  "encoder": {
+    "bitrate_kbps": 27500
+  },
   "controls": {
+    "host_tuning_allowed": true,
     "stop_allowed": true,
     "stop_endpoint": "/polaris/v1/session/stop",
     "quit_allowed": true,

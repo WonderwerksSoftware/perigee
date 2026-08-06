@@ -4,6 +4,9 @@
   "features": {
     "session_stop_v1": true,
     "client_settings_v1": true,
+    "ai_auto_quality_control": true,
+    "ai_optimizer_control": true,
+    "adaptive_bitrate_control": true,
     "named_commands_v1": true,
     "clipboard_limits_v1": true,
     "future_feature_v2": true

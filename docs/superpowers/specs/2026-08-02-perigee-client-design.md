@@ -90,7 +90,7 @@ Its default presentation is the approved **Search Rail**:
 
 - a compact rail centered at the top of the stream;
 - a search field focused immediately when opened from the keyboard;
-- Display, Input, Clipboard, Stats, Window, and Session categories;
+- Display, Quality, Input, Clipboard, Stats, Window, and Session categories;
 - a small tray below the rail containing only the active category or search results;
 - visible focus, current values, disabled reasons, progress, and confirmation state;
 - no permanent side panel and no full-screen takeover.

@@ -9,8 +9,9 @@ struct CategoryEntry {
     const char* displayName;
 };
 
-constexpr std::array<CategoryEntry, 6> Categories {{
+constexpr std::array<CategoryEntry, 7> Categories {{
     { ActionCategory::Display, "Display" },
+    { ActionCategory::Quality, "Quality" },
     { ActionCategory::Input, "Input" },
     { ActionCategory::Clipboard, "Clipboard" },
     { ActionCategory::Stats, "Stats" },

@@ -9,6 +9,8 @@
 #include <QVariant>
 #include <QVector>
 
+#include <optional>
+
 struct AdvertisedPolarisEndpoint
 {
     QString advertised;
@@ -53,6 +55,7 @@ struct PolarisCapabilities
 
 struct PolarisControls
 {
+    bool hostTuningAllowed = false;
     bool stopAllowed = false;
     bool commandsAllowed = false;
     bool clipboardReadAllowed = false;
@@ -72,6 +75,16 @@ struct PolarisSessionStatus
     bool ownsSession = false;
     bool transitioning = false;
     PolarisControls controls;
+    std::optional<bool> adaptiveBitrateEnabled;
+    std::optional<bool> aiAutoQualityEnabled;
+    std::optional<bool> aiOptimizerEnabled;
+    std::optional<int> adaptiveTargetBitrateKbps;
+    std::optional<int> adaptiveBaseBitrateKbps;
+    std::optional<int> adaptiveMinBitrateKbps;
+    std::optional<int> adaptiveMaxBitrateKbps;
+    std::optional<int> encoderBitrateKbps;
+    QString adaptiveState;
+    QString adaptiveReason;
 };
 
 struct ClientSettingField
@@ -89,6 +102,16 @@ struct PolarisClientSettings
     bool valid = false;
     QString errorCode;
     QHash<QString, ClientSettingField> fields;
+    std::optional<bool> adaptiveBitrateEnabled;
+    std::optional<bool> aiAutoQualityEnabled;
+    std::optional<bool> aiOptimizerEnabled;
+    std::optional<int> adaptiveTargetBitrateKbps;
+    std::optional<int> adaptiveBaseBitrateKbps;
+    std::optional<int> adaptiveMinBitrateKbps;
+    std::optional<int> adaptiveMaxBitrateKbps;
+    std::optional<int> encoderBitrateKbps;
+    QString adaptiveState;
+    QString adaptiveReason;
 };
 
 struct PolarisDiscoverySnapshot
@@ -107,6 +130,8 @@ enum class PolarisOperation {
     ClipboardWrite,
     NamedCommand,
     StopSession,
+    BitrateControl,
+    AdaptiveQualityControl,
 };
 
 enum class PolarisAvailabilityCode {

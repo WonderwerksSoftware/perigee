@@ -342,6 +342,8 @@ void DeckQmlTest::loadsShellAndReachesCategoriesAndActionsFromKeyboard()
 
     sendKey(renderer, Qt::Key_Right);
     QCOMPARE(controller.activeCategory(), 1);
+    sendKey(renderer, Qt::Key_Right);
+    QCOMPARE(controller.activeCategory(), 2);
     QCOMPARE(controller.searchText(), QString());
 
     sendKey(renderer, Qt::Key_Down);
@@ -1208,7 +1210,7 @@ void DeckQmlTest::realPointerEventSelectsCategoryThroughRenderer()
     renderer.resize(QSize(960, 540), 1.0);
     QVERIFY2(renderer.render(&image, &error), qPrintable(error));
 
-    // The Input category is the second 120px item in the centered 745px row.
+    // The Input category follows Display and Quality in the category rail.
     const QPointF inputCategoryCenter(300.0, 105.0);
     QMouseEvent press(QEvent::MouseButtonPress, inputCategoryCenter,
                       inputCategoryCenter, inputCategoryCenter,
@@ -1220,7 +1222,7 @@ void DeckQmlTest::realPointerEventSelectsCategoryThroughRenderer()
     QVERIFY(renderer.sendPointerEvent(&release));
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
 
-    QTRY_COMPARE(controller.activeCategory(), 1);
+    QTRY_COMPARE(controller.activeCategory(), 2);
     QCOMPARE(controller.focusRegion(), DeckController::CategoriesRegion);
 }
 

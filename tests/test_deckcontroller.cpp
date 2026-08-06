@@ -167,12 +167,14 @@ void DeckControllerTest::categoryCyclingMakesActionsReachableWithoutSearchText()
     controller.openFromKeyboard();
 
     controller.nextCategory();
+    controller.nextCategory();
 
-    QCOMPARE(controller.activeCategory(), 1);
+    QCOMPARE(controller.activeCategory(), 2);
     QCOMPARE(controller.searchText(), QString());
     QVERIFY(!controller.searchFocused());
     QCOMPARE(focusedActionId(controller), QStringLiteral("input.mouse-capture"));
 
+    controller.previousCategory();
     controller.previousCategory();
     QCOMPARE(controller.activeCategory(), 0);
     QCOMPARE(focusedActionId(controller), QStringLiteral("display.select"));
@@ -184,6 +186,7 @@ void DeckControllerTest::authoritativeCategoryOrderReachesEveryCoreAction()
     QVector<ActionDescriptor> descriptors;
     const QVector<ActionCategory> expectedOrder {
         ActionCategory::Display,
+        ActionCategory::Quality,
         ActionCategory::Input,
         ActionCategory::Clipboard,
         ActionCategory::Stats,
@@ -192,6 +195,7 @@ void DeckControllerTest::authoritativeCategoryOrderReachesEveryCoreAction()
     };
     const QStringList expectedNames {
         QStringLiteral("Display"),
+        QStringLiteral("Quality"),
         QStringLiteral("Input"),
         QStringLiteral("Clipboard"),
         QStringLiteral("Stats"),
@@ -200,6 +204,7 @@ void DeckControllerTest::authoritativeCategoryOrderReachesEveryCoreAction()
     };
     const QStringList actionIds {
         QStringLiteral("display.select"),
+        QStringLiteral("quality.status"),
         QStringLiteral("input.capture"),
         QStringLiteral("clipboard.send"),
         QStringLiteral("stats.toggle"),
@@ -273,6 +278,11 @@ void DeckControllerTest::productionCatalogIsReachableByCategoryWithoutSearch()
         {QStringLiteral("display.physical.1"), ActionCategory::Display},
         {QStringLiteral("display.physical.2"), ActionCategory::Display},
         {QStringLiteral("display.physical.3"), ActionCategory::Display},
+        {QStringLiteral("quality.status"), ActionCategory::Quality},
+        {QStringLiteral("quality.mode.manual"), ActionCategory::Quality},
+        {QStringLiteral("quality.mode.adaptive"), ActionCategory::Quality},
+        {QStringLiteral("quality.bitrate.decrease"), ActionCategory::Quality},
+        {QStringLiteral("quality.bitrate.increase"), ActionCategory::Quality},
     };
     for (auto it = expected.cbegin(); it != expected.cend(); ++it) {
         if (!adapter.currentSnapshot.actionStates.contains(it.key())) {
@@ -385,7 +395,7 @@ void DeckControllerTest::controllerOperatesPhysicalDisplaysAndKeepsDeckOpen()
     controller.pumpPendingWork();
     QVERIFY(controller.isOpen());
 
-    controller.selectCategory(5);
+    controller.selectCategory(6);
     QCOMPARE(focusedActionId(controller),
              QStringLiteral("session.disconnect-client"));
 }
@@ -636,7 +646,7 @@ void DeckControllerTest::controllerOpenSkipsEmptyDisplayCategory()
 
     controller.openFromController();
 
-    QCOMPARE(controller.activeCategory(), 1);
+    QCOMPARE(controller.activeCategory(), 2);
     QVERIFY(!controller.searchFocused());
     QCOMPARE(focusedActionId(controller), QStringLiteral("input.mouse-capture"));
 }
@@ -660,7 +670,7 @@ void DeckControllerTest::controllerOpenSkipsAllDisabledDisplayCategory()
 
     controller.openFromController();
 
-    QCOMPARE(controller.activeCategory(), 3);
+    QCOMPARE(controller.activeCategory(), 4);
     QVERIFY(!controller.searchFocused());
     QCOMPARE(focusedActionId(controller), QStringLiteral("stats.overlay"));
 }

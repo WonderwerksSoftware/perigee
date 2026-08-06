@@ -39,6 +39,7 @@ public:
         }
         return observed;
     }
+    int configuredBitrateKbps() const override { return bitrateKbps; }
 
     bool setStatsOverlayEnabled(bool enabled) override
     {
@@ -95,6 +96,7 @@ public:
     bool mouse = false;
     bool keyboard = false;
     bool fullscreen = false;
+    int bitrateKbps = 35000;
     bool ignoreStatsRequest = false;
     bool ignoreMouseRequest = false;
     bool ignoreKeyboardRequest = false;
@@ -174,6 +176,7 @@ class GameStreamAdapterTest : public QObject
 private slots:
     void exposesExactLocalActionMetadata();
     void snapshotReadsCurrentSessionState();
+    void exposesConfiguredQualityAsReadOnly();
     void physicalDisplaySnapshotIsBoundedAndTruthful();
     void requestsPhysicalDisplayAsynchronously();
     void rejectedPhysicalDisplayRequestIsReportedTruthfully();
@@ -207,7 +210,7 @@ private slots:
 void GameStreamAdapterTest::exposesExactLocalActionMetadata()
 {
     const auto descriptors = descriptorMap();
-    QCOMPARE(descriptors.size(), 21);
+    QCOMPARE(descriptors.size(), 22);
     QSet<QString> expectedIds {
         QStringLiteral("input.mouse-capture"),
         QStringLiteral("input.keyboard-capture"),
@@ -217,6 +220,7 @@ void GameStreamAdapterTest::exposesExactLocalActionMetadata()
         QStringLiteral("session.disconnect-client"),
         QStringLiteral("session.quit-perigee"),
         QStringLiteral("display.physical-status"),
+        QStringLiteral("quality.status"),
     };
     for (int displayNumber = 1; displayNumber <= 13; ++displayNumber) {
         expectedIds.insert(QStringLiteral("display.physical.%1")
@@ -238,6 +242,8 @@ void GameStreamAdapterTest::exposesExactLocalActionMetadata()
              ActionCategory::Session);
     QCOMPARE(descriptors.value(QStringLiteral("session.quit-perigee")).category,
              ActionCategory::Session);
+    QCOMPARE(descriptors.value(QStringLiteral("quality.status")).category,
+             ActionCategory::Quality);
 
     QCOMPARE(descriptors.value(QStringLiteral("session.disconnect-client")).confirmation,
              ConfirmationPolicy::Always);
@@ -264,12 +270,26 @@ void GameStreamAdapterTest::snapshotReadsCurrentSessionState()
     GameStreamAdapter adapter(&session);
 
     const HostSnapshot snapshot = adapter.snapshot();
-    QCOMPARE(snapshot.actionStates.size(), 21);
+    QCOMPARE(snapshot.actionStates.size(), 22);
     QVERIFY(snapshot.actionStates.value(QStringLiteral("stats.overlay")).enabled);
     QCOMPARE(snapshot.actionStates.value(QStringLiteral("stats.overlay")).value.toBool(), true);
     QCOMPARE(snapshot.actionStates.value(QStringLiteral("input.mouse-capture")).value.toBool(), false);
     QCOMPARE(snapshot.actionStates.value(QStringLiteral("input.keyboard-capture")).value.toBool(), true);
     QCOMPARE(snapshot.actionStates.value(QStringLiteral("window.fullscreen")).value.toBool(), false);
+}
+
+void GameStreamAdapterTest::exposesConfiguredQualityAsReadOnly()
+{
+    FakeSession session;
+    session.bitrateKbps = 35000;
+    GameStreamAdapter adapter(&session);
+
+    const ActionState quality = adapter.snapshot().actionStates.value(
+        QStringLiteral("quality.status"));
+    QVERIFY(!quality.enabled);
+    QCOMPARE(quality.value.toString(), QStringLiteral("Manual · 35 Mbps"));
+    QCOMPARE(quality.disabledCode, QStringLiteral("informational"));
+    QVERIFY(quality.disabledReason.contains(QStringLiteral("active stream")));
 }
 
 void GameStreamAdapterTest::physicalDisplaySnapshotIsBoundedAndTruthful()

@@ -7,7 +7,7 @@
 
 #include <optional>
 
-enum class ActionCategory { Display, Input, Clipboard, Stats, Window, Session };
+enum class ActionCategory { Display, Quality, Input, Clipboard, Stats, Window, Session };
 enum class ActionPhase { Idle, AwaitingConfirmation, Working, Succeeded, Failed };
 enum class ConfirmationPolicy { Never, Always, WhenDisruptive };
 

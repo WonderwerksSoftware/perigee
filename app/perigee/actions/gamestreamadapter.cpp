@@ -14,6 +14,7 @@ constexpr auto FullscreenId = "window.fullscreen";
 constexpr auto DisconnectClientId = "session.disconnect-client";
 constexpr auto QuitPerigeeId = "session.quit-perigee";
 constexpr auto PhysicalDisplayStatusId = "display.physical-status";
+constexpr auto QualityStatusId = "quality.status";
 constexpr auto PhysicalDisplayPrefix = "display.physical.";
 constexpr auto PhysicalDisplayResource = "display.physical";
 constexpr int MinimumPhysicalDisplay = 1;
@@ -215,6 +216,30 @@ ActionState physicalDisplayStatusState(SessionFacade* authority)
     return state;
 }
 
+QString configuredQualityText(int bitrateKbps)
+{
+    if (bitrateKbps <= 0) {
+        return QStringLiteral("Manual · Unknown bitrate");
+    }
+    const QString value = bitrateKbps % 1000 == 0
+        ? QString::number(bitrateKbps / 1000)
+        : QString::number(bitrateKbps / 1000.0, 'f', 1);
+    return QStringLiteral("Manual · %1 Mbps").arg(value);
+}
+
+ActionState qualityStatusState(SessionFacade* authority)
+{
+    if (authority == nullptr) {
+        return unavailableState();
+    }
+    ActionState state;
+    state.value = configuredQualityText(authority->configuredBitrateKbps());
+    state.disabledCode = QStringLiteral("informational");
+    state.disabledReason = QStringLiteral(
+        "This host cannot change bitrate during an active stream.");
+    return state;
+}
+
 }
 
 GameStreamAdapter::GameStreamAdapter(SessionFacade* session)
@@ -251,6 +276,9 @@ QVector<ActionDescriptor> GameStreamAdapter::descriptors()
             "session.lifecycle",
             ConfirmationPolicy::Always,
             "Quit Perigee? The client will close, and the host session will continue."),
+        descriptor(QualityStatusId, "Stream quality", ActionCategory::Quality,
+                   {QStringLiteral("quality"), QStringLiteral("bitrate"),
+                    QStringLiteral("adaptive")}),
     };
 
     result.push_back(descriptor(
@@ -302,6 +330,8 @@ HostSnapshot GameStreamAdapter::snapshot()
                                availableState());
     result.actionStates.insert(QString::fromLatin1(QuitPerigeeId),
                                availableState());
+    result.actionStates.insert(QString::fromLatin1(QualityStatusId),
+                               qualityStatusState(authority));
     result.actionStates.insert(QString::fromLatin1(PhysicalDisplayStatusId),
                                physicalDisplayStatusState(authority));
     for (int displayNumber = MinimumPhysicalDisplay;

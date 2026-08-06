@@ -38,6 +38,7 @@ private slots:
     void authenticatedRawParserRejectsMalformedRequests_data();
     void authenticatedRawParserRejectsMalformedRequests();
     void currentDiscoveryPublishesPolarisAndStockPhysicalActions();
+    void qualityControlsUseOfficialAuthenticatedRoutesAndRefresh();
     void oldMalformedAndNonPolarisDiscoveryFailClosed();
     void wrongServerLeafAndClientIdentityFailClosed();
     void authenticatedHttpTimeoutDropAndPolicyRemainDistinct();
@@ -593,6 +594,80 @@ void PolarisIntegrationTest::currentDiscoveryPublishesPolarisAndStockPhysicalAct
          iterator != snapshot.actionStates.cend(); ++iterator) {
         QVERIFY(!iterator.key().startsWith(QStringLiteral("display.target.")));
     }
+    QCOMPARE(server.pendingScriptCount(), 0);
+    QCOMPARE(server.unexpectedRequestCount(), 0);
+}
+
+void PolarisIntegrationTest::qualityControlsUseOfficialAuthenticatedRoutesAndRefresh()
+{
+    FakePolarisServer server;
+    QVERIFY2(server.start(), qPrintable(server.failureLabel()));
+    enqueueCurrentDiscovery(server);
+    AdapterHarness harness(server);
+    QVERIFY(harness.adapter.startDiscovery());
+    QVERIFY(waitForDiscovery(harness.adapter));
+
+    bool exactModeBody = false;
+    FakePolarisServer::ResponseScript mode;
+    mode.method = QByteArrayLiteral("POST");
+    mode.path = QStringLiteral("/polaris/v1/session/adaptive-bitrate");
+    mode.headers.insert(QByteArrayLiteral("Content-Type"),
+                        QByteArrayLiteral("application/json"));
+    mode.bodyChunks = {QByteArrayLiteral(
+        "{\"status\":true,\"ai_auto_quality_enabled\":false,"
+        "\"adaptive_bitrate_enabled\":false,"
+        "\"ai_optimizer_enabled\":false}")};
+    mode.inspectBody = [&](QByteArray& body) {
+        const QJsonObject object = QJsonDocument::fromJson(body).object();
+        exactModeBody = object.size() == 1 &&
+            object.value(QStringLiteral("enabled")) == false;
+        return exactModeBody;
+    };
+    server.enqueue(std::move(mode));
+    enqueueCurrentDiscovery(server);
+
+    ActionResult manual;
+    bool manualComplete = false;
+    harness.registry.execute(
+        QStringLiteral("quality.mode.manual"), {},
+        [&](const ActionResult& result) {
+            manual = result;
+            manualComplete = true;
+        });
+    QVERIFY(waitForAction(harness.adapter, manualComplete));
+    QVERIFY(manual.ok);
+    QVERIFY(exactModeBody);
+    QVERIFY(waitForDiscoveryGeneration(harness.adapter, 2));
+
+    bool exactBitrateBody = false;
+    FakePolarisServer::ResponseScript bitrate;
+    bitrate.method = QByteArrayLiteral("POST");
+    bitrate.path = QStringLiteral("/polaris/v1/session/bitrate");
+    bitrate.headers.insert(QByteArrayLiteral("Content-Type"),
+                           QByteArrayLiteral("application/json"));
+    bitrate.bodyChunks = {QByteArrayLiteral(
+        "{\"status\":true,\"bitrate_kbps\":40000}")};
+    bitrate.inspectBody = [&](QByteArray& body) {
+        const QJsonObject object = QJsonDocument::fromJson(body).object();
+        exactBitrateBody = object.size() == 1 &&
+            object.value(QStringLiteral("bitrate_kbps")).toInt() == 40000;
+        return exactBitrateBody;
+    };
+    server.enqueue(std::move(bitrate));
+    enqueueCurrentDiscovery(server);
+
+    ActionResult increased;
+    bool increaseComplete = false;
+    harness.registry.execute(
+        QStringLiteral("quality.bitrate.increase"), {},
+        [&](const ActionResult& result) {
+            increased = result;
+            increaseComplete = true;
+        });
+    QVERIFY(waitForAction(harness.adapter, increaseComplete));
+    QVERIFY(increased.ok);
+    QVERIFY(exactBitrateBody);
+    QVERIFY(waitForDiscoveryGeneration(harness.adapter, 3));
     QCOMPARE(server.pendingScriptCount(), 0);
     QCOMPARE(server.unexpectedRequestCount(), 0);
 }

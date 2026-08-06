@@ -24,6 +24,8 @@ constexpr auto CapabilitiesRoute = "/polaris/v1/capabilities";
 constexpr auto StatusRoute = "/polaris/v1/session/status";
 constexpr auto SettingsRoute = "/polaris/v1/client-settings";
 constexpr auto CommandsRoute = "/polaris/v1/commands";
+constexpr auto BitrateRoute = "/polaris/v1/session/bitrate";
+constexpr auto AdaptiveRoute = "/polaris/v1/session/adaptive-bitrate";
 
 PolarisResponse fixture(const char* name, int status = 200)
 {
@@ -85,6 +87,7 @@ public:
     bool mouseCaptureEnabled() const override { return false; }
     bool keyboardCaptureEnabled() const override { return false; }
     bool fullscreenEnabled() const override { return false; }
+    int configuredBitrateKbps() const override { return 35000; }
     bool setStatsOverlayEnabled(bool) override { return true; }
     bool setMouseCaptureEnabled(bool) override { return true; }
     bool setKeyboardCaptureEnabled(bool) override { return true; }
@@ -372,6 +375,10 @@ class PolarisActionsTest final : public QObject
 
 private slots:
     void registersFixedActionsAndHiddenCommandTemplate();
+    void exposesOfficialQualityStateAndMetadata();
+    void sendsBoundedQualityRequestsAndRefreshesReadback();
+    void clampsQualityRequestsAndRejectsMismatchedReadback();
+    void qualityControlsFailClosedWithoutHostPermission();
     void expandsCommandsInNumericOrderWithoutTemplateRow();
     void refreshRemovesStaleCommandsAndSearchesByDisplayName();
     void commandRiskFailsClosedAndDirectExecutionCannotBypassConfirmation();
@@ -403,6 +410,10 @@ void PolarisActionsTest::registersFixedActionsAndHiddenCommandTemplate()
     QVERIFY(descriptorIds.contains(QStringLiteral("clipboard.fetch-remote")));
     QVERIFY(descriptorIds.contains(QStringLiteral("session.end-host")));
     QVERIFY(descriptorIds.contains(QStringLiteral("host.command")));
+    QVERIFY(descriptorIds.contains(QStringLiteral("quality.mode.manual")));
+    QVERIFY(descriptorIds.contains(QStringLiteral("quality.mode.adaptive")));
+    QVERIFY(descriptorIds.contains(QStringLiteral("quality.bitrate.decrease")));
+    QVERIFY(descriptorIds.contains(QStringLiteral("quality.bitrate.increase")));
 
     const auto stop = std::find_if(descriptors.cbegin(), descriptors.cend(),
         [](const ActionDescriptor& descriptor) {
@@ -417,6 +428,133 @@ void PolarisActionsTest::registersFixedActionsAndHiddenCommandTemplate()
     QVERIFY(stop->confirmationMessage.contains(
         QStringLiteral("different from disconnecting this client"),
         Qt::CaseInsensitive));
+}
+
+void PolarisActionsTest::exposesOfficialQualityStateAndMetadata()
+{
+    Harness harness;
+    harness.complete();
+    ActionRegistry registry(PolarisAdapter::descriptors(), *harness.adapter);
+
+    const QVector<ActionDescriptor> qualityActions =
+        registry.actions(ActionCategory::Quality);
+    const QStringList actionIds = ids(qualityActions);
+    QVERIFY(actionIds.contains(QStringLiteral("quality.status")));
+    QVERIFY(actionIds.contains(QStringLiteral("quality.mode.manual")));
+    QVERIFY(actionIds.contains(QStringLiteral("quality.mode.adaptive")));
+    QVERIFY(actionIds.contains(QStringLiteral("quality.bitrate.decrease")));
+    QVERIFY(actionIds.contains(QStringLiteral("quality.bitrate.increase")));
+
+    const ActionState status = registry.state(QStringLiteral("quality.status"));
+    QVERIFY(!status.enabled);
+    QCOMPARE(status.value.toString(), QStringLiteral("Adaptive · 28 Mbps"));
+    QCOMPARE(registry.state(QStringLiteral("quality.mode.manual")).value.toString(),
+             QString());
+    QCOMPARE(registry.state(QStringLiteral("quality.mode.adaptive")).value.toString(),
+             QStringLiteral("Selected"));
+    QVERIFY(registry.state(QStringLiteral("quality.bitrate.decrease")).enabled);
+    QVERIFY(registry.state(QStringLiteral("quality.bitrate.increase")).enabled);
+}
+
+void PolarisActionsTest::sendsBoundedQualityRequestsAndRefreshesReadback()
+{
+    Harness harness;
+    harness.complete();
+    ActionRegistry registry(PolarisAdapter::descriptors(), *harness.adapter);
+
+    ActionResult manual;
+    registry.execute(QStringLiteral("quality.mode.manual"), {},
+                     [&](const ActionResult& result) { manual = result; });
+    QCOMPARE(harness.transport->requests.last().endpoint,
+             QString::fromLatin1(AdaptiveRoute));
+    QCOMPARE(harness.transport->requests.last().body,
+             QByteArrayLiteral("{\"enabled\":false}"));
+    queue(harness.transport, QString::fromLatin1(AdaptiveRoute),
+          jsonResponse({{QStringLiteral("status"), true},
+                        {QStringLiteral("ai_auto_quality_enabled"), false},
+                        {QStringLiteral("adaptive_bitrate_enabled"), false},
+                        {QStringLiteral("ai_optimizer_enabled"), false}}));
+    QCOMPARE(harness.adapter->pumpCompletions(8), 1);
+    QVERIFY(manual.ok);
+    QCOMPARE(harness.transport->requests.last().endpoint,
+             QString::fromLatin1(SettingsRoute));
+
+    queue(harness.transport, QString::fromLatin1(CapabilitiesRoute),
+          fixture("capabilities-current.json"));
+    queue(harness.transport, QString::fromLatin1(StatusRoute),
+          fixture("status-owner.json"));
+    queue(harness.transport, QString::fromLatin1(SettingsRoute),
+          fixture("client-settings-current.json"));
+    QCOMPARE(harness.adapter->pumpCompletions(8), 3);
+    queue(harness.transport, QString::fromLatin1(CommandsRoute),
+          fixture("commands-current.json"));
+    QCOMPARE(harness.adapter->pumpCompletions(8), 1);
+
+    ActionResult increase;
+    registry.execute(QStringLiteral("quality.bitrate.increase"), {},
+                     [&](const ActionResult& result) { increase = result; });
+    QCOMPARE(harness.transport->requests.last().endpoint,
+             QString::fromLatin1(BitrateRoute));
+    QCOMPARE(harness.transport->requests.last().body,
+             QByteArrayLiteral("{\"bitrate_kbps\":40000}"));
+    queue(harness.transport, QString::fromLatin1(BitrateRoute),
+          jsonResponse({{QStringLiteral("status"), true},
+                        {QStringLiteral("bitrate_kbps"), 40000}}));
+    QCOMPARE(harness.adapter->pumpCompletions(8), 1);
+    QVERIFY(increase.ok);
+}
+
+void PolarisActionsTest::qualityControlsFailClosedWithoutHostPermission()
+{
+    QJsonObject status = fixture("status-owner.json").json.object();
+    QJsonObject controls = status.value(QStringLiteral("controls")).toObject();
+    controls.insert(QStringLiteral("host_tuning_allowed"), false);
+    status.insert(QStringLiteral("controls"), controls);
+
+    Harness harness;
+    harness.complete(fixture("commands-current.json"),
+                     fixture("capabilities-current.json"),
+                     jsonResponse(status));
+    ActionRegistry registry(PolarisAdapter::descriptors(), *harness.adapter);
+
+    for (const QString& id : {
+             QStringLiteral("quality.mode.manual"),
+             QStringLiteral("quality.mode.adaptive"),
+             QStringLiteral("quality.bitrate.decrease"),
+             QStringLiteral("quality.bitrate.increase")}) {
+        const ActionState state = registry.state(id);
+        QVERIFY(!state.enabled);
+        QCOMPARE(state.disabledCode, QStringLiteral("permission_denied"));
+    }
+}
+
+void PolarisActionsTest::clampsQualityRequestsAndRejectsMismatchedReadback()
+{
+    QJsonObject status = fixture("status-owner.json").json.object();
+    QJsonObject tuning = status.value(QStringLiteral("tuning")).toObject();
+    tuning.insert(QStringLiteral("adaptive_base_bitrate_kbps"), 98000);
+    tuning.insert(QStringLiteral("adaptive_max_bitrate_kbps"), 100000);
+    status.insert(QStringLiteral("tuning"), tuning);
+
+    Harness harness;
+    harness.complete(fixture("commands-current.json"),
+                     fixture("capabilities-current.json"),
+                     jsonResponse(status));
+    ActionRegistry registry(PolarisAdapter::descriptors(), *harness.adapter);
+
+    ActionResult result;
+    registry.execute(QStringLiteral("quality.bitrate.increase"), {},
+                     [&](const ActionResult& completed) { result = completed; });
+    QCOMPARE(harness.transport->requests.last().body,
+             QByteArrayLiteral("{\"bitrate_kbps\":100000}"));
+    queue(harness.transport, QString::fromLatin1(BitrateRoute),
+          jsonResponse({{QStringLiteral("status"), true},
+                        {QStringLiteral("bitrate_kbps"), 99000}}));
+    QCOMPARE(harness.adapter->pumpCompletions(8), 1);
+    QVERIFY(!result.ok);
+    QCOMPARE(result.errorCode, QStringLiteral("malformed_response"));
+    QCOMPARE(harness.transport->requests.last().endpoint,
+             QString::fromLatin1(BitrateRoute));
 }
 
 void PolarisActionsTest::expandsCommandsInNumericOrderWithoutTemplateRow()

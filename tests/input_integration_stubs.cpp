@@ -434,6 +434,7 @@ void Session::notifyMouseEmulationMode(bool enabled)
     g_MouseEmulationNotifications.append(enabled);
 }
 bool Session::statsOverlayEnabled() const { return g_StatsOverlayEnabled; }
+int Session::configuredBitrateKbps() const { return 35000; }
 bool Session::mouseCaptureEnabled() const { return g_MouseCaptureEnabled; }
 bool Session::keyboardCaptureEnabled() const { return g_KeyboardCaptureEnabled; }
 bool Session::fullscreenEnabled() const { return g_FullscreenEnabled; }

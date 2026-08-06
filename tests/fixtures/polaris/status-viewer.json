@@ -5,6 +5,7 @@
   "client_role": "viewer",
   "owned_by_client": false,
   "controls": {
+    "host_tuning_allowed": false,
     "stop_allowed": false,
     "stop_endpoint": "/polaris/v1/session/stop",
     "quit_allowed": false,

@@ -64,6 +64,8 @@ private slots:
     void tokenDependentMutationsFailClosedWithoutDisablingClipboard_data();
     void tokenDependentMutationsFailClosedWithoutDisablingClipboard();
     void parsesOfficialClientSettingsFields();
+    void parsesOfficialQualityStateStrictly();
+    void qualityAvailabilityRequiresContractOwnerAndTuningPermission();
     void parsesCurrentUpstreamClientSettingsEnvelope();
     void responseTrustBoundaryDistinguishesFallbackAndFailures();
     void malformedEntriesDoNotEraseIndependentValidData();
@@ -366,13 +368,89 @@ void PolarisModelsTest::parsesOfficialClientSettingsFields()
         fixture("client-settings-current.json"));
 
     QVERIFY(model.valid);
-    QCOMPARE(model.fields.size(), 1);
+    QCOMPARE(model.fields.size(), 4);
     const ClientSettingField field = model.fields.value(
         QStringLiteral("stream_display_mode"));
     QCOMPARE(field.direction, QStringLiteral("read_write"));
     QCOMPARE(field.scope, QStringLiteral("host"));
     QCOMPARE(field.effective.toString(), QStringLiteral("desktop_display"));
     QVERIFY(!field.requiresReconnect);
+}
+
+void PolarisModelsTest::parsesOfficialQualityStateStrictly()
+{
+    const PolarisClientSettings model = PolarisModels::parseClientSettings(
+        fixture("client-settings-current.json"));
+
+    QVERIFY(model.valid);
+    QCOMPARE(model.adaptiveBitrateEnabled, std::optional<bool>(true));
+    QCOMPARE(model.aiAutoQualityEnabled, std::optional<bool>(true));
+    QCOMPARE(model.aiOptimizerEnabled, std::optional<bool>(true));
+    QCOMPARE(model.adaptiveTargetBitrateKbps, std::optional<int>(28000));
+    QCOMPARE(model.adaptiveBaseBitrateKbps, std::optional<int>(35000));
+    QVERIFY(!model.adaptiveMinBitrateKbps.has_value());
+    QVERIFY(!model.adaptiveMaxBitrateKbps.has_value());
+    QVERIFY(!model.encoderBitrateKbps.has_value());
+
+    const PolarisSessionStatus session = PolarisModels::parseSessionStatus(
+        fixture("status-owner.json"), origin());
+    QCOMPARE(session.adaptiveBitrateEnabled, std::optional<bool>(true));
+    QCOMPARE(session.adaptiveTargetBitrateKbps, std::optional<int>(28000));
+    QCOMPARE(session.adaptiveBaseBitrateKbps, std::optional<int>(35000));
+    QCOMPARE(session.adaptiveMinBitrateKbps, std::optional<int>(2000));
+    QCOMPARE(session.adaptiveMaxBitrateKbps, std::optional<int>(100000));
+    QCOMPARE(session.encoderBitrateKbps, std::optional<int>(27500));
+    QCOMPARE(session.adaptiveState, QStringLiteral("steady"));
+    QCOMPARE(session.adaptiveReason, QStringLiteral("Network is stable"));
+
+    QJsonObject malformed = fixture("status-owner.json").json.object();
+    QJsonObject tuning = malformed.value(QStringLiteral("tuning")).toObject();
+    tuning.insert(QStringLiteral("adaptive_base_bitrate_kbps"), 35000.5);
+    tuning.insert(QStringLiteral("adaptive_min_bitrate_kbps"), -1);
+    malformed.insert(QStringLiteral("tuning"), tuning);
+    QJsonObject encoder = malformed.value(QStringLiteral("encoder")).toObject();
+    encoder.insert(QStringLiteral("bitrate_kbps"), QStringLiteral("27500"));
+    malformed.insert(QStringLiteral("encoder"), encoder);
+
+    const PolarisSessionStatus strict = PolarisModels::parseSessionStatus(
+        jsonResponse(malformed), origin());
+    QVERIFY(!strict.adaptiveBaseBitrateKbps.has_value());
+    QVERIFY(!strict.adaptiveMinBitrateKbps.has_value());
+    QVERIFY(!strict.encoderBitrateKbps.has_value());
+    QCOMPARE(strict.adaptiveTargetBitrateKbps, std::optional<int>(28000));
+}
+
+void PolarisModelsTest::qualityAvailabilityRequiresContractOwnerAndTuningPermission()
+{
+    PolarisDiscoverySnapshot snapshot;
+    snapshot.complete = true;
+    snapshot.capabilities = PolarisModels::parseCapabilities(
+        fixture("capabilities-current.json"), origin());
+    snapshot.session = PolarisModels::parseSessionStatus(
+        fixture("status-owner.json"), origin());
+    snapshot.settings = PolarisModels::parseClientSettings(
+        fixture("client-settings-current.json"));
+
+    QVERIFY(PolarisModels::availability(
+        snapshot, PolarisOperation::BitrateControl).enabled);
+    QVERIFY(PolarisModels::availability(
+        snapshot, PolarisOperation::AdaptiveQualityControl).enabled);
+
+    snapshot.session.controls.hostTuningAllowed = false;
+    QCOMPARE(PolarisModels::availability(
+                 snapshot, PolarisOperation::BitrateControl).errorCode,
+             QStringLiteral("permission_denied"));
+    snapshot.session.controls.hostTuningAllowed = true;
+    snapshot.session.ownsSession = false;
+    QCOMPARE(PolarisModels::availability(
+                 snapshot, PolarisOperation::AdaptiveQualityControl).errorCode,
+             QStringLiteral("not_controlling_client"));
+    snapshot.session.ownsSession = true;
+    snapshot.capabilities.features.remove(
+        QStringLiteral("ai_auto_quality_control"));
+    QCOMPARE(PolarisModels::availability(
+                 snapshot, PolarisOperation::AdaptiveQualityControl).errorCode,
+             QStringLiteral("capability_not_advertised"));
 }
 
 void PolarisModelsTest::parsesCurrentUpstreamClientSettingsEnvelope()

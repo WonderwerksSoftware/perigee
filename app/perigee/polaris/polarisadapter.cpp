@@ -19,6 +19,7 @@
 #include <QThread>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <optional>
 #include <utility>
@@ -28,6 +29,17 @@ namespace {
 constexpr auto CapabilitiesRoute = "/polaris/v1/capabilities";
 constexpr auto SessionStatusRoute = "/polaris/v1/session/status";
 constexpr auto ClientSettingsRoute = "/polaris/v1/client-settings";
+constexpr auto BitrateRoute = "/polaris/v1/session/bitrate";
+constexpr auto AdaptiveBitrateRoute = "/polaris/v1/session/adaptive-bitrate";
+constexpr auto QualityManualId = "quality.mode.manual";
+constexpr auto QualityAdaptiveId = "quality.mode.adaptive";
+constexpr auto QualityDecreaseId = "quality.bitrate.decrease";
+constexpr auto QualityIncreaseId = "quality.bitrate.increase";
+constexpr auto QualityStatusId = "quality.status";
+constexpr auto QualityResource = "quality.tuning";
+constexpr int BitrateStepKbps = 5000;
+constexpr int ProtocolMinimumBitrateKbps = 1000;
+constexpr int ProtocolMaximumBitrateKbps = 300000;
 ActionDescriptor polarisDescriptor(
     const char* id, const char* label, ActionCategory category,
     const char* resourceKey, ConfirmationPolicy confirmation,
@@ -236,6 +248,113 @@ QByteArray compactObject(const QJsonObject& object)
     return QJsonDocument(object).toJson(QJsonDocument::Compact);
 }
 
+QString bitrateValueText(int bitrateKbps)
+{
+    if (bitrateKbps <= 0) {
+        return QStringLiteral("Unknown bitrate");
+    }
+    const QString value = bitrateKbps % 1000 == 0
+        ? QString::number(bitrateKbps / 1000)
+        : QString::number(bitrateKbps / 1000.0, 'f', 1);
+    return QStringLiteral("%1 Mbps").arg(value);
+}
+
+std::optional<int> qualityBaseBitrate(const PolarisClientSettings& settings)
+{
+    if (settings.adaptiveBaseBitrateKbps.has_value()) {
+        return settings.adaptiveBaseBitrateKbps;
+    }
+    if (settings.encoderBitrateKbps.has_value()) {
+        return settings.encoderBitrateKbps;
+    }
+    return settings.adaptiveTargetBitrateKbps;
+}
+
+bool exactJsonInt(const QJsonValue& value, int expected)
+{
+    if (!value.isDouble()) {
+        return false;
+    }
+    const double number = value.toDouble();
+    return std::isfinite(number) && std::floor(number) == number &&
+        number == expected;
+}
+
+std::optional<int> displayedQualityBitrate(
+    const PolarisClientSettings& settings)
+{
+    if (settings.adaptiveBitrateEnabled.value_or(false) &&
+            settings.adaptiveTargetBitrateKbps.has_value()) {
+        return settings.adaptiveTargetBitrateKbps;
+    }
+    if (settings.encoderBitrateKbps.has_value()) {
+        return settings.encoderBitrateKbps;
+    }
+    return qualityBaseBitrate(settings);
+}
+
+ActionState qualityStateUnavailable(const QString& reason)
+{
+    ActionState state;
+    state.disabledCode = QStringLiteral("quality_state_unavailable");
+    state.disabledReason = reason;
+    return state;
+}
+
+ActionState qualityMutationState(const PolarisAvailability& availability,
+                                 const PolarisClientSettings& settings,
+                                 const QString& actionId)
+{
+    ActionState state;
+    state.enabled = availability.enabled;
+    state.disabledCode = availability.errorCode;
+    state.disabledReason = availability.reason;
+    if (!state.enabled) {
+        return state;
+    }
+    if (actionId == QString::fromLatin1(QualityManualId) ||
+            actionId == QString::fromLatin1(QualityAdaptiveId)) {
+        if (!settings.adaptiveBitrateEnabled.has_value()) {
+            return qualityStateUnavailable(
+                QStringLiteral("Polaris did not report the quality mode."));
+        }
+        const bool adaptive = *settings.adaptiveBitrateEnabled;
+        const bool selected = actionId == QString::fromLatin1(QualityAdaptiveId)
+            ? adaptive : !adaptive;
+        if (selected) {
+            state.value = QStringLiteral("Selected");
+        }
+        return state;
+    }
+
+    const std::optional<int> current = qualityBaseBitrate(settings);
+    if (!current.has_value()) {
+        return qualityStateUnavailable(
+            QStringLiteral("Polaris did not report a bitrate target."));
+    }
+    const int minimum = qBound(
+        ProtocolMinimumBitrateKbps,
+        settings.adaptiveMinBitrateKbps.value_or(
+            ProtocolMinimumBitrateKbps),
+        ProtocolMaximumBitrateKbps);
+    const int maximum = qBound(
+        minimum,
+        settings.adaptiveMaxBitrateKbps.value_or(
+            ProtocolMaximumBitrateKbps),
+        ProtocolMaximumBitrateKbps);
+    state.value = bitrateValueText(*current);
+    if ((actionId == QString::fromLatin1(QualityDecreaseId) &&
+         *current <= minimum) ||
+            (actionId == QString::fromLatin1(QualityIncreaseId) &&
+             *current >= maximum)) {
+        state.enabled = false;
+        state.disabledCode = QStringLiteral("bitrate_limit");
+        state.disabledReason = QStringLiteral(
+            "The bitrate is at the host limit.");
+    }
+    return state;
+}
+
 }
 
 struct PolarisAdapter::ActionRequest
@@ -381,6 +500,18 @@ QVector<ActionDescriptor> PolarisAdapter::descriptors()
     result.push_back(polarisDescriptor(
         "host.command", "Host command", ActionCategory::Session,
         "host.command", ConfirmationPolicy::WhenDisruptive));
+    result.push_back(polarisDescriptor(
+        QualityManualId, "Manual quality", ActionCategory::Quality,
+        QualityResource, ConfirmationPolicy::Never));
+    result.push_back(polarisDescriptor(
+        QualityAdaptiveId, "Adaptive quality", ActionCategory::Quality,
+        QualityResource, ConfirmationPolicy::Never));
+    result.push_back(polarisDescriptor(
+        QualityDecreaseId, "Reduce by 5 Mbps", ActionCategory::Quality,
+        QualityResource, ConfirmationPolicy::Never));
+    result.push_back(polarisDescriptor(
+        QualityIncreaseId, "Increase by 5 Mbps", ActionCategory::Quality,
+        QualityResource, ConfirmationPolicy::Never));
     return result;
 }
 
@@ -555,6 +686,39 @@ void PolarisAdapter::handleDiscoveryCompletion(
         *state->active->session, state->origin);
     completed.settings = PolarisModels::parseClientSettings(
         *state->active->settings);
+    const PolarisSessionStatus& session = completed.session;
+    PolarisClientSettings& settings = completed.settings;
+    if (session.adaptiveBitrateEnabled.has_value()) {
+        settings.adaptiveBitrateEnabled = session.adaptiveBitrateEnabled;
+    }
+    if (session.aiAutoQualityEnabled.has_value()) {
+        settings.aiAutoQualityEnabled = session.aiAutoQualityEnabled;
+    }
+    if (session.aiOptimizerEnabled.has_value()) {
+        settings.aiOptimizerEnabled = session.aiOptimizerEnabled;
+    }
+    if (session.adaptiveTargetBitrateKbps.has_value()) {
+        settings.adaptiveTargetBitrateKbps =
+            session.adaptiveTargetBitrateKbps;
+    }
+    if (session.adaptiveBaseBitrateKbps.has_value()) {
+        settings.adaptiveBaseBitrateKbps = session.adaptiveBaseBitrateKbps;
+    }
+    if (session.adaptiveMinBitrateKbps.has_value()) {
+        settings.adaptiveMinBitrateKbps = session.adaptiveMinBitrateKbps;
+    }
+    if (session.adaptiveMaxBitrateKbps.has_value()) {
+        settings.adaptiveMaxBitrateKbps = session.adaptiveMaxBitrateKbps;
+    }
+    if (session.encoderBitrateKbps.has_value()) {
+        settings.encoderBitrateKbps = session.encoderBitrateKbps;
+    }
+    if (!session.adaptiveState.isEmpty()) {
+        settings.adaptiveState = session.adaptiveState;
+    }
+    if (!session.adaptiveReason.isEmpty()) {
+        settings.adaptiveReason = session.adaptiveReason;
+    }
     completed.standardHost = completed.capabilities.standardHost;
     completed.errorCode = firstDiscoveryError(completed.capabilities);
     state->published = std::move(completed);
@@ -701,6 +865,52 @@ HostSnapshot PolarisAdapter::snapshot()
         QStringLiteral("session.end-host"),
         actionState(PolarisModels::availability(
             discovery, PolarisOperation::StopSession)));
+    const PolarisAvailability bitrateAvailability =
+        PolarisModels::availability(
+            discovery, PolarisOperation::BitrateControl);
+    const PolarisAvailability adaptiveAvailability =
+        PolarisModels::availability(
+            discovery, PolarisOperation::AdaptiveQualityControl);
+    result.actionStates.insert(
+        QString::fromLatin1(QualityManualId),
+        qualityMutationState(adaptiveAvailability, discovery.settings,
+                             QString::fromLatin1(QualityManualId)));
+    result.actionStates.insert(
+        QString::fromLatin1(QualityAdaptiveId),
+        qualityMutationState(adaptiveAvailability, discovery.settings,
+                             QString::fromLatin1(QualityAdaptiveId)));
+    result.actionStates.insert(
+        QString::fromLatin1(QualityDecreaseId),
+        qualityMutationState(bitrateAvailability, discovery.settings,
+                             QString::fromLatin1(QualityDecreaseId)));
+    result.actionStates.insert(
+        QString::fromLatin1(QualityIncreaseId),
+        qualityMutationState(bitrateAvailability, discovery.settings,
+                             QString::fromLatin1(QualityIncreaseId)));
+    if (!discovery.standardHost) {
+        ActionState status;
+        status.disabledCode = QStringLiteral("informational");
+        status.disabledReason = discovery.settings.adaptiveReason.isEmpty()
+            ? QStringLiteral("Polaris reports the live stream quality.")
+            : discovery.settings.adaptiveReason;
+        const std::optional<int> bitrate = displayedQualityBitrate(
+            discovery.settings);
+        if (!discovery.settings.valid ||
+                !discovery.settings.adaptiveBitrateEnabled.has_value() ||
+                !bitrate.has_value()) {
+            status = qualityStateUnavailable(
+                QStringLiteral("Polaris did not report live quality state."));
+            status.value = QStringLiteral("Unavailable");
+        }
+        else {
+            const QString mode = *discovery.settings.adaptiveBitrateEnabled
+                ? QStringLiteral("Adaptive") : QStringLiteral("Manual");
+            status.value = QStringLiteral("%1 · %2")
+                .arg(mode, bitrateValueText(*bitrate));
+        }
+        result.actionStates.insert(
+            QString::fromLatin1(QualityStatusId), std::move(status));
+    }
     return result;
 }
 
@@ -731,6 +941,92 @@ void PolarisAdapter::execute(const QString& actionId,
         return;
     }
     const PolarisDiscoverySnapshot discovery = discoverySnapshot();
+    if (actionId == QString::fromLatin1(QualityManualId) ||
+            actionId == QString::fromLatin1(QualityAdaptiveId)) {
+        const PolarisAvailability availability = PolarisModels::availability(
+            discovery, PolarisOperation::AdaptiveQualityControl);
+        ActionState observed = qualityMutationState(
+            availability, discovery.settings, actionId);
+        if (!observed.enabled) {
+            if (completion) {
+                ActionResult result = actionFailure(
+                    observed.disabledCode.isEmpty()
+                        ? QStringLiteral("action_unavailable")
+                        : observed.disabledCode,
+                    observed.disabledReason.isEmpty()
+                        ? QStringLiteral("Quality control is unavailable.")
+                        : observed.disabledReason);
+                result.observedState = observed;
+                completion(result);
+            }
+            return;
+        }
+        const bool enabled = actionId ==
+            QString::fromLatin1(QualityAdaptiveId);
+        observed.invocationState.insert(QStringLiteral("enabled"), enabled);
+        submitAction(
+            actionId, QString::fromLatin1(QualityResource),
+            QString::fromLatin1(AdaptiveBitrateRoute),
+            compactObject({{QStringLiteral("enabled"), enabled}}),
+            std::nullopt, ActionKind::QualityMode, std::move(observed),
+            std::move(completion));
+        return;
+    }
+    if (actionId == QString::fromLatin1(QualityDecreaseId) ||
+            actionId == QString::fromLatin1(QualityIncreaseId)) {
+        const PolarisAvailability availability = PolarisModels::availability(
+            discovery, PolarisOperation::BitrateControl);
+        ActionState observed = qualityMutationState(
+            availability, discovery.settings, actionId);
+        if (!observed.enabled) {
+            if (completion) {
+                ActionResult result = actionFailure(
+                    observed.disabledCode.isEmpty()
+                        ? QStringLiteral("action_unavailable")
+                        : observed.disabledCode,
+                    observed.disabledReason.isEmpty()
+                        ? QStringLiteral("Bitrate control is unavailable.")
+                        : observed.disabledReason);
+                result.observedState = observed;
+                completion(result);
+            }
+            return;
+        }
+        const std::optional<int> current = qualityBaseBitrate(
+            discovery.settings);
+        if (!current.has_value()) {
+            if (completion) {
+                ActionResult result = actionFailure(
+                    QStringLiteral("quality_state_unavailable"),
+                    QStringLiteral("Polaris did not report a bitrate target."));
+                result.observedState = observed;
+                completion(result);
+            }
+            return;
+        }
+        const int minimum = qBound(
+            ProtocolMinimumBitrateKbps,
+            discovery.settings.adaptiveMinBitrateKbps.value_or(
+                ProtocolMinimumBitrateKbps),
+            ProtocolMaximumBitrateKbps);
+        const int maximum = qBound(
+            minimum,
+            discovery.settings.adaptiveMaxBitrateKbps.value_or(
+                ProtocolMaximumBitrateKbps),
+            ProtocolMaximumBitrateKbps);
+        const int delta = actionId == QString::fromLatin1(QualityIncreaseId)
+            ? BitrateStepKbps : -BitrateStepKbps;
+        const int requested = std::clamp(*current + delta, minimum, maximum);
+        observed.invocationState.insert(
+            QStringLiteral("bitrate_kbps"), requested);
+        submitAction(
+            actionId, QString::fromLatin1(QualityResource),
+            QString::fromLatin1(BitrateRoute),
+            compactObject({{QStringLiteral("bitrate_kbps"), requested}}),
+            std::nullopt, ActionKind::Bitrate, std::move(observed),
+            std::move(completion));
+        return;
+    }
     if (actionId.startsWith(QStringLiteral("host.command."))) {
         const PolarisAvailability commandAvailability =
             PolarisModels::availability(discovery,
@@ -1203,6 +1499,56 @@ void PolarisAdapter::handleActionCompletion(
     else if (!response.json.isObject()) {
         result = actionFailure(QStringLiteral("malformed_response"),
                                QStringLiteral("Polaris returned an invalid response."));
+    }
+    else if (kind == ActionKind::QualityMode) {
+        const QJsonObject object = response.json.object();
+        const bool expected = request->authoritativeState.invocationState
+            .value(QStringLiteral("enabled")).toBool();
+        const QJsonValue adaptive = object.value(
+            QStringLiteral("adaptive_bitrate_enabled"));
+        const QJsonValue automatic = object.value(
+            QStringLiteral("ai_auto_quality_enabled"));
+        const QJsonValue optimizer = object.value(
+            QStringLiteral("ai_optimizer_enabled"));
+        if (status >= 200 && status < 300 &&
+                object.value(QStringLiteral("status")) == true &&
+                adaptive.isBool() && adaptive.toBool() == expected &&
+                automatic.isBool() && automatic.toBool() == expected &&
+                optimizer.isBool() && optimizer.toBool() == expected) {
+            result = {true,
+                      expected ? QStringLiteral("Adaptive quality accepted")
+                               : QStringLiteral("Manual quality accepted"),
+                      {}, {}};
+            QMutexLocker locker(&state->mutex);
+            if (state->alive) {
+                state->refreshRequested = true;
+            }
+        }
+        else {
+            result = actionFailure(
+                QStringLiteral("malformed_response"),
+                QStringLiteral("Polaris returned invalid quality state."));
+        }
+    }
+    else if (kind == ActionKind::Bitrate) {
+        const QJsonObject object = response.json.object();
+        const int expected = request->authoritativeState.invocationState
+            .value(QStringLiteral("bitrate_kbps")).toInt();
+        if (status >= 200 && status < 300 &&
+                object.value(QStringLiteral("status")) == true &&
+                exactJsonInt(object.value(QStringLiteral("bitrate_kbps")),
+                             expected)) {
+            result = {true, QStringLiteral("Bitrate request accepted"), {}, {}};
+            QMutexLocker locker(&state->mutex);
+            if (state->alive) {
+                state->refreshRequested = true;
+            }
+        }
+        else {
+            result = actionFailure(
+                QStringLiteral("malformed_response"),
+                QStringLiteral("Polaris returned an invalid bitrate response."));
+        }
     }
     else if (kind == ActionKind::Command) {
         const QJsonObject object = response.json.object();

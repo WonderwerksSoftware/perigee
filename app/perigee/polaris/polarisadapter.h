@@ -107,6 +107,8 @@ private:
         StopSession,
         ClipboardSend,
         ClipboardFetch,
+        QualityMode,
+        Bitrate,
     };
     void submitAction(const QString& actionId, const QString& resourceKey,
                       const QString& endpoint, QByteArray body,

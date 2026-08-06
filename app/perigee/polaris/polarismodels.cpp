@@ -84,6 +84,25 @@ bool strictInteger(const QJsonValue& value, qint64* result)
     return true;
 }
 
+std::optional<int> strictPositiveInt(const QJsonObject& object,
+                                     const QString& name)
+{
+    qint64 value = 0;
+    if (!strictInteger(object.value(name), &value) || value <= 0 ||
+            value > std::numeric_limits<int>::max()) {
+        return std::nullopt;
+    }
+    return static_cast<int>(value);
+}
+
+std::optional<bool> strictOptionalBool(const QJsonObject& object,
+                                       const QString& name)
+{
+    const QJsonValue value = object.value(name);
+    return value.isBool() ? std::optional<bool>(value.toBool())
+                          : std::nullopt;
+}
+
 bool safeCommandIdentifier(const QString& value)
 {
     if (value.isEmpty() || value.size() > 128) {
@@ -161,6 +180,18 @@ bool operationCapabilityAvailable(const PolarisDiscoverySnapshot& snapshot,
     case PolarisOperation::StopSession:
         return capabilities.features.contains(
             QStringLiteral("session_stop_v1"));
+    case PolarisOperation::BitrateControl:
+        return capabilities.features.contains(
+                   QStringLiteral("client_settings_v1")) &&
+            capabilities.features.contains(
+                   QStringLiteral("adaptive_bitrate_control"));
+    case PolarisOperation::AdaptiveQualityControl:
+        return capabilities.features.contains(
+                   QStringLiteral("client_settings_v1")) &&
+            capabilities.features.contains(
+                   QStringLiteral("adaptive_bitrate_control")) &&
+            capabilities.features.contains(
+                   QStringLiteral("ai_auto_quality_control"));
     }
     return false;
 }
@@ -177,6 +208,9 @@ bool operationPermissionGranted(const PolarisDiscoverySnapshot& snapshot,
         return snapshot.session.controls.commandsAllowed;
     case PolarisOperation::StopSession:
         return snapshot.session.controls.stopAllowed;
+    case PolarisOperation::BitrateControl:
+    case PolarisOperation::AdaptiveQualityControl:
+        return snapshot.session.controls.hostTuningAllowed;
     }
     return false;
 }
@@ -184,7 +218,9 @@ bool operationPermissionGranted(const PolarisDiscoverySnapshot& snapshot,
 bool requiresControlOwnership(PolarisOperation operation)
 {
     return operation == PolarisOperation::NamedCommand ||
-        operation == PolarisOperation::StopSession;
+        operation == PolarisOperation::StopSession ||
+        operation == PolarisOperation::BitrateControl ||
+        operation == PolarisOperation::AdaptiveQualityControl;
 }
 
 bool requiresSessionToken(PolarisOperation operation)
@@ -337,6 +373,8 @@ PolarisSessionStatus PolarisModels::parseSessionStatus(
     const QJsonObject controls = root.value(QStringLiteral("controls")).toObject();
     result.controls.stopAllowed = strictBool(
         controls, QStringLiteral("stop_allowed"));
+    result.controls.hostTuningAllowed = strictBool(
+        controls, QStringLiteral("host_tuning_allowed"));
     result.controls.commandsAllowed = strictBool(
         controls, QStringLiteral("quit_allowed")) &&
         strictBool(controls, QStringLiteral("client_commands_enabled")) &&
@@ -347,6 +385,60 @@ PolarisSessionStatus PolarisModels::parseSessionStatus(
         controls, QStringLiteral("clipboard_write_allowed"));
     result.controls.stopEndpoint = parseEndpoint(
         pairedOrigin, controls.value(QStringLiteral("stop_endpoint")));
+    const QJsonObject tuning = root.value(QStringLiteral("tuning")).toObject();
+    const QJsonObject encoder = root.value(QStringLiteral("encoder")).toObject();
+    result.adaptiveBitrateEnabled = strictOptionalBool(
+        tuning, QStringLiteral("adaptive_bitrate_enabled"));
+    if (!result.adaptiveBitrateEnabled.has_value()) {
+        result.adaptiveBitrateEnabled = strictOptionalBool(
+            root, QStringLiteral("adaptive_bitrate_enabled"));
+    }
+    result.aiAutoQualityEnabled = strictOptionalBool(
+        tuning, QStringLiteral("ai_auto_quality_enabled"));
+    if (!result.aiAutoQualityEnabled.has_value()) {
+        result.aiAutoQualityEnabled = strictOptionalBool(
+            root, QStringLiteral("ai_auto_quality_enabled"));
+    }
+    result.aiOptimizerEnabled = strictOptionalBool(
+        tuning, QStringLiteral("ai_optimizer_enabled"));
+    if (!result.aiOptimizerEnabled.has_value()) {
+        result.aiOptimizerEnabled = strictOptionalBool(
+            root, QStringLiteral("ai_optimizer_enabled"));
+    }
+    result.adaptiveTargetBitrateKbps = strictPositiveInt(
+        tuning, QStringLiteral("adaptive_target_bitrate_kbps"));
+    if (!result.adaptiveTargetBitrateKbps.has_value()) {
+        result.adaptiveTargetBitrateKbps = strictPositiveInt(
+            root, QStringLiteral("adaptive_target_bitrate_kbps"));
+    }
+    result.adaptiveBaseBitrateKbps = strictPositiveInt(
+        tuning, QStringLiteral("adaptive_base_bitrate_kbps"));
+    result.adaptiveMinBitrateKbps = strictPositiveInt(
+        tuning, QStringLiteral("adaptive_min_bitrate_kbps"));
+    result.adaptiveMaxBitrateKbps = strictPositiveInt(
+        tuning, QStringLiteral("adaptive_max_bitrate_kbps"));
+    result.encoderBitrateKbps = strictPositiveInt(
+        encoder, QStringLiteral("bitrate_kbps"));
+    const QJsonValue adaptiveState = tuning.value(
+        QStringLiteral("adaptive_bitrate_state"));
+    const QJsonValue rootAdaptiveState = root.value(
+        QStringLiteral("adaptive_bitrate_state"));
+    if (adaptiveState.isString()) {
+        result.adaptiveState = adaptiveState.toString();
+    }
+    else if (rootAdaptiveState.isString()) {
+        result.adaptiveState = rootAdaptiveState.toString();
+    }
+    const QJsonValue adaptiveReason = tuning.value(
+        QStringLiteral("adaptive_bitrate_reason"));
+    const QJsonValue rootAdaptiveReason = root.value(
+        QStringLiteral("adaptive_bitrate_reason"));
+    if (adaptiveReason.isString()) {
+        result.adaptiveReason = adaptiveReason.toString();
+    }
+    else if (rootAdaptiveReason.isString()) {
+        result.adaptiveReason = rootAdaptiveReason.toString();
+    }
     result.transitioning = isTransitionState(result.state) ||
         strictBool(root, QStringLiteral("shutdown_requested")) ||
         strictBool(controls, QStringLiteral("shutdown_in_progress"));
@@ -370,10 +462,12 @@ PolarisClientSettings PolarisModels::parseClientSettings(
     const QJsonObject root = envelope.value(QStringLiteral("client_settings")).isObject()
         ? envelope.value(QStringLiteral("client_settings")).toObject()
         : envelope;
-    QJsonObject fields = root.value(QStringLiteral("fields")).toObject();
-    if (fields.isEmpty()) {
-        fields = root.value(QStringLiteral("sync_status")).toObject()
-            .value(QStringLiteral("fields")).toObject();
+    QJsonObject fields = root.value(QStringLiteral("sync_status")).toObject()
+        .value(QStringLiteral("fields")).toObject();
+    const QJsonObject directFields = root.value(
+        QStringLiteral("fields")).toObject();
+    for (auto it = directFields.constBegin(); it != directFields.constEnd(); ++it) {
+        fields.insert(it.key(), it.value());
     }
     if (fields.isEmpty() && root != envelope) {
         fields = envelope.value(QStringLiteral("sync_status")).toObject()
@@ -398,6 +492,79 @@ PolarisClientSettings PolarisModels::parseClientSettings(
             object, QStringLiteral("requires_reconnect")) ||
             strictBool(object, QStringLiteral("requires_relaunch"));
         result.fields.insert(it.key(), std::move(field));
+    }
+
+    const QJsonObject desired = root.value(QStringLiteral("desired")).toObject();
+    const QJsonObject effective = root.value(QStringLiteral("effective")).toObject();
+    const QJsonObject tuning = root.value(QStringLiteral("tuning")).toObject();
+    const QJsonObject encoder = root.value(QStringLiteral("encoder")).toObject();
+    result.adaptiveBitrateEnabled = strictOptionalBool(
+        tuning, QStringLiteral("adaptive_bitrate_enabled"));
+    if (!result.adaptiveBitrateEnabled.has_value()) {
+        result.adaptiveBitrateEnabled = strictOptionalBool(
+            effective, QStringLiteral("adaptive_bitrate_enabled"));
+    }
+    if (!result.adaptiveBitrateEnabled.has_value()) {
+        result.adaptiveBitrateEnabled = strictOptionalBool(
+            desired, QStringLiteral("adaptive_bitrate_enabled"));
+    }
+    result.aiAutoQualityEnabled = strictOptionalBool(
+        tuning, QStringLiteral("ai_auto_quality_enabled"));
+    if (!result.aiAutoQualityEnabled.has_value()) {
+        result.aiAutoQualityEnabled = strictOptionalBool(
+            effective, QStringLiteral("ai_auto_quality_enabled"));
+    }
+    if (!result.aiAutoQualityEnabled.has_value()) {
+        result.aiAutoQualityEnabled = strictOptionalBool(
+            desired, QStringLiteral("ai_auto_quality_enabled"));
+    }
+    result.aiOptimizerEnabled = strictOptionalBool(
+        tuning, QStringLiteral("ai_optimizer_enabled"));
+    if (!result.aiOptimizerEnabled.has_value()) {
+        result.aiOptimizerEnabled = strictOptionalBool(
+            effective, QStringLiteral("ai_optimizer_enabled"));
+    }
+    if (!result.aiOptimizerEnabled.has_value()) {
+        result.aiOptimizerEnabled = strictOptionalBool(
+            desired, QStringLiteral("ai_optimizer_enabled"));
+    }
+    result.adaptiveTargetBitrateKbps = strictPositiveInt(
+        tuning, QStringLiteral("adaptive_target_bitrate_kbps"));
+    if (!result.adaptiveTargetBitrateKbps.has_value()) {
+        result.adaptiveTargetBitrateKbps = strictPositiveInt(
+            effective, QStringLiteral("adaptive_target_bitrate_kbps"));
+    }
+    if (!result.adaptiveTargetBitrateKbps.has_value()) {
+        result.adaptiveTargetBitrateKbps = strictPositiveInt(
+            effective, QStringLiteral("target_bitrate_kbps"));
+    }
+    result.adaptiveBaseBitrateKbps = strictPositiveInt(
+        tuning, QStringLiteral("adaptive_base_bitrate_kbps"));
+    if (!result.adaptiveBaseBitrateKbps.has_value()) {
+        result.adaptiveBaseBitrateKbps = strictPositiveInt(
+            desired, QStringLiteral("target_bitrate_kbps"));
+    }
+    result.adaptiveMinBitrateKbps = strictPositiveInt(
+        tuning, QStringLiteral("adaptive_min_bitrate_kbps"));
+    result.adaptiveMaxBitrateKbps = strictPositiveInt(
+        tuning, QStringLiteral("adaptive_max_bitrate_kbps"));
+    result.encoderBitrateKbps = strictPositiveInt(
+        encoder, QStringLiteral("bitrate_kbps"));
+    if (tuning.value(QStringLiteral("adaptive_bitrate_state")).isString()) {
+        result.adaptiveState = tuning.value(
+            QStringLiteral("adaptive_bitrate_state")).toString();
+    }
+    else if (root.value(QStringLiteral("adaptive_bitrate_state")).isString()) {
+        result.adaptiveState = root.value(
+            QStringLiteral("adaptive_bitrate_state")).toString();
+    }
+    if (tuning.value(QStringLiteral("adaptive_bitrate_reason")).isString()) {
+        result.adaptiveReason = tuning.value(
+            QStringLiteral("adaptive_bitrate_reason")).toString();
+    }
+    else if (root.value(QStringLiteral("adaptive_bitrate_reason")).isString()) {
+        result.adaptiveReason = root.value(
+            QStringLiteral("adaptive_bitrate_reason")).toString();
     }
 
     return result;
@@ -425,6 +592,14 @@ PolarisAvailability PolarisModels::availability(
         const QString errorCode = snapshot.session.errorCode.isEmpty()
             ? QStringLiteral("malformed_response")
             : snapshot.session.errorCode;
+        return *dependencyFailure(errorCode);
+    }
+    if ((operation == PolarisOperation::BitrateControl ||
+         operation == PolarisOperation::AdaptiveQualityControl) &&
+            !snapshot.settings.valid) {
+        const QString errorCode = snapshot.settings.errorCode.isEmpty()
+            ? QStringLiteral("malformed_response")
+            : snapshot.settings.errorCode;
         return *dependencyFailure(errorCode);
     }
     if (operation == PolarisOperation::StopSession &&

@@ -46,6 +46,9 @@ The review at `73014f91dc64b5510fec84f2f7eaf9f67065dc94` covered these client co
 - Paired-client permissions
 - Session status
 - Client settings
+- Live session bitrate
+- Adaptive bitrate and AI Auto Quality control
+- Quality state and tuning readback
 - Named commands
 - Text clipboard transfer
 - Host-session stop

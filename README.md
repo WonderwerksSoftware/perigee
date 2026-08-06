@@ -19,7 +19,7 @@ Perigee works with standard Sunshine hosts. A Polaris host can add only the enha
 ## Implemented features
 
 - Open Deck from a keyboard or controller. Use a keyboard, mouse, or controller inside Deck.
-- Search actions in the Display, Input, Clipboard, Stats, Window, and Session categories.
+- Search actions in the Display, Quality, Input, Clipboard, Stats, Window, and Session categories.
 - Navigate all core actions without text input.
 - Show current values, progress, disabled reasons, confirmations, and verified results.
 - Keep remote input neutral while Deck owns keyboard and controller input.
@@ -30,6 +30,9 @@ Perigee works with standard Sunshine hosts. A Polaris host can add only the enha
 - Send the standard GameStream display shortcut. Perigee does not require a modified Polaris or Sunshine host.
 - Mark a display as **Last requested** only after a fresh video frame arrives.
 - Keep Deck open if video verification times out. Perigee does not scan displays or claim host readback.
+- Show the configured stream bitrate on standard Sunshine hosts.
+- Change a Polaris stream between **Manual quality** and **Adaptive quality** when the host permits live tuning.
+- Raise or lower the Polaris target bitrate in 5 megabit per second (Mbps) steps.
 - Show controller glyphs for Xbox, PlayStation, Nintendo, and Steam Deck layouts.
 - Preserve ordinary Moonlight shortcuts and controller input while Deck is closed.
 
@@ -55,7 +58,9 @@ See the [live acceptance ledger](docs/testing/live-acceptance-2026-08.md) for th
 - Clipboard transfer supports UTF-8 text only. The absolute client limit is 1 mebibyte (MiB).
 - The automatic Moonlight update feed is disabled. Perigee 0.1.0 has no replacement update feed.
 - Perigee release artifacts do not exist yet. Build the current source for development use.
-- Deck does not yet provide the planned **Manual**, **Adaptive**, and **Smart** quality modes.
+- Standard Sunshine does not support a Moonlight request to change bitrate during an active stream.
+- Polaris live quality control requires advertised capabilities, owner permission, and valid settings readback.
+- A separate **Smart quality** mode is deferred. The current Polaris API links adaptive bitrate and its artificial intelligence (AI) optimizer.
 - Live Polaris, controller, physical display, and KDE Wayland acceptance is not complete.
 - Standard Sunshine launch and a bounded video and audio test are complete. Live Deck input acceptance is not complete.
 - Windows and macOS packaging inputs use the Perigee identity. Native release qualification is pending.
@@ -74,10 +79,10 @@ Perigee adds these focused layers:
 - Deck renders the user interface with Qt's QML declarative language and the existing stream overlay path.
 - The input router neutralizes remote input and gives Deck temporary local ownership.
 
-| Host | Stream path | Local Deck actions | Physical display request | Enhanced host actions |
-|---|---|---|---|---|
-| Standard Sunshine | GameStream-compatible | Available | Standard input shortcut | Not applicable |
-| Polaris | GameStream-compatible | Available | Standard input shortcut | Advertised official capabilities only |
+| Host | Stream path | Local Deck actions | Physical display request | Live quality control | Enhanced host actions |
+|---|---|---|---|---|---|
+| Standard Sunshine | GameStream-compatible | Available | Standard input shortcut | Configured bitrate is read-only | Not applicable |
+| Polaris | GameStream-compatible | Available | Standard input shortcut | Advertised official capabilities only | Advertised official capabilities only |
 
 The first release target is Nobara Linux with KDE Plasma and Wayland. Perigee requires Qt 6.7 or newer.
 
@@ -233,6 +238,14 @@ Physical display selection uses the GameStream input channel. It does not requir
 
 Polaris stream-display modes, virtual displays, and physical monitor indexes are different concepts. Perigee does not combine these concepts.
 
+The **Quality** category shows the current bitrate and the reported quality mode. **Manual quality** disables Polaris AI Auto Quality.
+
+**Adaptive quality** enables Polaris AI Auto Quality. Polaris can then use stream health, packet loss, and round-trip time to tune its encoder bitrate.
+
+The bitrate actions change the target by 5 Mbps. Perigee applies the limits that Polaris reports and also enforces the API range.
+
+Perigee accepts a quality change only when the response contains the requested value. It then refreshes the authenticated settings and session state.
+
 Named-command execution accepts only advertised identifiers and structured values. The client has no free-form command field.
 
 Automated tests cover named commands, text clipboard transfer, and host-session control. Live qualification of these actions is not complete.
@@ -246,6 +259,8 @@ Local Deck actions and physical display requests are available without Polaris.
 Physical display selection uses the standard Moonlight shortcut. Perigee does not change the Sunshine host.
 
 Polaris-only actions are hidden or disabled when the host does not advertise them.
+
+The **Quality** category shows the bitrate that the stream used at startup. Live Manual and Adaptive actions stay disabled with a reason.
 
 Automated regression tests cover this boundary. A bounded standard Sunshine launch and video and audio test passed.
 

@@ -141,6 +141,7 @@ Do not publish port numbers, host addresses, certificates, or capability-respons
 | Perigee to host | Authenticated named command | NOT RUN | Not applicable. The action must be disabled truthfully. |
 | Perigee to host | UTF-8 clipboard action | NOT RUN | Not applicable. The action must be disabled truthfully. |
 | Perigee to host | Physical display request and fresh video | NOT RUN | NOT RUN |
+| Perigee to host | Manual and Adaptive quality control | NOT RUN | Not applicable. The configured bitrate must remain read-only. |
 | Host to Perigee | Video and decoded-frame evidence | FAIL. The client initialized H.264 decode and received the initial test frame. The client then received no video traffic and reported `No video received from host`. | PASS. The 1280x720x30 decode test passed. The first video packet arrived at 100 ms. |
 | Host to Perigee | Audio | PARTIAL. The client received the first audio packet. The host PipeWire capture became active. Local playback was not recorded. | PASS. The first audio packet arrived at 400 ms. Local playback was not recorded. |
 | Host to Perigee | Stream state and error readback | PARTIAL. Launch and channel startup succeeded. The client timed out on video. Polaris did not respond during cleanup. | PASS. Launch returned HTTP 200. The bounded run ended without a no-video error. |
@@ -212,6 +213,7 @@ For each row, record the observed outcome. Do not infer success from an accepted
 | Direct legacy shortcuts | NOT RUN |
 | Local Deck actions | NOT RUN |
 | Physical display request | Pending live run |
+| Configured bitrate is read-only | Pending live run |
 | Polaris-only actions disabled with a truthful reason | NOT RUN |
 | Disconnect and Quit keep the host session running | NOT RUN |
 

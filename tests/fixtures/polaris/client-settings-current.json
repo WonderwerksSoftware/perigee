@@ -1,21 +1,69 @@
 {
-  "version": 1,
-  "desired": {
-    "stream_display_mode": "desktop_display"
-  },
-  "effective": {
-    "stream_display_mode": "desktop_display"
-  },
-  "fields": {
-    "stream_display_mode": {
-      "direction": "read_write",
-      "scope": "host",
-      "desired": "desktop_display",
-      "effective": "desktop_display",
-      "requires_relaunch": false
+  "status": true,
+  "client_settings": {
+    "version": 1,
+    "revision": "fixture-official-current",
+    "desired": {
+      "stream_display_mode": "desktop_display",
+      "target_bitrate_kbps": 35000,
+      "ai_auto_quality_enabled": true,
+      "adaptive_bitrate_enabled": true,
+      "ai_optimizer_enabled": true
+    },
+    "effective": {
+      "stream_display_mode": "desktop_display",
+      "target_bitrate_kbps": 28000,
+      "adaptive_target_bitrate_kbps": 28000,
+      "ai_auto_quality_enabled": true,
+      "adaptive_bitrate_enabled": true,
+      "ai_optimizer_enabled": true
+    },
+    "sync_status": {
+      "available": true,
+      "version": 1,
+      "fields": {
+        "stream_display_mode": {
+          "direction": "read_write",
+          "scope": "host",
+          "desired": "desktop_display",
+          "effective": "desktop_display",
+          "requires_relaunch": false
+        },
+        "target_bitrate_kbps": {
+          "direction": "read_write",
+          "scope": "paired_client",
+          "desired": 35000,
+          "effective": 28000,
+          "live": true,
+          "requires_relaunch": false,
+          "adaptive_target_bitrate_kbps": 28000
+        },
+        "ai_auto_quality_enabled": {
+          "direction": "read_write",
+          "scope": "host",
+          "desired": true,
+          "effective": true,
+          "live": true,
+          "requires_relaunch": false
+        }
+      }
+    },
+    "fields": {
+      "output_name": {
+        "direction": "read_write",
+        "scope": "paired_client",
+        "desired": "",
+        "effective": "",
+        "requires_relaunch": false
+      }
+    },
+    "capabilities": {
+      "ai_auto_quality_control": true,
+      "adaptive_bitrate_control": true,
+      "ai_optimizer_control": true,
+      "future_capability": {"ignored": true}
     }
   },
-  "capabilities": {
-    "future_capability": {"ignored": true}
-  }
+  "sync_status": {"available": true},
+  "stream_policy": {"target_bitrate_kbps": 28000}
 }

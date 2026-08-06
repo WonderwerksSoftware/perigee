@@ -21,6 +21,7 @@ public:
     virtual bool mouseCaptureEnabled() const = 0;
     virtual bool keyboardCaptureEnabled() const = 0;
     virtual bool fullscreenEnabled() const = 0;
+    virtual int configuredBitrateKbps() const { return 0; }
 
     virtual bool setStatsOverlayEnabled(bool enabled) = 0;
     virtual bool setMouseCaptureEnabled(bool enabled) = 0;

@@ -106,6 +106,10 @@ public:
     {
         return m_Session && m_Session->fullscreenEnabled();
     }
+    int configuredBitrateKbps() const override
+    {
+        return m_Session ? m_Session->configuredBitrateKbps() : 0;
+    }
     bool setStatsOverlayEnabled(bool enabled) override
     {
         return m_Session && m_Session->setStatsOverlayEnabled(enabled);
@@ -2010,6 +2014,11 @@ void Session::notifyMouseEmulationMode(bool enabled)
 bool Session::statsOverlayEnabled() const
 {
     return m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug);
+}
+
+int Session::configuredBitrateKbps() const
+{
+    return m_StreamConfig.bitrate;
 }
 
 bool Session::mouseCaptureEnabled() const

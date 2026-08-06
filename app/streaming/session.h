@@ -147,6 +147,7 @@ public:
     void setShouldExit(bool quitHostApp = false);
 
     bool statsOverlayEnabled() const;
+    int configuredBitrateKbps() const;
     bool mouseCaptureEnabled() const;
     bool keyboardCaptureEnabled() const;
     bool fullscreenEnabled() const;
