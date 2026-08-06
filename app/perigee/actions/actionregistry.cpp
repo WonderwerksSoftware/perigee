@@ -16,8 +16,6 @@ namespace {
 
 constexpr auto CommandTemplateId = "host.command";
 constexpr auto CommandPrefix = "host.command.";
-constexpr auto DisplayTemplateId = "display.switch";
-constexpr auto DisplayPrefix = "display.target.";
 
 int searchRank(const ActionDescriptor& descriptor, const QString& query)
 {
@@ -71,102 +69,17 @@ bool commandIndex(const QString& actionId, int* index)
     return true;
 }
 
-QString displayActionId(const QString& kind, const QString& id)
-{
-    const QByteArray key = (kind + QLatin1Char(':') + id).toUtf8().toBase64(
-        QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
-    return QString::fromLatin1(DisplayPrefix) + QString::fromLatin1(key);
-}
-
-bool displayMetadata(const QString& actionId, const ActionState& state,
-                     QVariantMap* metadata, QString* stableKey)
-{
-    if (!actionId.startsWith(QString::fromLatin1(DisplayPrefix))) {
-        return false;
-    }
-    const QVariantMap value = state.value.toMap();
-    const QStringList required {
-        QStringLiteral("kind"), QStringLiteral("id"), QStringLiteral("label"),
-        QStringLiteral("available"), QStringLiteral("current"),
-        QStringLiteral("requires_reconnect"),
-        QStringLiteral("unavailable_reason"),
-    };
-    for (const QString& key : required) {
-        if (!value.contains(key)) {
-            return false;
-        }
-    }
-    const QString kind = value.value(QStringLiteral("kind")).toString();
-    const QString id = value.value(QStringLiteral("id")).toString();
-    const QString label = value.value(QStringLiteral("label")).toString();
-    if ((kind != QStringLiteral("output") &&
-         kind != QStringLiteral("stream-mode")) ||
-            id.isEmpty() || label.isEmpty() ||
-            displayActionId(kind, id) != actionId) {
-        return false;
-    }
-    if (metadata) {
-        *metadata = value;
-    }
-    if (stableKey) {
-        *stableKey = kind + QLatin1Char(':') + id;
-    }
-    return true;
-}
-
 QVector<ActionDescriptor> resolvedDescriptors(
     const QVector<ActionDescriptor>& templates, const HostSnapshot& snapshot)
 {
     QVector<ActionDescriptor> result;
     std::optional<ActionDescriptor> commandTemplate;
-    std::optional<ActionDescriptor> displayTemplate;
     for (const ActionDescriptor& descriptor : templates) {
         if (descriptor.id == QString::fromLatin1(CommandTemplateId)) {
             commandTemplate = descriptor;
         }
-        else if (descriptor.id == QString::fromLatin1(DisplayTemplateId)) {
-            displayTemplate = descriptor;
-        }
         else {
             result.push_back(descriptor);
-        }
-    }
-
-    if (displayTemplate.has_value()) {
-        struct DynamicDisplay {
-            QString stableKey;
-            ActionDescriptor descriptor;
-        };
-        QVector<DynamicDisplay> displays;
-        for (auto it = snapshot.actionStates.cbegin();
-             it != snapshot.actionStates.cend(); ++it) {
-            QVariantMap metadata;
-            QString stableKey;
-            if (!displayMetadata(it.key(), it.value(), &metadata, &stableKey)) {
-                continue;
-            }
-            ActionDescriptor descriptor = *displayTemplate;
-            descriptor.id = it.key();
-            descriptor.label = metadata.value(QStringLiteral("label")).toString();
-            descriptor.aliases = QStringList({
-                QStringLiteral("display"), QStringLiteral("monitor"),
-                QStringLiteral("screen"),
-                metadata.value(QStringLiteral("kind")).toString(),
-                metadata.value(QStringLiteral("id")).toString(),
-            });
-            displays.push_back({stableKey, std::move(descriptor)});
-        }
-        std::sort(displays.begin(), displays.end(),
-                  [](const DynamicDisplay& left, const DynamicDisplay& right) {
-            return left.stableKey < right.stableKey;
-        });
-        if (displays.isEmpty()) {
-            result.push_back(*displayTemplate);
-        }
-        else {
-            for (DynamicDisplay& display : displays) {
-                result.push_back(std::move(display.descriptor));
-            }
         }
     }
 
@@ -603,8 +516,7 @@ void ActionRegistry::executeInvocation(const QString& actionId,
     }
 
     const QString resourceKey = descriptor->resourceKey;
-    if (commandIndex(actionId, nullptr) ||
-            displayMetadata(actionId, current, nullptr, nullptr)) {
+    if (commandIndex(actionId, nullptr)) {
         invocation.m_Parameters.insert(
             QStringLiteral("_perigee.authoritative-state"), rendered.value);
         invocation.m_Parameters.insert(

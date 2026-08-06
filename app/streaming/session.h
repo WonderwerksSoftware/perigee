@@ -14,8 +14,6 @@
 #include "perigee/actions/actiontypes.h"
 #include "perigee/input/deckinputrouter.h"
 #include "perigee/deck/deckuipump.h"
-#include "perigee/display/displaytransaction.h"
-#include "perigee/display/sessiontransitioncoordinator.h"
 
 #include <atomic>
 #include <functional>
@@ -28,7 +26,6 @@ class ActionRegistry;
 class GameStreamAdapter;
 class PolarisAdapter;
 class GameStreamSessionFacade;
-class SessionDisplayTransitionPort;
 class PhysicalDisplayController;
 
 class SupportedVideoFormatList : public QList<int>
@@ -116,7 +113,6 @@ class Session : public QObject
     friend class SdlInputHandler;
     friend class DeferredSessionCleanupTask;
     friend class AsyncConnectionStartThread;
-    friend class SessionDisplayTransitionPort;
 
 public:
     explicit Session(NvComputer* computer, NvApp& app, StreamingPreferences *preferences = nullptr);
@@ -125,17 +121,7 @@ public:
     Q_INVOKABLE bool initialize(QQuickWindow* qtWindow);
     Q_INVOKABLE void start();
     Q_INVOKABLE void interrupt();
-    Q_INVOKABLE Session* createDisplayTransitionReplacement();
-    Q_INVOKABLE void pumpDisplayTransitionControl();
-    Q_INVOKABLE void displayTransitionInitializationFailed();
-    Q_INVOKABLE void disposeDormantDisplayTransitionCarrier();
     Q_PROPERTY(QStringList launchWarnings MEMBER m_LaunchWarnings NOTIFY launchWarningsChanged);
-    Q_PROPERTY(bool displayTransitionHandoff READ displayTransitionHandoff
-               NOTIFY displayTransitionHandoffChanged);
-
-    static void setTransitionCoordinator(
-        SessionTransitionCoordinator* coordinator);
-    bool displayTransitionHandoff() const;
 
     static
     void getDecoderInfo(SDL_Window* window,
@@ -197,12 +183,8 @@ signals:
 
     void launchWarningsChanged();
 
-    void displayTransitionHandoffChanged();
-
 private:
     void exec();
-
-    void releaseVideoSubsystem();
 
     bool startConnectionAsync();
 
@@ -232,17 +214,6 @@ private:
     void closeDeckInput(bool keepReleased = false);
 
     void pumpDeckUi();
-
-    void prepareDisplayTransitionHandoff();
-
-    void pumpFailedDisplayTransitionControl();
-
-    void postDisplayTarget(const DisplayTarget& target,
-                           const QString& sessionToken,
-                           quint64 transactionEpoch,
-                           DisplayTransitionPort::PostCompletion completion);
-
-    void refreshDisplayTransitionReadback(quint64 transactionEpoch);
 
     void updateDeckPointerMapping();
 
@@ -369,21 +340,10 @@ private:
     std::optional<CaptureSnapshot> m_DeckCaptureSnapshot;
     DeckUiPump m_DeckUiPump;
     bool m_DeckTextInputActive = false;
-    bool m_DisplayDeckExplicitlyClosed = false;
-    SessionTransitionCoordinator* m_TransitionCoordinator = nullptr;
-    std::shared_ptr<DisplayTransitionPort> m_DisplayTransitionPort;
-    FirstFrameNotificationGate m_FirstFrameNotificationGate;
-    quint64 m_DisplaySessionEpoch = 0;
     quint64 m_PhysicalDisplaySessionEpoch = 0;
-    std::atomic_bool m_DisplayTransitionHandoff {false};
-    std::atomic_bool m_ConnectionStartRequested {false};
-    std::atomic_bool m_VideoSubsystemInitialized {false};
-    bool m_DisplayRecoveryDisconnectRequested = false;
 
     static CONNECTION_LISTENER_CALLBACKS k_ConnCallbacks;
     static Session* s_ActiveSession;
     static QSemaphore s_ActiveSessionSemaphore;
-    static SessionTransitionCoordinator* s_TransitionCoordinator;
-    static std::atomic<quint64> s_NextDisplaySessionEpoch;
     static std::atomic<quint64> s_NextPhysicalDisplaySessionEpoch;
 };

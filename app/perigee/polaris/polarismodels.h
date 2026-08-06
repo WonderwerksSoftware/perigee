@@ -57,7 +57,6 @@ struct PolarisControls
     bool commandsAllowed = false;
     bool clipboardReadAllowed = false;
     bool clipboardWriteAllowed = false;
-    bool displaySelectionAllowed = false;
     AdvertisedPolarisEndpoint stopEndpoint;
 };
 
@@ -85,26 +84,11 @@ struct ClientSettingField
     bool requiresReconnect = false;
 };
 
-struct DisplayTarget
-{
-    QString kind;
-    QString id;
-    QString label;
-    bool available = false;
-    bool current = false;
-    bool requiresReconnect = false;
-    QString unavailableReason;
-
-    QString stableKey() const;
-};
-
 struct PolarisClientSettings
 {
     bool valid = false;
     QString errorCode;
     QHash<QString, ClientSettingField> fields;
-    QVector<DisplayTarget> targets;
-    bool currentConflict = false;
 };
 
 struct PolarisDiscoverySnapshot
@@ -123,7 +107,6 @@ enum class PolarisOperation {
     ClipboardWrite,
     NamedCommand,
     StopSession,
-    DisplaySwitch,
 };
 
 enum class PolarisAvailabilityCode {
@@ -138,7 +121,6 @@ enum class PolarisAvailabilityCode {
     NotControllingClient,
     Transitioning,
     SessionTokenUnavailable,
-    NoAlternateDisplay,
 };
 
 struct PolarisAvailability

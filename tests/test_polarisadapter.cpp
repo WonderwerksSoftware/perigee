@@ -1,7 +1,6 @@
 #include "perigee/actions/actionregistry.h"
 #include "perigee/actions/gamestreamadapter.h"
 #include "perigee/actions/sessionfacade.h"
-#include "perigee/display/sessiontransitioncoordinator.h"
 #include "perigee/polaris/polarisadapter.h"
 #include "test_registry.h"
 #include "backend/nvcomputer.h"
@@ -180,85 +179,6 @@ private:
     std::shared_ptr<FakeTransportState> m_State;
 };
 
-class FakeDisplayTransitionPort final : public DisplayTransitionPort
-{
-public:
-    void postTarget(const DisplayTarget& target, const QString& sessionToken,
-                    quint64 transactionEpoch,
-                    PostCompletion completion) override
-    {
-        postedTarget = target;
-        token = sessionToken;
-        epoch = transactionEpoch;
-        postCompletion = std::move(completion);
-        ++postCount;
-    }
-
-    bool requestLocalDisconnect(quint64 transactionEpoch) override
-    {
-        disconnectEpoch = transactionEpoch;
-        return true;
-    }
-
-    void refreshReadback(quint64 transactionEpoch) override
-    {
-        refreshEpoch = transactionEpoch;
-    }
-
-    DisplayTarget postedTarget;
-    QString token;
-    quint64 epoch = 0;
-    quint64 disconnectEpoch = 0;
-    quint64 refreshEpoch = 0;
-    int postCount = 0;
-    PostCompletion postCompletion;
-};
-
-class AdapterDisplayTransitionPort final : public DisplayTransitionPort
-{
-public:
-    explicit AdapterDisplayTransitionPort(PolarisAdapter* adapter)
-        : m_Adapter(adapter)
-    {
-    }
-
-    void postTarget(const DisplayTarget& target, const QString& sessionToken,
-                    quint64 transactionEpoch,
-                    PostCompletion completion) override
-    {
-        if (m_Adapter != nullptr) {
-            m_Adapter->postDisplayTarget(
-                target, sessionToken, transactionEpoch,
-                std::move(completion));
-        }
-    }
-
-    void postAuthorizedTarget(
-        const DisplayTarget& target, const QString& sessionToken,
-        quint64 transactionEpoch,
-        const PolarisDiscoverySnapshot& authorizationSnapshot,
-        PostCompletion completion) override
-    {
-        if (m_Adapter != nullptr) {
-            m_Adapter->postDisplayTarget(
-                target, sessionToken, transactionEpoch,
-                authorizationSnapshot, std::move(completion));
-        }
-    }
-
-    bool requestLocalDisconnect(quint64) override
-    {
-        return true;
-    }
-
-    void refreshReadback(quint64) override
-    {
-    }
-
-private:
-    PolarisAdapter* m_Adapter;
-};
-
 PolarisTransport::RequestId requestId(
     const std::shared_ptr<FakeTransportState>& state,
     const QString& endpoint, int occurrenceFromEnd = 0)
@@ -283,13 +203,12 @@ void queue(const std::shared_ptr<FakeTransportState>& state,
 std::unique_ptr<PolarisAdapter> makeAdapter(
     FakeSession& session,
     const std::shared_ptr<FakeTransportState>& transportState,
-    std::unique_ptr<GameStreamAdapter>* gameStreamOut = nullptr,
-    SessionTransitionCoordinator* coordinator = nullptr)
+    std::unique_ptr<GameStreamAdapter>* gameStreamOut = nullptr)
 {
     auto gameStream = std::make_unique<GameStreamAdapter>(&session);
     auto adapter = std::make_unique<PolarisAdapter>(
         *gameStream, std::make_unique<FakeTransport>(transportState),
-        std::unique_ptr<PolarisClipboard>{}, coordinator);
+        std::unique_ptr<PolarisClipboard>{});
     if (gameStreamOut != nullptr) {
         *gameStreamOut = std::move(gameStream);
     }
@@ -350,15 +269,8 @@ private slots:
     void completionOrderPublishesOneCoherentGeneration_data();
     void completionOrderPublishesOneCoherentGeneration();
     void authenticatedFallbackCancelsSiblingWorkAndKeepsLocalActions();
-    void publishesTruthfulDynamicDisplayTargets();
+    void publishesStockPhysicalDisplayActionsOnly();
     void standardHostPublishesNoPolarisDisplayTargets();
-    void dynamicDisplaySelectionRevalidatesThroughCoordinator();
-    void renderedDisplaySelectionRejectsReorderedCatalog();
-    void freshReplacementKeepsDisplayTemplateBusyBeforeDiscovery();
-    void displayPostUsesAdvertisedEndpointTokenAndAuthenticatedAck();
-    void carriedAuthorizationAllowsFailedReplacementRollbackPost();
-    void freshUnobservedReplacementDiscoveryReauthorizesRollbackPost();
-    void completeReplacementDiscoveryRejectsRemovedOrUnavailableRollbackTarget();
     void authenticatedNonContractJsonFallsBackWithoutGuessing();
     void failuresRemainDistinctAndLaterRefreshRecovers_data();
     void failuresRemainDistinctAndLaterRefreshRecovers();
@@ -371,7 +283,6 @@ private slots:
     void commandDependencyFailuresDisableOnlyNamedCommands();
     void refreshAndTeardownOwnOutstandingCommandFollowup();
     void localGameStreamExecutionIsDelegatedUnchanged();
-    void exactDisabledStatesCoverPermissionOwnershipTransitionAndDisplays();
     void partialMalformedDataDisablesOnlyItsDependentFeature();
     void deniedCapabilitiesPrecedeValidDocumentFeatureAbsence();
     void dependencyFailuresRemainExactAndCompositional_data();
@@ -395,7 +306,7 @@ void PolarisAdapterTest::standardHostSkipsPolarisDiscovery()
     const PolarisDiscoverySnapshot snapshot = adapter.discoverySnapshot();
     QVERIFY(snapshot.complete);
     QVERIFY(snapshot.standardHost);
-    QCOMPARE(adapter.availability(PolarisOperation::DisplaySwitch).code,
+    QCOMPARE(adapter.availability(PolarisOperation::StopSession).code,
              PolarisAvailabilityCode::CapabilityNotAdvertised);
 }
 
@@ -523,7 +434,8 @@ void PolarisAdapterTest::completionOrderPublishesOneCoherentGeneration()
     QVERIFY(!publishedCommandStrings.join(QLatin1Char('|')).contains(
         QStringLiteral("DO_NOT_RETAIN_RAW_COMMAND_SECRET")));
     QVERIFY(snapshot.session.ownsSession);
-    QCOMPARE(snapshot.settings.targets.size(), 6);
+    QVERIFY(snapshot.settings.fields.contains(
+        QStringLiteral("stream_display_mode")));
 }
 
 void PolarisAdapterTest::authenticatedFallbackCancelsSiblingWorkAndKeepsLocalActions()
@@ -548,7 +460,7 @@ void PolarisAdapterTest::authenticatedFallbackCancelsSiblingWorkAndKeepsLocalAct
         QStringLiteral("stats.overlay")).enabled);
 }
 
-void PolarisAdapterTest::publishesTruthfulDynamicDisplayTargets()
+void PolarisAdapterTest::publishesStockPhysicalDisplayActionsOnly()
 {
     FakeSession session;
     auto state = std::make_shared<FakeTransportState>();
@@ -558,33 +470,12 @@ void PolarisAdapterTest::publishesTruthfulDynamicDisplayTargets()
     completeGeneration(*adapter, state);
 
     const HostSnapshot snapshot = adapter->snapshot();
-    QVERIFY(!snapshot.actionStates.value(QStringLiteral("display.switch")).visible);
-    int dynamicCount = 0;
-    bool sawCurrent = false;
-    bool sawUnavailableReason = false;
+    QVERIFY(!snapshot.actionStates.contains(QStringLiteral("display.switch")));
+    QVERIFY(snapshot.actionStates.contains(QStringLiteral("display.physical.1")));
     for (auto it = snapshot.actionStates.cbegin();
          it != snapshot.actionStates.cend(); ++it) {
-        if (!it.key().startsWith(QStringLiteral("display.target."))) {
-            continue;
-        }
-        ++dynamicCount;
-        const QVariantMap value = it.value().value.toMap();
-        QVERIFY(value.contains(QStringLiteral("kind")));
-        QVERIFY(value.contains(QStringLiteral("id")));
-        QVERIFY(value.contains(QStringLiteral("label")));
-        if (value.value(QStringLiteral("current")).toBool()) {
-            sawCurrent = true;
-            QVERIFY(!it.value().enabled);
-            QCOMPARE(it.value().disabledCode, QStringLiteral("current_target"));
-        }
-        if (!value.value(QStringLiteral("available")).toBool()) {
-            sawUnavailableReason = sawUnavailableReason ||
-                !it.value().disabledReason.isEmpty();
-        }
+        QVERIFY(!it.key().startsWith(QStringLiteral("display.target.")));
     }
-    QCOMPARE(dynamicCount, 6);
-    QVERIFY(sawCurrent);
-    QVERIFY(sawUnavailableReason);
 }
 
 void PolarisAdapterTest::standardHostPublishesNoPolarisDisplayTargets()
@@ -605,425 +496,15 @@ void PolarisAdapterTest::standardHostPublishesNoPolarisDisplayTargets()
          it != snapshot.actionStates.cend(); ++it) {
         QVERIFY(!it.key().startsWith(QStringLiteral("display.target.")));
     }
-    QVERIFY(!snapshot.actionStates.value(QStringLiteral("display.switch")).visible);
+    QVERIFY(!snapshot.actionStates.contains(QStringLiteral("display.switch")));
 }
 
-void PolarisAdapterTest::dynamicDisplaySelectionRevalidatesThroughCoordinator()
-{
-    SessionTransitionCoordinator coordinator;
-    auto transitionPort = std::make_shared<FakeDisplayTransitionPort>();
-    DisplaySessionIdentity identity;
-    identity.computerUuid = QStringLiteral("computer-uuid");
-    identity.appId = 42;
-    identity.appName = QStringLiteral("Desktop");
-    identity.sessionEpoch = 7;
-    QVERIFY(coordinator.attachSession(identity, transitionPort));
 
-    FakeSession session;
-    auto state = std::make_shared<FakeTransportState>();
-    std::unique_ptr<GameStreamAdapter> gameStream;
-    auto adapter = makeAdapter(session, state, &gameStream, &coordinator);
-    adapter->startDiscovery();
-    completeGeneration(*adapter, state);
-    ActionRegistry registry(PolarisAdapter::descriptors(), *adapter);
 
-    QString alternateAction;
-    const HostSnapshot initial = adapter->snapshot();
-    for (auto it = initial.actionStates.cbegin();
-         it != initial.actionStates.cend(); ++it) {
-        if (it.value().value.toMap().value(QStringLiteral("id")).toString() ==
-                QStringLiteral("HDMI-A-1")) {
-            alternateAction = it.key();
-            break;
-        }
-    }
-    QVERIFY(!alternateAction.isEmpty());
-    int completions = 0;
-    registry.execute(alternateAction, {},
-                     [&completions](const ActionResult&) { ++completions; });
 
-    QCOMPARE(transitionPort->postCount, 1);
-    QCOMPARE(transitionPort->postedTarget.id, QStringLiteral("HDMI-A-1"));
-    QCOMPARE(transitionPort->token,
-             adapter->discoverySnapshot().session.sessionToken);
-    QCOMPARE(completions, 0);
-    const ActionState busy = adapter->snapshot().actionStates.value(
-        alternateAction);
-    QVERIFY(!busy.enabled);
-    QCOMPARE(busy.phase, ActionPhase::Working);
-    QCOMPARE(busy.disabledCode, QStringLiteral("resource_busy"));
-}
 
-void PolarisAdapterTest::renderedDisplaySelectionRejectsReorderedCatalog()
-{
-    SessionTransitionCoordinator coordinator;
-    auto transitionPort = std::make_shared<FakeDisplayTransitionPort>();
-    DisplaySessionIdentity identity;
-    identity.computerUuid = QStringLiteral("computer-uuid");
-    identity.appId = 42;
-    identity.appName = QStringLiteral("Desktop");
-    identity.sessionEpoch = 7;
-    QVERIFY(coordinator.attachSession(identity, transitionPort));
 
-    FakeSession session;
-    auto state = std::make_shared<FakeTransportState>();
-    std::unique_ptr<GameStreamAdapter> gameStream;
-    auto adapter = makeAdapter(session, state, &gameStream, &coordinator);
-    adapter->startDiscovery();
-    completeGeneration(*adapter, state);
-    ActionRegistry registry(PolarisAdapter::descriptors(), *adapter);
 
-    QString alternateAction;
-    DisplayTarget alternateTarget;
-    const PolarisDiscoverySnapshot renderedDiscovery =
-        adapter->discoverySnapshot();
-    const HostSnapshot renderedSnapshot = adapter->snapshot();
-    for (auto it = renderedSnapshot.actionStates.cbegin();
-         it != renderedSnapshot.actionStates.cend(); ++it) {
-        const QVariantMap value = it.value().value.toMap();
-        if (value.value(QStringLiteral("id")).toString() ==
-                QStringLiteral("HDMI-A-1")) {
-            alternateAction = it.key();
-            break;
-        }
-    }
-    for (const DisplayTarget& candidate : renderedDiscovery.settings.targets) {
-        if (candidate.id == QStringLiteral("HDMI-A-1")) {
-            alternateTarget = candidate;
-            break;
-        }
-    }
-    QVERIFY(!alternateAction.isEmpty());
-    QVERIFY(!alternateTarget.id.isEmpty());
-    QVERIFY(registry.state(alternateAction).enabled);
-
-    QVERIFY(adapter->refresh());
-    PolarisResponse reorderedSettings = fixture("client-settings-current.json");
-    QJsonObject root = reorderedSettings.json.object();
-    QJsonObject capabilities = root.value(
-        QStringLiteral("capabilities")).toObject();
-    QJsonArray outputs = capabilities.value(QStringLiteral("outputs")).toArray();
-    QJsonArray reversedOutputs;
-    for (qsizetype index = outputs.size(); index > 0; --index) {
-        reversedOutputs.append(outputs.at(index - 1));
-    }
-    capabilities.insert(QStringLiteral("outputs"), reversedOutputs);
-    root.insert(QStringLiteral("capabilities"), capabilities);
-    reorderedSettings = replaceJson(std::move(reorderedSettings), root);
-    completeGeneration(*adapter, state, fixture("capabilities-current.json"),
-                       fixture("status-owner.json"), reorderedSettings);
-
-    ActionResult result;
-    registry.execute(alternateAction, {},
-                     [&](const ActionResult& value) { result = value; });
-    QCOMPARE(result.errorCode, QStringLiteral("stale_catalog"));
-    QCOMPARE(transitionPort->postCount, 0);
-
-}
-
-void PolarisAdapterTest::freshReplacementKeepsDisplayTemplateBusyBeforeDiscovery()
-{
-    SessionTransitionCoordinator coordinator;
-    auto initialPort = std::make_shared<FakeDisplayTransitionPort>();
-    DisplaySessionIdentity initialIdentity;
-    initialIdentity.computerUuid = QStringLiteral("computer-uuid");
-    initialIdentity.appId = 42;
-    initialIdentity.appName = QStringLiteral("Desktop");
-    initialIdentity.sessionEpoch = 7;
-    QVERIFY(coordinator.attachSession(initialIdentity, initialPort));
-
-    FakeSession initialSession;
-    auto initialState = std::make_shared<FakeTransportState>();
-    std::unique_ptr<GameStreamAdapter> initialGameStream;
-    auto initialAdapter = makeAdapter(
-        initialSession, initialState, &initialGameStream, &coordinator);
-    initialAdapter->startDiscovery();
-    completeGeneration(*initialAdapter, initialState);
-    ActionRegistry registry(PolarisAdapter::descriptors(), *initialAdapter);
-
-    QString alternateAction;
-    const HostSnapshot initialSnapshot = initialAdapter->snapshot();
-    for (auto it = initialSnapshot.actionStates.cbegin();
-         it != initialSnapshot.actionStates.cend(); ++it) {
-        if (it.value().value.toMap().value(QStringLiteral("id")).toString() ==
-                QStringLiteral("HDMI-A-1")) {
-            alternateAction = it.key();
-            break;
-        }
-    }
-    QVERIFY(!alternateAction.isEmpty());
-    registry.execute(alternateAction, {}, {});
-    QVERIFY(initialPort->postCompletion);
-    initialPort->postCompletion(initialPort->epoch, true, {}, {});
-    QVERIFY(coordinator.sessionFinished(7));
-    coordinator.detachSession(7);
-
-    auto replacementPort = std::make_shared<FakeDisplayTransitionPort>();
-    DisplaySessionIdentity replacementIdentity = initialIdentity;
-    replacementIdentity.sessionEpoch = 8;
-    QVERIFY(coordinator.attachSession(replacementIdentity, replacementPort));
-    QVERIFY(coordinator.displaySelectionBusy());
-
-    FakeSession replacementSession;
-    auto replacementState = std::make_shared<FakeTransportState>();
-    std::unique_ptr<GameStreamAdapter> replacementGameStream;
-    auto replacementAdapter = makeAdapter(
-        replacementSession, replacementState, &replacementGameStream,
-        &coordinator);
-    QVERIFY(!replacementAdapter->discoverySnapshot().complete);
-
-    const ActionState busy = replacementAdapter->snapshot().actionStates.value(
-        QStringLiteral("display.switch"));
-    QVERIFY(busy.visible);
-    QVERIFY(!busy.enabled);
-    QCOMPARE(busy.phase, ActionPhase::Working);
-    QCOMPARE(busy.disabledCode, QStringLiteral("resource_busy"));
-    QCOMPARE(busy.message, coordinator.statusText());
-}
-
-void PolarisAdapterTest::displayPostUsesAdvertisedEndpointTokenAndAuthenticatedAck()
-{
-    FakeSession session;
-    auto state = std::make_shared<FakeTransportState>();
-    std::unique_ptr<GameStreamAdapter> gameStream;
-    auto adapter = makeAdapter(session, state, &gameStream);
-    adapter->startDiscovery();
-    completeGeneration(*adapter, state);
-    const PolarisDiscoverySnapshot discovery = adapter->discoverySnapshot();
-    const auto target = std::find_if(
-        discovery.settings.targets.cbegin(),
-        discovery.settings.targets.cend(),
-        [](const DisplayTarget& candidate) {
-            return candidate.id == QStringLiteral("HDMI-A-1");
-        });
-    QVERIFY(target != discovery.settings.targets.cend());
-    int completions = 0;
-    quint64 deliveredEpoch = 0;
-    bool accepted = false;
-    QString errorCode;
-
-    adapter->postDisplayTarget(
-        *target, discovery.session.sessionToken, 91,
-        [&](quint64 epoch, bool ok, const QString& code, const QString&) {
-            ++completions;
-            deliveredEpoch = epoch;
-            accepted = ok;
-            errorCode = code;
-        });
-
-    const FakeTransportState::Request request = state->requests.constLast();
-    QVERIFY(request.post);
-    QCOMPARE(request.endpoint, QString::fromLatin1(SettingsRoute));
-    const QByteArray expectedBody = QByteArrayLiteral(
-        "{\"output_name\":\"HDMI-A-1\",\"session_token\":\"") +
-        discovery.session.sessionToken.toUtf8() + QByteArrayLiteral("\"}");
-    QCOMPARE(request.body, expectedBody);
-    QCOMPARE(completions, 0);
-    PolarisResponse response;
-    response.httpStatus = 204;
-    response.authenticated = true;
-    state->deliveries.enqueue({request.id, response});
-    adapter->pumpCompletions();
-
-    QCOMPARE(completions, 1);
-    QCOMPARE(deliveredEpoch, quint64(91));
-    QVERIFY(accepted);
-    QVERIFY(errorCode.isEmpty());
-
-    const int requestCount = state->requests.size();
-    adapter->postDisplayTarget(
-        *target, QStringLiteral("stale-token"), 92,
-        [&](quint64 epoch, bool ok, const QString& code, const QString&) {
-            ++completions;
-            deliveredEpoch = epoch;
-            accepted = ok;
-            errorCode = code;
-        });
-    QCOMPARE(state->requests.size(), requestCount);
-    QCOMPARE(completions, 2);
-    QCOMPARE(deliveredEpoch, quint64(92));
-    QVERIFY(!accepted);
-    QCOMPARE(errorCode, QStringLiteral("stale_session"));
-}
-
-void PolarisAdapterTest::carriedAuthorizationAllowsFailedReplacementRollbackPost()
-{
-    FakeSession firstSession;
-    auto firstState = std::make_shared<FakeTransportState>();
-    std::unique_ptr<GameStreamAdapter> firstGameStream;
-    auto firstAdapter = makeAdapter(firstSession, firstState, &firstGameStream);
-    firstAdapter->startDiscovery();
-    completeGeneration(*firstAdapter, firstState);
-    const PolarisDiscoverySnapshot authorization =
-        firstAdapter->discoverySnapshot();
-    const DisplayTarget previous = authorization.settings.targets.first();
-    QVERIFY(previous.current);
-
-    FakeSession failedReplacementSession;
-    auto replacementState = std::make_shared<FakeTransportState>();
-    std::unique_ptr<GameStreamAdapter> replacementGameStream;
-    auto failedReplacement = makeAdapter(
-        failedReplacementSession, replacementState, &replacementGameStream);
-    QVERIFY(!failedReplacement->discoverySnapshot().complete);
-    int completions = 0;
-    failedReplacement->postDisplayTarget(
-        previous, authorization.session.sessionToken, 52, authorization,
-        [&](quint64, bool, const QString&, const QString&) { ++completions; });
-
-    QCOMPARE(replacementState->requests.size(), 1);
-    QVERIFY(replacementState->requests.first().post);
-    QCOMPARE(replacementState->requests.first().endpoint,
-             QString::fromLatin1(SettingsRoute));
-    QCOMPARE(completions, 0);
-
-    const auto request = replacementState->requests.first();
-    failedReplacement.reset();
-    QVERIFY(replacementState->cancellations.contains(request.id));
-    PolarisResponse accepted;
-    accepted.httpStatus = 204;
-    accepted.authenticated = true;
-    request.completion(request.id, accepted);
-    QCOMPARE(completions, 0);
-}
-
-void PolarisAdapterTest::freshUnobservedReplacementDiscoveryReauthorizesRollbackPost()
-{
-    SessionTransitionCoordinator coordinator;
-    auto initialPort = std::make_shared<FakeDisplayTransitionPort>();
-    DisplaySessionIdentity initialIdentity;
-    initialIdentity.computerUuid = QStringLiteral("computer-uuid");
-    initialIdentity.appId = 42;
-    initialIdentity.appName = QStringLiteral("Desktop");
-    initialIdentity.sessionEpoch = 7;
-    QVERIFY(coordinator.attachSession(initialIdentity, initialPort));
-
-    FakeSession initialSession;
-    auto initialState = std::make_shared<FakeTransportState>();
-    std::unique_ptr<GameStreamAdapter> initialGameStream;
-    auto initialAdapter = makeAdapter(
-        initialSession, initialState, &initialGameStream, &coordinator);
-    initialAdapter->startDiscovery();
-    completeGeneration(*initialAdapter, initialState);
-    ActionRegistry registry(PolarisAdapter::descriptors(), *initialAdapter);
-
-    QString requestedAction;
-    const HostSnapshot rendered = initialAdapter->snapshot();
-    for (auto it = rendered.actionStates.cbegin();
-         it != rendered.actionStates.cend(); ++it) {
-        if (it.value().value.toMap().value(QStringLiteral("id")).toString() ==
-                QStringLiteral("HDMI-A-1")) {
-            requestedAction = it.key();
-            break;
-        }
-    }
-    QVERIFY(!requestedAction.isEmpty());
-    QVERIFY(registry.state(requestedAction).enabled);
-    registry.execute(requestedAction, {}, {});
-    QCOMPARE(initialPort->postCount, 1);
-    initialPort->postCompletion(initialPort->epoch, true, {}, {});
-    QVERIFY(coordinator.sessionFinished(7));
-    coordinator.detachSession(7);
-
-    FakeSession replacementSession;
-    auto replacementState = std::make_shared<FakeTransportState>();
-    std::unique_ptr<GameStreamAdapter> replacementGameStream;
-    auto replacementAdapter = makeAdapter(
-        replacementSession, replacementState, &replacementGameStream,
-        &coordinator);
-    auto replacementPort = std::make_shared<AdapterDisplayTransitionPort>(
-        replacementAdapter.get());
-    DisplaySessionIdentity replacementIdentity = initialIdentity;
-    replacementIdentity.sessionEpoch = 8;
-    QVERIFY(coordinator.attachSession(replacementIdentity, replacementPort));
-
-    PolarisResponse postMutationSettings = fixture(
-        "client-settings-current.json");
-    QJsonObject root = postMutationSettings.json.object();
-    QJsonObject effective = root.value(QStringLiteral("effective")).toObject();
-    effective.insert(QStringLiteral("output_name"),
-                     QStringLiteral("HDMI-A-1"));
-    root.insert(QStringLiteral("effective"), effective);
-    QJsonObject capabilities = root.value(
-        QStringLiteral("capabilities")).toObject();
-    QJsonArray outputs = capabilities.value(QStringLiteral("outputs")).toArray();
-    for (qsizetype index = 0; index < outputs.size(); ++index) {
-        QJsonObject output = outputs.at(index).toObject();
-        const QString id = output.value(QStringLiteral("id")).toString();
-        if (id == QStringLiteral("DP-1")) {
-            output.insert(QStringLiteral("active"), false);
-        }
-        else if (id == QStringLiteral("HDMI-A-1")) {
-            output.insert(QStringLiteral("active"), true);
-        }
-        outputs.replace(index, output);
-    }
-    capabilities.insert(QStringLiteral("outputs"), outputs);
-    root.insert(QStringLiteral("capabilities"), capabilities);
-    postMutationSettings = replaceJson(std::move(postMutationSettings), root);
-    replacementAdapter->startDiscovery();
-    completeGeneration(*replacementAdapter, replacementState,
-                       fixture("capabilities-current.json"),
-                       fixture("status-owner.json"), postMutationSettings);
-
-    // Session::pumpDeckUi() observes discovery before pumping completions, so
-    // the adapter can publish this generation before the coordinator sees it.
-    coordinator.sessionConnectionFailed(
-        8, QStringLiteral("connection_failed"));
-    QCOMPARE(coordinator.phase(), DisplayPhase::RollingBack);
-    QVERIFY(!coordinator.recoveryVisible());
-    int rollbackPosts = 0;
-    for (const FakeTransportState::Request& request :
-         replacementState->requests) {
-        if (!request.post) {
-            continue;
-        }
-        ++rollbackPosts;
-        QCOMPARE(request.endpoint, QString::fromLatin1(SettingsRoute));
-        const QJsonObject body = QJsonDocument::fromJson(request.body).object();
-        QCOMPARE(body.value(QStringLiteral("output_name")).toString(),
-                 QStringLiteral("DP-1"));
-    }
-    QCOMPARE(rollbackPosts, 1);
-}
-
-void PolarisAdapterTest::completeReplacementDiscoveryRejectsRemovedOrUnavailableRollbackTarget()
-{
-    FakeSession session;
-    auto state = std::make_shared<FakeTransportState>();
-    std::unique_ptr<GameStreamAdapter> gameStream;
-    auto adapter = makeAdapter(session, state, &gameStream);
-    adapter->startDiscovery();
-    completeGeneration(*adapter, state);
-    const PolarisDiscoverySnapshot authorization = adapter->discoverySnapshot();
-    const int requestCount = state->requests.size();
-
-    DisplayTarget removed = authorization.settings.targets.first();
-    removed.id = QStringLiteral("removed-output");
-    QString errorCode;
-    adapter->postDisplayTarget(
-        removed, authorization.session.sessionToken, 61, authorization,
-        [&](quint64, bool accepted, const QString& code, const QString&) {
-            QVERIFY(!accepted);
-            errorCode = code;
-        });
-    QCOMPARE(errorCode, QStringLiteral("stale_catalog"));
-    QCOMPARE(state->requests.size(), requestCount);
-
-    const auto unavailable = std::find_if(
-        authorization.settings.targets.cbegin(),
-        authorization.settings.targets.cend(),
-        [](const DisplayTarget& target) { return !target.available; });
-    QVERIFY(unavailable != authorization.settings.targets.cend());
-    errorCode.clear();
-    adapter->postDisplayTarget(
-        *unavailable, authorization.session.sessionToken, 62, authorization,
-        [&](quint64, bool accepted, const QString& code, const QString&) {
-            QVERIFY(!accepted);
-            errorCode = code;
-        });
-    QCOMPARE(errorCode, QStringLiteral("stale_catalog"));
-    QCOMPARE(state->requests.size(), requestCount);
-}
 
 void PolarisAdapterTest::failuresRemainDistinctAndLaterRefreshRecovers_data()
 {
@@ -1261,7 +742,6 @@ void PolarisAdapterTest::commandDependencyFailuresDisableOnlyNamedCommands()
     QCOMPARE(named.reason, expectedReason);
     QVERIFY(adapter->availability(PolarisOperation::ClipboardRead).enabled);
     QVERIFY(adapter->availability(PolarisOperation::StopSession).enabled);
-    QVERIFY(adapter->availability(PolarisOperation::DisplaySwitch).enabled);
     QVERIFY(adapter->snapshot().actionStates.value(
         QStringLiteral("stats.overlay")).enabled);
 }
@@ -1328,71 +808,6 @@ void PolarisAdapterTest::localGameStreamExecutionIsDelegatedUnchanged()
     QCOMPARE(result.evidence, QStringLiteral("Statistics overlay: on"));
 }
 
-void PolarisAdapterTest::exactDisabledStatesCoverPermissionOwnershipTransitionAndDisplays()
-{
-    FakeSession session;
-    auto state = std::make_shared<FakeTransportState>();
-    std::unique_ptr<GameStreamAdapter> gameStream;
-    auto adapter = makeAdapter(session, state, &gameStream);
-    adapter->startDiscovery();
-    completeGeneration(*adapter, state, fixture("capabilities-current.json"),
-                       fixture("status-viewer.json"),
-                       fixture("client-settings-current.json"));
-
-    QCOMPARE(adapter->availability(PolarisOperation::NamedCommand).reason,
-             QStringLiteral("This paired client lacks permission"));
-    QCOMPARE(adapter->availability(PolarisOperation::StopSession).reason,
-             QStringLiteral("This paired client lacks permission"));
-    QCOMPARE(adapter->availability(PolarisOperation::DisplaySwitch).reason,
-             QStringLiteral("This paired client lacks permission"));
-
-    QJsonObject ownerWithoutOwnership = fixture("status-owner.json").json.object();
-    ownerWithoutOwnership.insert(QStringLiteral("owned_by_client"), false);
-    adapter->refresh();
-    completeGeneration(
-        *adapter, state, fixture("capabilities-current.json"),
-        replaceJson(fixture("status-owner.json"), ownerWithoutOwnership),
-        fixture("client-settings-current.json"));
-    QCOMPARE(adapter->availability(PolarisOperation::DisplaySwitch).reason,
-             QStringLiteral("Only the controlling client can do this"));
-
-    QJsonObject transitioning = fixture("status-owner.json").json.object();
-    transitioning.insert(QStringLiteral("state"), QStringLiteral("stopping"));
-    adapter->refresh();
-    completeGeneration(
-        *adapter, state, fixture("capabilities-current.json"),
-        replaceJson(fixture("status-owner.json"), transitioning),
-        fixture("client-settings-current.json"));
-    QCOMPARE(adapter->availability(PolarisOperation::DisplaySwitch).reason,
-             QStringLiteral("The session is transitioning"));
-
-    QJsonObject noAlternate = fixture("client-settings-current.json").json.object();
-    QJsonObject settingsCaps = noAlternate.value(QStringLiteral("capabilities")).toObject();
-    settingsCaps.insert(QStringLiteral("modes"), QJsonArray{
-        QJsonObject{{QStringLiteral("value"), QStringLiteral("desktop_display")},
-                    {QStringLiteral("label"), QStringLiteral("Mirror Desktop")},
-                    {QStringLiteral("available"), true}}});
-    settingsCaps.insert(QStringLiteral("outputs"), QJsonArray{
-        QJsonObject{{QStringLiteral("id"), QStringLiteral("DP-1")},
-                    {QStringLiteral("label"), QStringLiteral("Primary")},
-                    {QStringLiteral("connected"), true},
-                    {QStringLiteral("active"), true}}});
-    noAlternate.insert(QStringLiteral("capabilities"), settingsCaps);
-    adapter->refresh();
-    completeGeneration(
-        *adapter, state, fixture("capabilities-current.json"),
-        fixture("status-owner.json"),
-        replaceJson(fixture("client-settings-current.json"), noAlternate));
-    QCOMPARE(adapter->availability(PolarisOperation::DisplaySwitch).reason,
-             QStringLiteral("No alternate display is available"));
-
-    adapter->refresh();
-    completeGeneration(*adapter, state, fixture("capabilities-old.json"),
-                       fixture("status-owner.json"),
-                       fixture("client-settings-current.json"));
-    QCOMPARE(adapter->availability(PolarisOperation::DisplaySwitch).reason,
-             QStringLiteral("This Polaris version does not advertise this feature"));
-}
 
 void PolarisAdapterTest::partialMalformedDataDisablesOnlyItsDependentFeature()
 {
@@ -1418,8 +833,9 @@ void PolarisAdapterTest::partialMalformedDataDisablesOnlyItsDependentFeature()
     QVERIFY(adapter->availability(PolarisOperation::ClipboardRead).enabled);
     QCOMPARE(adapter->availability(PolarisOperation::NamedCommand).reason,
              QStringLiteral("This Polaris version does not advertise this feature"));
-    QCOMPARE(adapter->availability(PolarisOperation::DisplaySwitch).errorCode,
+    QCOMPARE(adapter->discoverySnapshot().settings.errorCode,
              QStringLiteral("malformed_response"));
+    QVERIFY(adapter->availability(PolarisOperation::StopSession).enabled);
     QVERIFY(adapter->snapshot().actionStates.value(
         QStringLiteral("stats.overlay")).enabled);
 }
@@ -1443,8 +859,7 @@ void PolarisAdapterTest::deniedCapabilitiesPrecedeValidDocumentFeatureAbsence()
              PolarisOperation::ClipboardRead,
              PolarisOperation::ClipboardWrite,
              PolarisOperation::NamedCommand,
-             PolarisOperation::StopSession,
-             PolarisOperation::DisplaySwitch}) {
+             PolarisOperation::StopSession}) {
         const PolarisAvailability result = adapter->availability(operation);
         QCOMPARE(result.errorCode, QStringLiteral("permission_denied"));
         QCOMPARE(result.reason,
@@ -1504,11 +919,9 @@ void PolarisAdapterTest::dependencyFailuresRemainExactAndCompositional()
         sessionFailure ? failed : fixture("status-owner.json"),
         sessionFailure ? fixture("client-settings-current.json") : failed);
 
-    const PolarisAvailability display = adapter->availability(
-        PolarisOperation::DisplaySwitch);
-    QCOMPARE(display.errorCode, expectedCode);
-    QCOMPARE(display.reason, expectedReason);
     if (!sessionFailure) {
+        QCOMPARE(adapter->discoverySnapshot().settings.errorCode,
+                 expectedCode);
         QVERIFY(adapter->availability(PolarisOperation::ClipboardRead).enabled);
         QVERIFY(adapter->availability(PolarisOperation::NamedCommand).enabled);
         QVERIFY(adapter->availability(PolarisOperation::StopSession).enabled);

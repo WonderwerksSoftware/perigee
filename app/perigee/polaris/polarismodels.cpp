@@ -161,10 +161,6 @@ bool operationCapabilityAvailable(const PolarisDiscoverySnapshot& snapshot,
     case PolarisOperation::StopSession:
         return capabilities.features.contains(
             QStringLiteral("session_stop_v1"));
-    case PolarisOperation::DisplaySwitch:
-        return capabilities.features.contains(
-            QStringLiteral("display_targets_v1")) &&
-            capabilities.clientSettingsEndpoint.usable;
     }
     return false;
 }
@@ -181,8 +177,6 @@ bool operationPermissionGranted(const PolarisDiscoverySnapshot& snapshot,
         return snapshot.session.controls.commandsAllowed;
     case PolarisOperation::StopSession:
         return snapshot.session.controls.stopAllowed;
-    case PolarisOperation::DisplaySwitch:
-        return snapshot.session.controls.displaySelectionAllowed;
     }
     return false;
 }
@@ -190,31 +184,15 @@ bool operationPermissionGranted(const PolarisDiscoverySnapshot& snapshot,
 bool requiresControlOwnership(PolarisOperation operation)
 {
     return operation == PolarisOperation::NamedCommand ||
-        operation == PolarisOperation::StopSession ||
-        operation == PolarisOperation::DisplaySwitch;
+        operation == PolarisOperation::StopSession;
 }
 
 bool requiresSessionToken(PolarisOperation operation)
 {
     return operation == PolarisOperation::NamedCommand ||
-        operation == PolarisOperation::StopSession ||
-        operation == PolarisOperation::DisplaySwitch;
+        operation == PolarisOperation::StopSession;
 }
 
-bool hasAlternateDisplay(const PolarisDiscoverySnapshot& snapshot)
-{
-    return std::any_of(snapshot.settings.targets.cbegin(),
-                       snapshot.settings.targets.cend(),
-                       [](const DisplayTarget& target) {
-        return target.available && !target.current;
-    });
-}
-
-}
-
-QString DisplayTarget::stableKey() const
-{
-    return kind + QLatin1Char(':') + id;
 }
 
 PolarisCapabilities PolarisModels::parseCapabilities(
@@ -367,8 +345,6 @@ PolarisSessionStatus PolarisModels::parseSessionStatus(
         controls, QStringLiteral("clipboard_read_allowed"));
     result.controls.clipboardWriteAllowed = strictBool(
         controls, QStringLiteral("clipboard_write_allowed"));
-    result.controls.displaySelectionAllowed = strictBool(
-        controls, QStringLiteral("display_selection_allowed"));
     result.controls.stopEndpoint = parseEndpoint(
         pairedOrigin, controls.value(QStringLiteral("stop_endpoint")));
     result.transitioning = isTransitionState(result.state) ||
@@ -424,82 +400,6 @@ PolarisClientSettings PolarisModels::parseClientSettings(
         result.fields.insert(it.key(), std::move(field));
     }
 
-    const QJsonObject capabilities = root.value(
-        QStringLiteral("capabilities")).toObject();
-    const QString currentMode = root.value(QStringLiteral("effective"))
-        .toObject().value(QStringLiteral("stream_display_mode")).toString();
-    QSet<QString> stableKeys;
-    const QJsonArray modes = capabilities.value(QStringLiteral("modes")).toArray();
-    for (const QJsonValue& value : modes) {
-        if (!value.isObject()) {
-            continue;
-        }
-        const QJsonObject mode = value.toObject();
-        if (!mode.value(QStringLiteral("value")).isString() ||
-                mode.value(QStringLiteral("value")).toString().isEmpty() ||
-                !mode.value(QStringLiteral("label")).isString() ||
-                !mode.value(QStringLiteral("available")).isBool()) {
-            continue;
-        }
-        DisplayTarget target;
-        target.kind = QStringLiteral("stream-mode");
-        target.id = mode.value(QStringLiteral("value")).toString();
-        target.label = mode.value(QStringLiteral("label")).toString();
-        target.available = mode.value(QStringLiteral("available")).toBool();
-        target.current = !currentMode.isEmpty() && target.id == currentMode;
-        target.requiresReconnect = strictBool(
-            mode, QStringLiteral("restart_required"), true);
-        target.unavailableReason = mode.value(
-            QStringLiteral("unavailable_reason")).toString();
-        if (!stableKeys.contains(target.stableKey())) {
-            stableKeys.insert(target.stableKey());
-            result.targets.push_back(std::move(target));
-        }
-    }
-
-    const QString currentOutput = root.value(QStringLiteral("effective"))
-        .toObject().value(QStringLiteral("output_name")).toString();
-    const QJsonArray outputs = capabilities.value(QStringLiteral("outputs")).toArray();
-    int currentOutputs = 0;
-    const qsizetype outputStart = result.targets.size();
-    for (const QJsonValue& value : outputs) {
-        if (!value.isObject()) {
-            continue;
-        }
-        const QJsonObject output = value.toObject();
-        if (!output.value(QStringLiteral("id")).isString() ||
-                output.value(QStringLiteral("id")).toString().isEmpty() ||
-                !output.value(QStringLiteral("label")).isString() ||
-                !output.value(QStringLiteral("connected")).isBool()) {
-            continue;
-        }
-        DisplayTarget target;
-        target.kind = QStringLiteral("output");
-        target.id = output.value(QStringLiteral("id")).toString();
-        target.label = output.value(QStringLiteral("label")).toString();
-        target.available = output.value(QStringLiteral("connected")).toBool();
-        target.current = output.value(QStringLiteral("active")).isBool()
-            ? output.value(QStringLiteral("active")).toBool()
-            : (!currentOutput.isEmpty() && target.id == currentOutput);
-        target.requiresReconnect = strictBool(
-            output, QStringLiteral("requires_reconnect"), true);
-        target.unavailableReason = output.value(
-            QStringLiteral("unavailable_reason")).toString();
-        if (!target.available && target.unavailableReason.isEmpty()) {
-            target.unavailableReason = QStringLiteral("Display is disconnected");
-        }
-        if (!stableKeys.contains(target.stableKey())) {
-            stableKeys.insert(target.stableKey());
-            currentOutputs += target.current ? 1 : 0;
-            result.targets.push_back(std::move(target));
-        }
-    }
-    if (currentOutputs > 1) {
-        result.currentConflict = true;
-        for (qsizetype i = outputStart; i < result.targets.size(); ++i) {
-            result.targets[i].current = false;
-        }
-    }
     return result;
 }
 
@@ -542,13 +442,6 @@ PolarisAvailability PolarisModels::availability(
             : snapshot.capabilities.commandCatalogErrorCode;
         return *dependencyFailure(errorCode);
     }
-    if (operation == PolarisOperation::DisplaySwitch &&
-            !snapshot.settings.valid) {
-        const QString errorCode = snapshot.settings.errorCode.isEmpty()
-            ? QStringLiteral("malformed_response")
-            : snapshot.settings.errorCode;
-        return *dependencyFailure(errorCode);
-    }
     if (!operationPermissionGranted(snapshot, operation)) {
         return disabled(PolarisAvailabilityCode::PermissionDenied,
                         QStringLiteral("permission_denied"),
@@ -571,12 +464,6 @@ PolarisAvailability PolarisModels::availability(
                         QStringLiteral("session_token_unavailable"),
                         QStringLiteral(
                             "Current session token is unavailable"));
-    }
-    if (operation == PolarisOperation::DisplaySwitch &&
-            !hasAlternateDisplay(snapshot)) {
-        return disabled(PolarisAvailabilityCode::NoAlternateDisplay,
-                        QStringLiteral("no_alternate_display"),
-                        QStringLiteral("No alternate display is available"));
     }
     return {true, PolarisAvailabilityCode::Available, {}, {}};
 }

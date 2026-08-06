@@ -14,9 +14,7 @@ include(../globaldefs.pri)
 SOURCES += \
     ../app/perigee/actions/actionregistry.cpp \
     ../app/perigee/actions/actioncategories.cpp \
-    ../app/perigee/display/displaytransaction.cpp \
     ../app/perigee/display/physicaldisplaycontroller.cpp \
-    ../app/perigee/display/sessiontransitioncoordinator.cpp \
     ../app/perigee/actions/gamestreamadapter.cpp \
     ../app/perigee/deck/actionlistmodel.cpp \
     ../app/perigee/deck/deckcontroller.cpp \
@@ -59,13 +57,11 @@ SOURCES += \
     test_deckinputrouter.cpp \
     test_deckinputdelivery.cpp \
     test_controllerlayout.cpp \
-    test_displaytransaction.cpp \
     test_physicaldisplaycontroller.cpp \
     test_inputneutralization.cpp \
     test_inputintegration.cpp \
     test_sessionexitintent.cpp \
     test_sessiondisplaytransition.cpp \
-    test_sessiontransitioncoordinator.cpp \
     test_sdlgamepadkeynavigation.cpp \
     test_streamingpreferences.cpp \
     test_streamsegueqml.cpp \
@@ -100,9 +96,7 @@ HEADERS += \
     ../app/perigee/deck/deckcontroller.h \
     ../app/perigee/deck/deckuipump.h \
     ../app/perigee/deck/decksurfacerenderer.h \
-    ../app/perigee/display/displaytransaction.h \
     ../app/perigee/display/physicaldisplaycontroller.h \
-    ../app/perigee/display/sessiontransitioncoordinator.h \
     ../app/perigee/input/deckbindings.h \
     ../app/perigee/input/controllerlayout.h \
     ../app/perigee/input/deckinputrouter.h \

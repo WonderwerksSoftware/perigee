@@ -63,9 +63,8 @@ private slots:
     void malformedStatusFailsDependentFieldsOnly();
     void tokenDependentMutationsFailClosedWithoutDisablingClipboard_data();
     void tokenDependentMutationsFailClosedWithoutDisablingClipboard();
-    void normalizesModesAndOutputsWithStableCrossKindIdentity();
+    void parsesOfficialClientSettingsFields();
     void parsesCurrentUpstreamClientSettingsEnvelope();
-    void conflictingCurrentTargetsFailClosed();
     void responseTrustBoundaryDistinguishesFallbackAndFailures();
     void malformedEntriesDoNotEraseIndependentValidData();
     void disabledReasonPrecedenceIsDeterministic();
@@ -79,6 +78,7 @@ void PolarisModelsTest::parsesCurrentCapabilitiesCompositionally()
     QVERIFY(model.valid);
     QVERIFY(model.isPolarisContract);
     QVERIFY(model.features.contains(QStringLiteral("named_commands_v1")));
+    QVERIFY(!model.features.contains(QStringLiteral("display_targets_v1")));
     QCOMPARE(model.clientSettingsEndpoint.url.path(),
              QStringLiteral("/polaris/v1/client-settings"));
     QCOMPARE(model.commandsEndpoint.url.path(),
@@ -347,8 +347,7 @@ void PolarisModelsTest::tokenDependentMutationsFailClosedWithoutDisablingClipboa
 
     for (const PolarisOperation operation : {
              PolarisOperation::NamedCommand,
-             PolarisOperation::StopSession,
-             PolarisOperation::DisplaySwitch}) {
+             PolarisOperation::StopSession}) {
         const PolarisAvailability result = PolarisModels::availability(
             snapshot, operation);
         QVERIFY(!result.enabled);
@@ -361,26 +360,19 @@ void PolarisModelsTest::tokenDependentMutationsFailClosedWithoutDisablingClipboa
         snapshot, PolarisOperation::ClipboardRead).enabled);
 }
 
-void PolarisModelsTest::normalizesModesAndOutputsWithStableCrossKindIdentity()
+void PolarisModelsTest::parsesOfficialClientSettingsFields()
 {
     const PolarisClientSettings model = PolarisModels::parseClientSettings(
         fixture("client-settings-current.json"));
 
     QVERIFY(model.valid);
-    QCOMPARE(model.fields.value(QStringLiteral("output_name")).desired.toString(),
-             QStringLiteral("DP-1"));
-    QCOMPARE(model.targets.size(), 6);
-    QCOMPARE(model.targets.at(0).stableKey(),
-             QStringLiteral("stream-mode:desktop_display"));
-    QVERIFY(model.targets.at(0).current);
-    QVERIFY(model.targets.at(1).requiresReconnect);
-    QCOMPARE(model.targets.at(3).stableKey(), QStringLiteral("output:DP-1"));
-    QVERIFY(model.targets.at(3).current);
-    QCOMPARE(model.targets.at(4).label, QStringLiteral("Primary monitor"));
-    QVERIFY(model.targets.at(3).stableKey() != model.targets.at(4).stableKey());
-    QVERIFY(!model.targets.at(5).available);
-    QCOMPARE(model.targets.at(5).unavailableReason,
-             QStringLiteral("Display is disconnected"));
+    QCOMPARE(model.fields.size(), 1);
+    const ClientSettingField field = model.fields.value(
+        QStringLiteral("stream_display_mode"));
+    QCOMPARE(field.direction, QStringLiteral("read_write"));
+    QCOMPARE(field.scope, QStringLiteral("host"));
+    QCOMPARE(field.effective.toString(), QStringLiteral("desktop_display"));
+    QVERIFY(!field.requiresReconnect);
 }
 
 void PolarisModelsTest::parsesCurrentUpstreamClientSettingsEnvelope()
@@ -394,34 +386,6 @@ void PolarisModelsTest::parsesCurrentUpstreamClientSettingsEnvelope()
     QCOMPARE(model.fields.value(QStringLiteral("stream_display_mode"))
                  .effective.toString(),
              QStringLiteral("desktop_display"));
-    QCOMPARE(model.targets.size(), 2);
-    QCOMPARE(model.targets.at(0).stableKey(),
-             QStringLiteral("stream-mode:desktop_display"));
-    QVERIFY(model.targets.at(0).current);
-    QCOMPARE(model.targets.at(1).stableKey(),
-             QStringLiteral("stream-mode:headless_stream"));
-}
-
-void PolarisModelsTest::conflictingCurrentTargetsFailClosed()
-{
-    QJsonObject object = fixture("client-settings-current.json").json.object();
-    QJsonObject capabilities = object.value(QStringLiteral("capabilities")).toObject();
-    QJsonArray outputs = capabilities.value(QStringLiteral("outputs")).toArray();
-    QJsonObject second = outputs.at(1).toObject();
-    second.insert(QStringLiteral("active"), true);
-    outputs.replace(1, second);
-    capabilities.insert(QStringLiteral("outputs"), outputs);
-    object.insert(QStringLiteral("capabilities"), capabilities);
-
-    const PolarisClientSettings model = PolarisModels::parseClientSettings(
-        jsonResponse(object));
-
-    QVERIFY(model.currentConflict);
-    for (const DisplayTarget& target : model.targets) {
-        if (target.kind == QStringLiteral("output")) {
-            QVERIFY(!target.current);
-        }
-    }
 }
 
 void PolarisModelsTest::responseTrustBoundaryDistinguishesFallbackAndFailures()
@@ -475,32 +439,12 @@ void PolarisModelsTest::malformedEntriesDoNotEraseIndependentValidData()
     QVERIFY(parsedCapabilities.clientSettingsEndpoint.usable);
     QCOMPARE(parsedCapabilities.maxClipboardTextBytes, qint64(262144));
 
-    QJsonObject settings = fixture("client-settings-current.json").json.object();
-    QJsonObject settingsCapabilities = settings.value(
-        QStringLiteral("capabilities")).toObject();
-    QJsonArray modes = settingsCapabilities.value(QStringLiteral("modes")).toArray();
-    modes.append(QJsonObject{
-        {QStringLiteral("value"), QStringLiteral("DP-1")},
-        {QStringLiteral("label"), QStringLiteral("Mode with output ID")},
-        {QStringLiteral("available"), true},
-        {QStringLiteral("restart_required"), true}});
-    settingsCapabilities.insert(QStringLiteral("modes"), modes);
-    settings.insert(QStringLiteral("capabilities"), settingsCapabilities);
     const PolarisClientSettings parsedSettings =
-        PolarisModels::parseClientSettings(jsonResponse(settings));
-    const auto modeIt = std::find_if(
-        parsedSettings.targets.cbegin(), parsedSettings.targets.cend(),
-        [](const DisplayTarget& target) {
-            return target.stableKey() == QStringLiteral("stream-mode:DP-1");
-        });
-    const auto outputIt = std::find_if(
-        parsedSettings.targets.cbegin(), parsedSettings.targets.cend(),
-        [](const DisplayTarget& target) {
-            return target.stableKey() == QStringLiteral("output:DP-1");
-        });
-    QVERIFY(modeIt != parsedSettings.targets.cend());
-    QVERIFY(outputIt != parsedSettings.targets.cend());
-    QVERIFY(modeIt->stableKey() != outputIt->stableKey());
+        PolarisModels::parseClientSettings(
+            fixture("client-settings-current.json"));
+    QVERIFY(parsedSettings.valid);
+    QVERIFY(parsedSettings.fields.contains(
+        QStringLiteral("stream_display_mode")));
 }
 
 void PolarisModelsTest::disabledReasonPrecedenceIsDeterministic()
@@ -514,26 +458,25 @@ void PolarisModelsTest::disabledReasonPrecedenceIsDeterministic()
         fixture("client-settings-current.json"));
     snapshot.complete = true;
 
-    snapshot.capabilities.features.remove(QStringLiteral("display_targets_v1"));
-    snapshot.session.controls.displaySelectionAllowed = false;
+    snapshot.capabilities.features.remove(QStringLiteral("session_stop_v1"));
+    snapshot.session.controls.stopAllowed = false;
     snapshot.session.ownsSession = false;
     snapshot.session.transitioning = true;
-    snapshot.settings.targets.clear();
-    QCOMPARE(PolarisModels::availability(snapshot, PolarisOperation::DisplaySwitch).reason,
+    QCOMPARE(PolarisModels::availability(snapshot, PolarisOperation::StopSession).reason,
              QStringLiteral("This Polaris version does not advertise this feature"));
 
-    snapshot.capabilities.features.insert(QStringLiteral("display_targets_v1"));
-    QCOMPARE(PolarisModels::availability(snapshot, PolarisOperation::DisplaySwitch).reason,
+    snapshot.capabilities.features.insert(QStringLiteral("session_stop_v1"));
+    QCOMPARE(PolarisModels::availability(snapshot, PolarisOperation::StopSession).reason,
              QStringLiteral("This paired client lacks permission"));
-    snapshot.session.controls.displaySelectionAllowed = true;
-    QCOMPARE(PolarisModels::availability(snapshot, PolarisOperation::DisplaySwitch).reason,
+    snapshot.session.controls.stopAllowed = true;
+    QCOMPARE(PolarisModels::availability(snapshot, PolarisOperation::StopSession).reason,
              QStringLiteral("Only the controlling client can do this"));
     snapshot.session.ownsSession = true;
-    QCOMPARE(PolarisModels::availability(snapshot, PolarisOperation::DisplaySwitch).reason,
+    QCOMPARE(PolarisModels::availability(snapshot, PolarisOperation::StopSession).reason,
              QStringLiteral("The session is transitioning"));
     snapshot.session.transitioning = false;
-    QCOMPARE(PolarisModels::availability(snapshot, PolarisOperation::DisplaySwitch).reason,
-             QStringLiteral("No alternate display is available"));
+    QVERIFY(PolarisModels::availability(
+        snapshot, PolarisOperation::StopSession).enabled);
 }
 
 REGISTER_PERIGEE_TEST(PolarisModelsTest);

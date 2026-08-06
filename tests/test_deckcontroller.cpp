@@ -92,13 +92,6 @@ QString valueForAction(const DeckController& controller, const QString& actionId
     return {};
 }
 
-QString displayActionId(const QString& kind, const QString& id)
-{
-    const QByteArray key = (kind + QLatin1Char(':') + id).toUtf8().toBase64(
-        QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
-    return QStringLiteral("display.target.%1").arg(QString::fromLatin1(key));
-}
-
 }
 
 class DeckControllerTest : public QObject
@@ -242,20 +235,6 @@ void DeckControllerTest::authoritativeCategoryOrderReachesEveryCoreAction()
 void DeckControllerTest::productionCatalogIsReachableByCategoryWithoutSearch()
 {
     MutableHostAdapter adapter;
-    const QString targetId = displayActionId(
-        QStringLiteral("output"), QStringLiteral("DP-1"));
-    ActionState targetState = availableState();
-    targetState.value = QVariantMap {
-        {QStringLiteral("kind"), QStringLiteral("output")},
-        {QStringLiteral("id"), QStringLiteral("DP-1")},
-        {QStringLiteral("label"), QStringLiteral("Desk monitor")},
-        {QStringLiteral("available"), true},
-        {QStringLiteral("current"), true},
-        {QStringLiteral("requires_reconnect"), false},
-        {QStringLiteral("unavailable_reason"), QString()},
-    };
-    adapter.currentSnapshot.actionStates.insert(targetId, targetState);
-
     ActionState commandState = availableState();
     commandState.value = QVariantMap {
         {QStringLiteral("index"), 0},
@@ -286,7 +265,6 @@ void DeckControllerTest::productionCatalogIsReachableByCategoryWithoutSearch()
         {QStringLiteral("window.fullscreen"), ActionCategory::Window},
         {QStringLiteral("session.disconnect-client"), ActionCategory::Session},
         {QStringLiteral("session.quit-perigee"), ActionCategory::Session},
-        {targetId, ActionCategory::Display},
         {QStringLiteral("clipboard.send-local"), ActionCategory::Clipboard},
         {QStringLiteral("clipboard.fetch-remote"), ActionCategory::Clipboard},
         {QStringLiteral("session.end-host"), ActionCategory::Session},
@@ -341,11 +319,7 @@ void DeckControllerTest::productionCatalogIsReachableByCategoryWithoutSearch()
         PolarisAdapter::descriptors(), fallbackAdapter);
     DeckController fallbackController(&fallbackRegistry);
     fallbackController.openFromKeyboard();
-    QCOMPARE(fallbackController.actionModel()->rowCount(), 1);
-    QCOMPARE(fallbackController.actionModel()->data(
-                 fallbackController.actionModel()->index(0, 0),
-                 ActionListModel::IdRole).toString(),
-             QStringLiteral("display.switch"));
+    QCOMPARE(fallbackController.actionModel()->rowCount(), 0);
 }
 
 void DeckControllerTest::controllerOperatesPhysicalDisplaysAndKeepsDeckOpen()

@@ -56,7 +56,6 @@
 #include "streaming/session.h"
 #include "settings/streamingpreferences.h"
 #include "gui/sdlgamepadkeynavigation.h"
-#include "perigee/display/sessiontransitioncoordinator.h"
 #include "perigee/branding/productidentity.h"
 #include "settings/moonlightsettingsimport.h"
 
@@ -995,8 +994,6 @@ int main(int argc, char *argv[])
         qputenv("QT_QUICK_CONTROLS_MATERIAL_PRIMARY", "#3F51B5");
     }
 
-    SessionTransitionCoordinator displayTransitionCoordinator;
-    Session::setTransitionCoordinator(&displayTransitionCoordinator);
     QSettings moonlightSettings(QSettings::defaultFormat(), QSettings::UserScope,
                                 QStringLiteral("Moonlight Game Streaming Project"),
                                 QStringLiteral("Moonlight"));
@@ -1018,8 +1015,6 @@ int main(int argc, char *argv[])
     }
 
     QQmlApplicationEngine engine;
-    engine.rootContext()->setContextProperty(
-        "DisplayTransitionCoordinator", &displayTransitionCoordinator);
     engine.rootContext()->setContextProperty(
         "MoonlightSettingsImport", &moonlightSettingsImport);
     engine.rootContext()->setContextProperty(

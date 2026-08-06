@@ -4,7 +4,6 @@
 #include "perigee/actions/actionregistry.h"
 #include "perigee/actions/gamestreamadapter.h"
 #include "perigee/actions/sessionfacade.h"
-#include "perigee/display/sessiontransitioncoordinator.h"
 #include "perigee/polaris/polarisadapter.h"
 #include "perigee/polaris/polarisapiclient.h"
 #include "test_registry.h"
@@ -38,18 +37,13 @@ private slots:
     void teardownWipesDelayedResponseAndCompletesRequestOnce();
     void authenticatedRawParserRejectsMalformedRequests_data();
     void authenticatedRawParserRejectsMalformedRequests();
-    void currentDiscoveryPublishesPolarisActionsAndDynamicTargets();
+    void currentDiscoveryPublishesPolarisAndStockPhysicalActions();
     void oldMalformedAndNonPolarisDiscoveryFailClosed();
     void wrongServerLeafAndClientIdentityFailClosed();
     void authenticatedHttpTimeoutDropAndPolicyRemainDistinct();
     void partialUnknownDiscoveryAndClipboardPermissionsStayIndependent();
     void publicActionsMapAuthenticatedFailuresExactly();
     void namedCommandsUseMetadataConfirmationAndAuthenticatedAcks();
-    void inPlaceDisplaySwitchRequiresFreshReadbackAndFrame();
-    void displayDisagreementRollsBackExactlyOnce();
-    void reconnectDisplaySwitchSucceedsWithoutStoppingHost();
-    void reconnectVerificationDeadlineRollsBackExactlyOnce();
-    void reconnectFailureRollsBackAndRollbackFailureExposesRecovery();
     void clipboardLimitsUtf8AcknowledgementAndLogsStaySafe();
 };
 
@@ -250,16 +244,14 @@ public:
 
 struct AdapterHarness
 {
-    explicit AdapterHarness(
-        FakePolarisServer& server,
-        SessionTransitionCoordinator* transitionCoordinator = nullptr)
+    explicit AdapterHarness(FakePolarisServer& server)
         : local(&session)
         , clipboard(new IntegrationClipboard())
         , clipboardView(clipboard.get())
         , adapter(local,
                   std::make_unique<RealTlsTransport>(
                       pairedComputer(server), server.clientSslConfiguration()),
-                  std::move(clipboard), transitionCoordinator)
+                  std::move(clipboard))
         , registry(PolarisAdapter::descriptors(), adapter)
     {
     }
@@ -270,69 +262,6 @@ struct AdapterHarness
     IntegrationClipboard* clipboardView;
     PolarisAdapter adapter;
     ActionRegistry registry;
-};
-
-class IntegrationDisplayPort final : public DisplayTransitionPort
-{
-public:
-    explicit IntegrationDisplayPort(PolarisAdapter* adapter,
-                                    bool refreshAutomatically = true)
-        : m_Adapter(adapter)
-        , m_RefreshAutomatically(refreshAutomatically)
-    {
-    }
-
-    void postTarget(const DisplayTarget& target, const QString& sessionToken,
-                    quint64 transactionEpoch,
-                    PostCompletion completion) override
-    {
-        if (m_Adapter != nullptr) {
-            m_Adapter->postDisplayTarget(
-                target, sessionToken, transactionEpoch,
-                std::move(completion));
-        }
-    }
-
-    void postAuthorizedTarget(
-        const DisplayTarget& target, const QString& sessionToken,
-        quint64 transactionEpoch,
-        const PolarisDiscoverySnapshot& authorizationSnapshot,
-        PostCompletion completion) override
-    {
-        if (m_Adapter != nullptr) {
-            m_Adapter->postDisplayTarget(
-                target, sessionToken, transactionEpoch,
-                authorizationSnapshot, std::move(completion));
-        }
-    }
-
-    bool requestLocalDisconnect(quint64 transactionEpoch) override
-    {
-        disconnectEpochs.push_back(transactionEpoch);
-        return disconnectSucceeds;
-    }
-
-    void armFirstFrameEvidence(quint64 evidenceEpoch) override
-    {
-        evidenceEpochs.push_back(evidenceEpoch);
-    }
-
-    void refreshReadback(quint64 transactionEpoch) override
-    {
-        refreshEpochs.push_back(transactionEpoch);
-        if (m_Adapter != nullptr && m_RefreshAutomatically) {
-            m_Adapter->refresh();
-        }
-    }
-
-    QVector<quint64> disconnectEpochs;
-    QVector<quint64> evidenceEpochs;
-    QVector<quint64> refreshEpochs;
-    bool disconnectSucceeds = true;
-
-private:
-    PolarisAdapter* m_Adapter = nullptr;
-    bool m_RefreshAutomatically = true;
 };
 
 void enqueueCurrentDiscovery(FakePolarisServer& server)
@@ -347,132 +276,12 @@ void enqueueCurrentDiscovery(FakePolarisServer& server)
                               QStringLiteral("commands-current.json")));
 }
 
-QByteArray displaySettings(const QString& currentOutput,
-                           bool requiresReconnect)
-{
-    QJsonObject root = QJsonDocument::fromJson(
-        fixture(QStringLiteral("client-settings-current.json"))).object();
-    QJsonObject effective = root.value(QStringLiteral("effective")).toObject();
-    effective.insert(QStringLiteral("output_name"), currentOutput);
-    root.insert(QStringLiteral("effective"), effective);
-    QJsonObject desired = root.value(QStringLiteral("desired")).toObject();
-    desired.insert(QStringLiteral("output_name"), currentOutput);
-    root.insert(QStringLiteral("desired"), desired);
-    QJsonObject fields = root.value(QStringLiteral("fields")).toObject();
-    QJsonObject outputField = fields.value(
-        QStringLiteral("output_name")).toObject();
-    outputField.insert(QStringLiteral("desired"), currentOutput);
-    outputField.insert(QStringLiteral("effective"), currentOutput);
-    outputField.insert(QStringLiteral("requires_reconnect"),
-                       requiresReconnect);
-    fields.insert(QStringLiteral("output_name"), outputField);
-    root.insert(QStringLiteral("fields"), fields);
-    QJsonObject capabilities = root.value(
-        QStringLiteral("capabilities")).toObject();
-    QJsonArray outputs = capabilities.value(
-        QStringLiteral("outputs")).toArray();
-    for (qsizetype index = 0; index < outputs.size(); ++index) {
-        QJsonObject output = outputs.at(index).toObject();
-        const QString id = output.value(QStringLiteral("id")).toString();
-        if (!id.isEmpty()) {
-            output.insert(QStringLiteral("active"), id == currentOutput);
-            output.insert(QStringLiteral("requires_reconnect"),
-                          requiresReconnect);
-            outputs.replace(index, output);
-        }
-    }
-    capabilities.insert(QStringLiteral("outputs"), outputs);
-    root.insert(QStringLiteral("capabilities"), capabilities);
-    return QJsonDocument(root).toJson(QJsonDocument::Compact);
-}
 
-void enqueueDiscoveryWithSettings(FakePolarisServer& server,
-                                  QByteArray settings)
-{
-    server.enqueue(jsonScript(QStringLiteral("/polaris/v1/capabilities"),
-                              QStringLiteral("capabilities-current.json")));
-    server.enqueue(jsonScript(QStringLiteral("/polaris/v1/session/status"),
-                              QStringLiteral("status-owner.json")));
-    server.enqueue(jsonBodyScript(QStringLiteral("/polaris/v1/client-settings"),
-                                  std::move(settings)));
-    server.enqueue(jsonScript(QStringLiteral("/polaris/v1/commands"),
-                              QStringLiteral("commands-current.json")));
-}
 
-FakePolarisServer::ResponseScript displayPost(
-    const QString& output, bool* exactBody, int status = 204)
-{
-    FakePolarisServer::ResponseScript script;
-    script.method = QByteArrayLiteral("POST");
-    script.path = QStringLiteral("/polaris/v1/client-settings");
-    script.status = status;
-    if (status != 204) {
-        script.headers.insert(QByteArrayLiteral("Content-Type"),
-                              QByteArrayLiteral("application/json"));
-        script.bodyChunks = {QByteArrayLiteral("{}")};
-    }
-    script.inspectBody = [output, exactBody](QByteArray& body) {
-        const QJsonObject object = QJsonDocument::fromJson(body).object();
-        *exactBody = object.value(QStringLiteral("output_name")).toString() ==
-                output &&
-            object.value(QStringLiteral("session_token")).toString() ==
-                QStringLiteral("fixture-owner-token");
-        return *exactBody;
-    };
-    return script;
-}
 
-QString displayAction(const HostSnapshot& snapshot, const QString& output)
-{
-    for (auto it = snapshot.actionStates.cbegin();
-         it != snapshot.actionStates.cend(); ++it) {
-        const QVariantMap value = it.value().value.toMap();
-        if (value.value(QStringLiteral("kind")).toString() ==
-                QStringLiteral("output") &&
-            value.value(QStringLiteral("id")).toString() == output) {
-            return it.key();
-        }
-    }
-    return {};
-}
 
-DisplaySessionIdentity displayIdentity(quint64 sessionEpoch)
-{
-    DisplaySessionIdentity identity;
-    identity.computerUuid = QStringLiteral("fixture-computer");
-    identity.appId = 42;
-    identity.appName = QStringLiteral("Desktop");
-    identity.sessionEpoch = sessionEpoch;
-    return identity;
-}
 
-bool waitForPhase(PolarisAdapter& adapter,
-                  const SessionTransitionCoordinator& coordinator,
-                  DisplayPhase phase, int timeoutMs = 2000)
-{
-    QElapsedTimer timer;
-    timer.start();
-    while (coordinator.phase() != phase && timer.elapsed() < timeoutMs) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        adapter.pumpCompletions(PolarisAdapter::CompletionPumpLimit);
-        QThread::msleep(1);
-    }
-    adapter.pumpCompletions(PolarisAdapter::CompletionPumpLimit);
-    return coordinator.phase() == phase;
-}
 
-int displayPostCount(const FakePolarisServer& server)
-{
-    int count = 0;
-    for (const FakePolarisServer::RequestRecord& record :
-         server.requestHistory()) {
-        if (record.method == QByteArrayLiteral("POST") &&
-            record.path == QStringLiteral("/polaris/v1/client-settings")) {
-            ++count;
-        }
-    }
-    return count;
-}
 
 bool waitForDiscovery(PolarisAdapter& adapter, int timeoutMs = 2000)
 {
@@ -750,7 +559,7 @@ void PolarisIntegrationTest::authenticatedRawParserRejectsMalformedRequests()
     QVERIFY(server.allRequestBodyWipesWereZero());
 }
 
-void PolarisIntegrationTest::currentDiscoveryPublishesPolarisActionsAndDynamicTargets()
+void PolarisIntegrationTest::currentDiscoveryPublishesPolarisAndStockPhysicalActions()
 {
     FakePolarisServer server;
     QVERIFY2(server.start(), qPrintable(server.failureLabel()));
@@ -764,7 +573,8 @@ void PolarisIntegrationTest::currentDiscoveryPublishesPolarisActionsAndDynamicTa
     QVERIFY(discovery.capabilities.valid);
     QVERIFY(discovery.capabilities.isPolarisContract);
     QVERIFY(discovery.session.tokenValid);
-    QCOMPARE(discovery.settings.targets.size(), 6);
+    QVERIFY(!discovery.capabilities.features.contains(
+        QStringLiteral("display_targets_v1")));
 
     const HostSnapshot snapshot = harness.adapter.snapshot();
     QVERIFY(snapshot.actionStates.value(
@@ -778,13 +588,11 @@ void PolarisIntegrationTest::currentDiscoveryPublishesPolarisActionsAndDynamicTa
     QVERIFY(snapshot.actionStates.value(
         QStringLiteral("host.command.0")).disruptive);
     QVERIFY(snapshot.actionStates.value(QStringLiteral("stats.overlay")).enabled);
-    int dynamicTargets = 0;
+    QVERIFY(snapshot.actionStates.contains(QStringLiteral("display.physical.1")));
     for (auto iterator = snapshot.actionStates.cbegin();
          iterator != snapshot.actionStates.cend(); ++iterator) {
-        dynamicTargets += iterator.key().startsWith(
-            QStringLiteral("display.target.")) ? 1 : 0;
+        QVERIFY(!iterator.key().startsWith(QStringLiteral("display.target.")));
     }
-    QCOMPARE(dynamicTargets, 6);
     QCOMPARE(server.pendingScriptCount(), 0);
     QCOMPARE(server.unexpectedRequestCount(), 0);
 }
@@ -809,11 +617,8 @@ void PolarisIntegrationTest::oldMalformedAndNonPolarisDiscoveryFailClosed()
             QStringLiteral("clipboard.send-local")).enabled);
         QVERIFY(!snapshot.actionStates.value(
             QStringLiteral("session.end-host")).enabled);
-        QVERIFY(!snapshot.actionStates.value(
-            QStringLiteral("display.switch")).enabled);
-        QCOMPARE(snapshot.actionStates.value(
-            QStringLiteral("display.switch")).disabledCode,
-            QStringLiteral("capability_not_advertised"));
+        QVERIFY(!snapshot.actionStates.contains(
+            QStringLiteral("display.switch")));
     }
 
     {
@@ -835,8 +640,8 @@ void PolarisIntegrationTest::oldMalformedAndNonPolarisDiscoveryFailClosed()
         QVERIFY(snapshot.actionStates.value(QStringLiteral("stats.overlay")).enabled);
         QVERIFY(!snapshot.actionStates.value(
             QStringLiteral("clipboard.send-local")).enabled);
-        QVERIFY(!snapshot.actionStates.value(
-            QStringLiteral("display.switch")).enabled);
+        QVERIFY(!snapshot.actionStates.contains(
+            QStringLiteral("display.switch")));
     }
 
     {
@@ -1076,7 +881,8 @@ void PolarisIntegrationTest::partialUnknownDiscoveryAndClipboardPermissionsStayI
             harness.adapter.discoverySnapshot();
         QVERIFY(discovery.capabilities.valid);
         QVERIFY(discovery.settings.valid);
-        QCOMPARE(discovery.settings.targets.size(), 6);
+        QVERIFY(discovery.settings.fields.contains(
+            QStringLiteral("stream_display_mode")));
         const HostSnapshot snapshot = harness.adapter.snapshot();
         QCOMPARE(snapshot.actionStates.value(
             QStringLiteral("clipboard.fetch-remote")).enabled, readAllowed);
@@ -1132,7 +938,7 @@ void PolarisIntegrationTest::partialUnknownDiscoveryAndClipboardPermissionsStayI
         QVERIFY(snapshot.actionStates.value(
             QStringLiteral("session.end-host")).enabled);
         QVERIFY(snapshot.actionStates.value(
-            QStringLiteral("display.switch")).enabled);
+            QStringLiteral("display.physical.1")).enabled);
         QVERIFY(snapshot.actionStates.value(QStringLiteral("stats.overlay")).enabled);
         QCOMPARE(server.requestHistory().size(), 3);
         QCOMPARE(server.pendingScriptCount(), 0);
@@ -1160,18 +966,14 @@ void PolarisIntegrationTest::partialUnknownDiscoveryAndClipboardPermissionsStayI
         QVERIFY(harness.adapter.startDiscovery());
         QVERIFY(waitForDiscovery(harness.adapter));
         const HostSnapshot snapshot = harness.adapter.snapshot();
-        bool foundMode = false;
-        bool foundOutput = false;
         for (auto it = snapshot.actionStates.cbegin();
              it != snapshot.actionStates.cend(); ++it) {
-            const QVariantMap metadata = it.value().value.toMap();
-            foundMode |= metadata.value(QStringLiteral("kind")).toString() ==
-                QStringLiteral("stream-mode");
-            foundOutput |= metadata.value(QStringLiteral("kind")).toString() ==
-                QStringLiteral("output");
+            QVERIFY(!it.key().startsWith(QStringLiteral("display.target.")));
         }
-        QVERIFY(foundMode);
-        QVERIFY(!foundOutput);
+        QVERIFY(!snapshot.actionStates.contains(
+            QStringLiteral("display.switch")));
+        QVERIFY(snapshot.actionStates.contains(
+            QStringLiteral("display.physical.1")));
         QVERIFY(snapshot.actionStates.value(
             QStringLiteral("clipboard.fetch-remote")).enabled);
         QVERIFY(snapshot.actionStates.value(
@@ -1355,383 +1157,10 @@ void PolarisIntegrationTest::namedCommandsUseMetadataConfirmationAndAuthenticate
     QVERIFY(server.allRequestBodyWipesWereZero());
 }
 
-void PolarisIntegrationTest::inPlaceDisplaySwitchRequiresFreshReadbackAndFrame()
-{
-    FakePolarisServer server;
-    QVERIFY(server.start());
-    SessionTransitionCoordinator coordinator;
-    AdapterHarness harness(server, &coordinator);
-    auto port = std::make_shared<IntegrationDisplayPort>(&harness.adapter);
-    QVERIFY(coordinator.attachSession(displayIdentity(1), port));
-    enqueueDiscoveryWithSettings(
-        server, displaySettings(QStringLiteral("DP-1"), false));
-    QVERIFY(harness.adapter.startDiscovery());
-    QVERIFY(waitForDiscovery(harness.adapter));
-    const QString actionId = displayAction(
-        harness.adapter.snapshot(), QStringLiteral("HDMI-A-1"));
-    QVERIFY(!actionId.isEmpty());
-    QVERIFY(harness.registry.state(actionId).enabled);
 
-    bool exactPost = false;
-    server.enqueue(displayPost(QStringLiteral("HDMI-A-1"), &exactPost));
-    enqueueDiscoveryWithSettings(
-        server, displaySettings(QStringLiteral("HDMI-A-1"), false));
-    ActionResult result;
-    bool complete = false;
-    harness.registry.execute(actionId, {}, [&](const ActionResult& value) {
-        result = value;
-        complete = true;
-    });
-    QVERIFY(waitForDiscoveryGeneration(harness.adapter, 2));
-    QVERIFY(exactPost);
-    QCOMPARE(coordinator.phase(), DisplayPhase::Verifying);
-    QVERIFY(!complete);
-    QCOMPARE(port->evidenceEpochs.size(), 1);
-    coordinator.observeDiscovery(1, harness.adapter.discoverySnapshot());
-    QVERIFY(!complete);
-    coordinator.firstFrameDecoded(1, port->evidenceEpochs.constLast());
-    QVERIFY(complete);
-    QVERIFY(result.ok);
-    QCOMPARE(coordinator.phase(), DisplayPhase::Succeeded);
-    QCOMPARE(displayPostCount(server), 1);
-    QVERIFY(port->disconnectEpochs.isEmpty());
-    QCOMPARE(server.pendingScriptCount(), 0);
-    QCOMPARE(server.unexpectedRequestCount(), 0);
-}
 
-void PolarisIntegrationTest::displayDisagreementRollsBackExactlyOnce()
-{
-    FakePolarisServer server;
-    QVERIFY(server.start());
-    SessionTransitionCoordinator coordinator;
-    AdapterHarness harness(server, &coordinator);
-    auto port = std::make_shared<IntegrationDisplayPort>(&harness.adapter);
-    QVERIFY(coordinator.attachSession(displayIdentity(2), port));
-    const QByteArray previousSettings = displaySettings(
-        QStringLiteral("DP-1"), false);
-    enqueueDiscoveryWithSettings(server, previousSettings);
-    QVERIFY(harness.adapter.startDiscovery());
-    QVERIFY(waitForDiscovery(harness.adapter));
-    const QString actionId = displayAction(
-        harness.adapter.snapshot(), QStringLiteral("HDMI-A-1"));
-    QVERIFY(!actionId.isEmpty());
-    QVERIFY(harness.registry.state(actionId).enabled);
 
-    bool requestedPost = false;
-    bool rollbackPost = false;
-    server.enqueue(displayPost(QStringLiteral("HDMI-A-1"), &requestedPost));
-    enqueueDiscoveryWithSettings(server, previousSettings);
-    server.enqueue(displayPost(QStringLiteral("DP-1"), &rollbackPost));
-    enqueueDiscoveryWithSettings(server, previousSettings);
-    ActionResult result;
-    bool complete = false;
-    harness.registry.execute(actionId, {}, [&](const ActionResult& value) {
-        result = value;
-        complete = true;
-    });
-    QVERIFY(waitForDiscoveryGeneration(harness.adapter, 2));
-    QVERIFY(requestedPost);
-    coordinator.observeDiscovery(2, harness.adapter.discoverySnapshot());
-    QCOMPARE(coordinator.phase(), DisplayPhase::RollingBack);
-    QVERIFY(waitForDiscoveryGeneration(harness.adapter, 3));
-    QVERIFY(rollbackPost);
-    QCOMPARE(coordinator.phase(), DisplayPhase::Verifying);
-    QCOMPARE(port->evidenceEpochs.size(), 2);
-    coordinator.observeDiscovery(2, harness.adapter.discoverySnapshot());
-    coordinator.firstFrameDecoded(2, port->evidenceEpochs.constLast());
-    QVERIFY(complete);
-    QVERIFY(!result.ok);
-    QCOMPARE(result.errorCode, QStringLiteral("switch_failed_restored"));
-    QCOMPARE(coordinator.phase(), DisplayPhase::Failed);
-    QVERIFY(!coordinator.recoveryVisible());
-    QCOMPARE(displayPostCount(server), 2);
-    QVERIFY(port->disconnectEpochs.isEmpty());
-    QTest::qWait(20);
-    harness.adapter.pumpCompletions(PolarisAdapter::CompletionPumpLimit);
-    QCOMPARE(displayPostCount(server), 2);
-    QCOMPARE(server.pendingScriptCount(), 0);
-    QCOMPARE(server.unexpectedRequestCount(), 0);
-}
 
-void PolarisIntegrationTest::reconnectDisplaySwitchSucceedsWithoutStoppingHost()
-{
-    FakePolarisServer server;
-    QVERIFY(server.start());
-    SessionTransitionCoordinator coordinator;
-    AdapterHarness initial(server, &coordinator);
-    auto initialPort = std::make_shared<IntegrationDisplayPort>(
-        &initial.adapter);
-    QVERIFY(coordinator.attachSession(displayIdentity(10), initialPort));
-    enqueueDiscoveryWithSettings(
-        server, displaySettings(QStringLiteral("DP-1"), true));
-    QVERIFY(initial.adapter.startDiscovery());
-    QVERIFY(waitForDiscovery(initial.adapter));
-    const QString actionId = displayAction(
-        initial.adapter.snapshot(), QStringLiteral("HDMI-A-1"));
-    QVERIFY(!actionId.isEmpty());
-    QVERIFY(initial.registry.state(actionId).enabled);
-
-    bool exactPost = false;
-    server.enqueue(displayPost(QStringLiteral("HDMI-A-1"), &exactPost));
-    ActionResult result;
-    bool complete = false;
-    initial.registry.execute(actionId, {}, [&](const ActionResult& value) {
-        result = value;
-        complete = true;
-    });
-    QVERIFY(waitForPhase(initial.adapter, coordinator,
-                         DisplayPhase::Disconnecting));
-    QVERIFY(exactPost);
-    QVERIFY(!complete);
-    QCOMPARE(initialPort->disconnectEpochs.size(), 1);
-    QVERIFY(coordinator.sessionFinished(10));
-    coordinator.detachSession(10);
-    QCOMPARE(coordinator.phase(), DisplayPhase::Reconnecting);
-
-    AdapterHarness replacement(server, &coordinator);
-    auto replacementPort = std::make_shared<IntegrationDisplayPort>(
-        &replacement.adapter);
-    enqueueDiscoveryWithSettings(
-        server, displaySettings(QStringLiteral("HDMI-A-1"), true));
-    QVERIFY(coordinator.attachSession(displayIdentity(11), replacementPort));
-    QVERIFY(waitForDiscoveryGeneration(replacement.adapter, 1));
-    QCOMPARE(coordinator.phase(), DisplayPhase::Verifying);
-    QCOMPARE(replacementPort->evidenceEpochs.size(), 1);
-    coordinator.observeDiscovery(11,
-                                 replacement.adapter.discoverySnapshot());
-    QVERIFY(!complete);
-    coordinator.firstFrameDecoded(
-        11, replacementPort->evidenceEpochs.constLast());
-    QVERIFY(complete);
-    QVERIFY(result.ok);
-    QCOMPARE(coordinator.phase(), DisplayPhase::Succeeded);
-    QCOMPARE(displayPostCount(server), 1);
-    for (const FakePolarisServer::RequestRecord& record :
-         server.requestHistory()) {
-        QVERIFY(record.path != QStringLiteral("/polaris/v1/session/stop"));
-    }
-    QCOMPARE(server.pendingScriptCount(), 0);
-    QCOMPARE(server.unexpectedRequestCount(), 0);
-}
-
-void PolarisIntegrationTest::reconnectVerificationDeadlineRollsBackExactlyOnce()
-{
-    FakePolarisServer server;
-    QVERIFY(server.start());
-    qint64 now = 1000;
-    SessionTransitionCoordinator coordinator([&now] { return now; });
-    AdapterHarness initial(server, &coordinator);
-    auto initialPort = std::make_shared<IntegrationDisplayPort>(
-        &initial.adapter);
-    QVERIFY(coordinator.attachSession(displayIdentity(40), initialPort));
-    enqueueDiscoveryWithSettings(
-        server, displaySettings(QStringLiteral("DP-1"), true));
-    QVERIFY(initial.adapter.startDiscovery());
-    QVERIFY(waitForDiscovery(initial.adapter));
-    const QString actionId = displayAction(
-        initial.adapter.snapshot(), QStringLiteral("HDMI-A-1"));
-    QVERIFY(!actionId.isEmpty());
-    QVERIFY(initial.registry.state(actionId).enabled);
-
-    bool requestedPost = false;
-    server.enqueue(displayPost(QStringLiteral("HDMI-A-1"),
-                               &requestedPost));
-    ActionResult result;
-    bool complete = false;
-    initial.registry.execute(actionId, {}, [&](const ActionResult& value) {
-        result = value;
-        complete = true;
-    });
-    QVERIFY(waitForPhase(initial.adapter, coordinator,
-                         DisplayPhase::Disconnecting));
-    QVERIFY(requestedPost);
-    QCOMPARE(initialPort->disconnectEpochs.size(), 1);
-    QVERIFY(coordinator.sessionFinished(40));
-    coordinator.detachSession(40);
-
-    AdapterHarness timedOutReplacement(server, &coordinator);
-    auto timedOutPort = std::make_shared<IntegrationDisplayPort>(
-        &timedOutReplacement.adapter, false);
-    QVERIFY(coordinator.attachSession(displayIdentity(41), timedOutPort));
-    QCOMPARE(coordinator.phase(), DisplayPhase::Verifying);
-    QVERIFY(coordinator.verificationPending());
-    QVERIFY(!complete);
-
-    bool rollbackPost = false;
-    server.enqueue(displayPost(QStringLiteral("DP-1"), &rollbackPost));
-    now += 15001;
-    coordinator.checkDeadline();
-    QVERIFY(waitForPhase(timedOutReplacement.adapter, coordinator,
-                         DisplayPhase::Disconnecting));
-    QVERIFY(rollbackPost);
-    QCOMPARE(displayPostCount(server), 2);
-    QCOMPARE(timedOutPort->disconnectEpochs.size(), 1);
-    QVERIFY(coordinator.sessionFinished(41));
-    coordinator.detachSession(41);
-    QCOMPARE(coordinator.phase(), DisplayPhase::Reconnecting);
-
-    AdapterHarness restored(server, &coordinator);
-    auto restoredPort = std::make_shared<IntegrationDisplayPort>(
-        &restored.adapter);
-    enqueueDiscoveryWithSettings(
-        server, displaySettings(QStringLiteral("DP-1"), true));
-    QVERIFY(coordinator.attachSession(displayIdentity(42), restoredPort));
-    QVERIFY(waitForDiscoveryGeneration(restored.adapter, 1));
-    coordinator.observeDiscovery(42, restored.adapter.discoverySnapshot());
-    coordinator.firstFrameDecoded(
-        42, restoredPort->evidenceEpochs.constLast());
-    QVERIFY(complete);
-    QVERIFY(!result.ok);
-    QCOMPARE(result.errorCode, QStringLiteral("switch_failed_restored"));
-    QVERIFY(!coordinator.recoveryVisible());
-    QCOMPARE(displayPostCount(server), 2);
-    QCOMPARE(restoredPort->disconnectEpochs.size(), 0);
-
-    now += 60000;
-    for (int iteration = 0; iteration < 3; ++iteration) {
-        coordinator.checkDeadline();
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        restored.adapter.pumpCompletions(
-            PolarisAdapter::CompletionPumpLimit);
-    }
-    QCOMPARE(displayPostCount(server), 2);
-    QCOMPARE(restoredPort->disconnectEpochs.size(), 0);
-    QCOMPARE(server.pendingScriptCount(), 0);
-    QCOMPARE(server.unexpectedRequestCount(), 0);
-}
-
-void PolarisIntegrationTest::reconnectFailureRollsBackAndRollbackFailureExposesRecovery()
-{
-    {
-        FakePolarisServer server;
-        QVERIFY(server.start());
-        SessionTransitionCoordinator coordinator;
-        AdapterHarness initial(server, &coordinator);
-        auto initialPort = std::make_shared<IntegrationDisplayPort>(
-            &initial.adapter);
-        QVERIFY(coordinator.attachSession(displayIdentity(20), initialPort));
-        enqueueDiscoveryWithSettings(
-            server, displaySettings(QStringLiteral("DP-1"), true));
-        QVERIFY(initial.adapter.startDiscovery());
-        QVERIFY(waitForDiscovery(initial.adapter));
-        const QString actionId = displayAction(
-            initial.adapter.snapshot(), QStringLiteral("HDMI-A-1"));
-        QVERIFY(!actionId.isEmpty());
-        QVERIFY(initial.registry.state(actionId).enabled);
-
-        bool requestedPost = false;
-        server.enqueue(displayPost(QStringLiteral("HDMI-A-1"),
-                                   &requestedPost));
-        ActionResult result;
-        bool complete = false;
-        initial.registry.execute(actionId, {}, [&](const ActionResult& value) {
-            result = value;
-            complete = true;
-        });
-        QVERIFY(waitForPhase(initial.adapter, coordinator,
-                             DisplayPhase::Disconnecting));
-        QVERIFY(requestedPost);
-        QVERIFY(coordinator.sessionFinished(20));
-        coordinator.detachSession(20);
-
-        AdapterHarness failedReplacement(server, &coordinator);
-        auto failedPort = std::make_shared<IntegrationDisplayPort>(
-            &failedReplacement.adapter, false);
-        QVERIFY(coordinator.attachSession(displayIdentity(21), failedPort));
-        bool rollbackPost = false;
-        server.enqueue(displayPost(QStringLiteral("DP-1"), &rollbackPost));
-        coordinator.sessionConnectionFailed(
-            21, QStringLiteral("connection_failed"));
-        QVERIFY(waitForPhase(failedReplacement.adapter, coordinator,
-                             DisplayPhase::Disconnecting));
-        QVERIFY(rollbackPost);
-        QCOMPARE(displayPostCount(server), 2);
-        QCOMPARE(failedPort->disconnectEpochs.size(), 1);
-        QVERIFY(coordinator.sessionFinished(21));
-        coordinator.detachSession(21);
-
-        AdapterHarness restored(server, &coordinator);
-        auto restoredPort = std::make_shared<IntegrationDisplayPort>(
-            &restored.adapter);
-        enqueueDiscoveryWithSettings(
-            server, displaySettings(QStringLiteral("DP-1"), true));
-        QVERIFY(coordinator.attachSession(displayIdentity(22), restoredPort));
-        QVERIFY(waitForDiscoveryGeneration(restored.adapter, 1));
-        coordinator.observeDiscovery(22,
-                                     restored.adapter.discoverySnapshot());
-        coordinator.firstFrameDecoded(
-            22, restoredPort->evidenceEpochs.constLast());
-        QVERIFY(complete);
-        QVERIFY(!result.ok);
-        QCOMPARE(result.errorCode,
-                 QStringLiteral("switch_failed_restored"));
-        QVERIFY(!coordinator.recoveryVisible());
-        QCOMPARE(displayPostCount(server), 2);
-        QTest::qWait(20);
-        restored.adapter.pumpCompletions(
-            PolarisAdapter::CompletionPumpLimit);
-        QCOMPARE(displayPostCount(server), 2);
-        QCOMPARE(server.pendingScriptCount(), 0);
-        QCOMPARE(server.unexpectedRequestCount(), 0);
-    }
-
-    {
-        FakePolarisServer server;
-        QVERIFY(server.start());
-        SessionTransitionCoordinator coordinator;
-        AdapterHarness initial(server, &coordinator);
-        auto initialPort = std::make_shared<IntegrationDisplayPort>(
-            &initial.adapter);
-        QVERIFY(coordinator.attachSession(displayIdentity(30), initialPort));
-        enqueueDiscoveryWithSettings(
-            server, displaySettings(QStringLiteral("DP-1"), true));
-        QVERIFY(initial.adapter.startDiscovery());
-        QVERIFY(waitForDiscovery(initial.adapter));
-        const QString actionId = displayAction(
-            initial.adapter.snapshot(), QStringLiteral("HDMI-A-1"));
-        QVERIFY(!actionId.isEmpty());
-        QVERIFY(initial.registry.state(actionId).enabled);
-
-        bool requestedPost = false;
-        server.enqueue(displayPost(QStringLiteral("HDMI-A-1"),
-                                   &requestedPost));
-        ActionResult result;
-        bool complete = false;
-        initial.registry.execute(actionId, {}, [&](const ActionResult& value) {
-            result = value;
-            complete = true;
-        });
-        QVERIFY(waitForPhase(initial.adapter, coordinator,
-                             DisplayPhase::Disconnecting));
-        QVERIFY(requestedPost);
-        QVERIFY(coordinator.sessionFinished(30));
-        coordinator.detachSession(30);
-
-        AdapterHarness failedReplacement(server, &coordinator);
-        auto failedPort = std::make_shared<IntegrationDisplayPort>(
-            &failedReplacement.adapter, false);
-        QVERIFY(coordinator.attachSession(displayIdentity(31), failedPort));
-        bool rollbackPost = false;
-        server.enqueue(displayPost(QStringLiteral("DP-1"), &rollbackPost,
-                                   500));
-        coordinator.sessionConnectionFailed(
-            31, QStringLiteral("connection_failed"));
-        QVERIFY(waitForAction(failedReplacement.adapter, complete));
-        QVERIFY(rollbackPost);
-        QVERIFY(!result.ok);
-        QCOMPARE(result.errorCode, QStringLiteral("rollback_failed"));
-        QCOMPARE(coordinator.phase(), DisplayPhase::Failed);
-        QVERIFY(coordinator.recoveryVisible());
-        QCOMPARE(displayPostCount(server), 2);
-        QVERIFY(failedPort->disconnectEpochs.isEmpty());
-        QTest::qWait(20);
-        failedReplacement.adapter.pumpCompletions(
-            PolarisAdapter::CompletionPumpLimit);
-        QCOMPARE(displayPostCount(server), 2);
-        QCOMPARE(server.pendingScriptCount(), 0);
-        QCOMPARE(server.unexpectedRequestCount(), 0);
-    }
-}
 
 void PolarisIntegrationTest::clipboardLimitsUtf8AcknowledgementAndLogsStaySafe()
 {

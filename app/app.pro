@@ -206,9 +206,7 @@ SOURCES += \
     perigee/actions/actionregistry.cpp \
     perigee/actions/actioncategories.cpp \
     perigee/actions/gamestreamadapter.cpp \
-    perigee/display/displaytransaction.cpp \
     perigee/display/physicaldisplaycontroller.cpp \
-    perigee/display/sessiontransitioncoordinator.cpp \
     perigee/deck/actionlistmodel.cpp \
     perigee/deck/deckcontroller.cpp \
     perigee/deck/deckuipump.cpp \
@@ -269,9 +267,7 @@ HEADERS += \
     perigee/actions/gamestreamadapter.h \
     perigee/actions/hostadapter.h \
     perigee/actions/sessionfacade.h \
-    perigee/display/displaytransaction.h \
     perigee/display/physicaldisplaycontroller.h \
-    perigee/display/sessiontransitioncoordinator.h \
     perigee/polaris/polarismodels.h \
     perigee/polaris/polarisadapter.h \
     perigee/deck/actionlistmodel.h \

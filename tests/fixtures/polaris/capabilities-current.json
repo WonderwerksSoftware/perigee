@@ -5,7 +5,6 @@
     "session_stop_v1": true,
     "client_settings_v1": true,
     "named_commands_v1": true,
-    "display_targets_v1": true,
     "clipboard_limits_v1": true,
     "future_feature_v2": true
   },
