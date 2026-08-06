@@ -588,6 +588,39 @@ bool SdlInputHandler::sendNeutralControllerInput(SDL_JoystickID id)
     return true;
 }
 
+bool SdlInputHandler::sendPhysicalDisplayShortcut(int displayNumber)
+{
+    if (displayNumber < 1 || displayNumber > 13) {
+        return false;
+    }
+
+    struct KeyboardPacket {
+        short keyCode;
+        char action;
+    };
+
+    const short functionKey = static_cast<short>(0x8070 + displayNumber - 1);
+    const KeyboardPacket packets[] {
+        {static_cast<short>(0x8011), KEY_ACTION_DOWN},
+        {static_cast<short>(0x8012), KEY_ACTION_DOWN},
+        {static_cast<short>(0x8010), KEY_ACTION_DOWN},
+        {functionKey, KEY_ACTION_DOWN},
+        {functionKey, KEY_ACTION_UP},
+        {static_cast<short>(0x8010), KEY_ACTION_UP},
+        {static_cast<short>(0x8012), KEY_ACTION_UP},
+        {static_cast<short>(0x8011), KEY_ACTION_UP},
+    };
+
+    std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);
+    bool sent = true;
+    for (const KeyboardPacket& packet : packets) {
+        if (LiSendKeyboardEvent2(packet.keyCode, packet.action, 0, 0) != 0) {
+            sent = false;
+        }
+    }
+    return sent;
+}
+
 void SdlInputHandler::sendTrackedMouseButtonEvent(int action, int button)
 {
     std::lock_guard<std::recursive_mutex> lock(m_RemoteInputMutex);

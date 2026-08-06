@@ -160,6 +160,8 @@ public:
 
     bool sendNeutralControllerInput(SDL_JoystickID id);
 
+    bool sendPhysicalDisplayShortcut(int displayNumber);
+
     void notifyMouseLeave();
 
     void notifyFocusLost();

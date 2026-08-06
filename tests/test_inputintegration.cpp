@@ -136,6 +136,21 @@ DeckInputRouter::Result routeThroughRealHandler(
     return original;
 }
 
+QVector<InputIntegrationStubs::KeyboardRecord> displayOneShortcut()
+{
+    using InputIntegrationStubs::KeyboardRecord;
+    return {
+        {0x8011, KEY_ACTION_DOWN, 0, 0},
+        {0x8012, KEY_ACTION_DOWN, 0, 0},
+        {0x8010, KEY_ACTION_DOWN, 0, 0},
+        {0x8070, KEY_ACTION_DOWN, 0, 0},
+        {0x8070, KEY_ACTION_UP, 0, 0},
+        {0x8010, KEY_ACTION_UP, 0, 0},
+        {0x8012, KEY_ACTION_UP, 0, 0},
+        {0x8011, KEY_ACTION_UP, 0, 0},
+    };
+}
+
 }
 
 class InputIntegrationTest : public QObject
@@ -176,6 +191,12 @@ private slots:
     void legacyDisconnectHelperBypassesOverlayGate();
     void legacyOnOpenDisconnectsThroughRealHandler();
     void nonOwnerLegacyChordCannotQuitWhileDeckIsOwned();
+    void physicalDisplayShortcutUsesBalancedExplicitModifiers();
+    void physicalDisplayShortcutMapsDisplayThirteenToF13();
+    void physicalDisplayShortcutBypassesOnlyTheDeckKeyboardGate();
+    void physicalDisplayShortcutIgnoresCapsLockState();
+    void invalidPhysicalDisplaySendsNothing();
+    void packetFailureStillReleasesEveryShortcutKey();
 };
 
 void InputIntegrationTest::init()
@@ -1499,6 +1520,87 @@ void InputIntegrationTest::nonOwnerLegacyChordCannotQuitWhileDeckIsOwned()
 
     owner.controller = nullptr;
     nonOwner.controller = nullptr;
+}
+
+void InputIntegrationTest::physicalDisplayShortcutUsesBalancedExplicitModifiers()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    SdlInputHandler handler(preferences, 1920, 1080);
+
+    QVERIFY(handler.sendPhysicalDisplayShortcut(1));
+    QCOMPARE(InputIntegrationStubs::keyboards(), displayOneShortcut());
+}
+
+void InputIntegrationTest::physicalDisplayShortcutMapsDisplayThirteenToF13()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    SdlInputHandler handler(preferences, 1920, 1080);
+
+    QVERIFY(handler.sendPhysicalDisplayShortcut(13));
+    QVector<InputIntegrationStubs::KeyboardRecord> expected =
+        displayOneShortcut();
+    expected[3].keyCode = 0x807C;
+    expected[4].keyCode = 0x807C;
+    QCOMPARE(InputIntegrationStubs::keyboards(), expected);
+}
+
+void InputIntegrationTest::physicalDisplayShortcutBypassesOnlyTheDeckKeyboardGate()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    SdlInputHandler handler(preferences, 1920, 1080);
+    handler.beginLocalOverlayInput();
+
+    SDL_KeyboardEvent ordinary {};
+    ordinary.type = SDL_KEYDOWN;
+    ordinary.state = SDL_PRESSED;
+    ordinary.keysym.scancode = SDL_SCANCODE_A;
+    ordinary.keysym.mod = KMOD_NONE;
+    handler.handleKeyEvent(&ordinary);
+    QCOMPARE(InputIntegrationStubs::keyboards().size(), 0);
+
+    QVERIFY(handler.sendPhysicalDisplayShortcut(1));
+    QCOMPARE(InputIntegrationStubs::keyboards(), displayOneShortcut());
+}
+
+void InputIntegrationTest::physicalDisplayShortcutIgnoresCapsLockState()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    SdlInputHandler handler(preferences, 1920, 1080);
+    const SDL_Keymod originalModifiers = SDL_GetModState();
+    SDL_SetModState(KMOD_CAPS);
+
+    const bool sent = handler.sendPhysicalDisplayShortcut(1);
+    const auto records = InputIntegrationStubs::keyboards();
+    SDL_SetModState(originalModifiers);
+
+    QVERIFY(sent);
+    QCOMPARE(records, displayOneShortcut());
+}
+
+void InputIntegrationTest::invalidPhysicalDisplaySendsNothing()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    SdlInputHandler handler(preferences, 1920, 1080);
+
+    QVERIFY(!handler.sendPhysicalDisplayShortcut(0));
+    QVERIFY(!handler.sendPhysicalDisplayShortcut(14));
+    QCOMPARE(InputIntegrationStubs::keyboards().size(), 0);
+}
+
+void InputIntegrationTest::packetFailureStillReleasesEveryShortcutKey()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    SdlInputHandler handler(preferences, 1920, 1080);
+    InputIntegrationStubs::failKeyboardSendAt(3);
+
+    QVERIFY(!handler.sendPhysicalDisplayShortcut(1));
+    QCOMPARE(InputIntegrationStubs::keyboards(), displayOneShortcut());
 }
 
 REGISTER_PERIGEE_TEST(InputIntegrationTest);

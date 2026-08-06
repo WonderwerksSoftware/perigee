@@ -30,6 +30,7 @@ namespace {
 
 QMutex g_Mutex;
 QVector<InputIntegrationStubs::MouseButtonRecord> g_MouseButtons;
+QVector<InputIntegrationStubs::KeyboardRecord> g_Keyboards;
 QVector<InputIntegrationStubs::TouchRecord> g_Touches;
 QVector<InputIntegrationStubs::PenRecord> g_Pens;
 QVector<InputIntegrationStubs::ControllerRecord> g_Controllers;
@@ -52,6 +53,7 @@ bool g_InputTimerPushBlocked = false;
 bool g_ReleaseBlockedSend = false;
 bool g_FailNextTimerAdd = false;
 bool g_FailNextInputTimerPush = false;
+int g_FailKeyboardSendAt = -1;
 QWaitCondition g_SendCondition;
 
 }
@@ -124,6 +126,7 @@ void reset()
 {
     QMutexLocker locker(&g_Mutex);
     g_MouseButtons.clear();
+    g_Keyboards.clear();
     g_Touches.clear();
     g_Pens.clear();
     g_Controllers.clear();
@@ -146,12 +149,19 @@ void reset()
     g_ReleaseBlockedSend = false;
     g_FailNextTimerAdd = false;
     g_FailNextInputTimerPush = false;
+    g_FailKeyboardSendAt = -1;
 }
 
 QVector<MouseButtonRecord> mouseButtons()
 {
     QMutexLocker locker(&g_Mutex);
     return g_MouseButtons;
+}
+
+QVector<KeyboardRecord> keyboards()
+{
+    QMutexLocker locker(&g_Mutex);
+    return g_Keyboards;
 }
 
 QVector<TouchRecord> touches()
@@ -250,6 +260,12 @@ void failNextInputTimerPush()
     g_FailNextInputTimerPush = true;
 }
 
+void failKeyboardSendAt(int zeroBasedPacketIndex)
+{
+    QMutexLocker locker(&g_Mutex);
+    g_FailKeyboardSendAt = zeroBasedPacketIndex;
+}
+
 bool waitUntilSendBlocked(int timeoutMs)
 {
     QMutexLocker locker(&g_Mutex);
@@ -295,7 +311,18 @@ void releaseBlockedSend()
 extern "C" {
 
 int LiSendKeyboardEvent(short, char, char) { return 0; }
-int LiSendKeyboardEvent2(short, char, char, char) { return 0; }
+int LiSendKeyboardEvent2(short keyCode, char action, char modifiers, char flags)
+{
+    QMutexLocker locker(&g_Mutex);
+    const int packetIndex = g_Keyboards.size();
+    g_Keyboards.push_back({
+        int(static_cast<quint16>(keyCode)),
+        int(action),
+        int(modifiers),
+        int(flags),
+    });
+    return packetIndex == g_FailKeyboardSendAt ? -1 : 0;
+}
 int LiSendUtf8TextEvent(const char*, unsigned int) { return 0; }
 int LiSendMouseButtonEvent(char action, int button)
 {
