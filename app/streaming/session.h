@@ -11,12 +11,14 @@
 #include "audio/renderers/renderer.h"
 #include "video/overlaymanager.h"
 #include "sessionexitintent.h"
+#include "perigee/actions/actiontypes.h"
 #include "perigee/input/deckinputrouter.h"
 #include "perigee/deck/deckuipump.h"
 #include "perigee/display/displaytransaction.h"
 #include "perigee/display/sessiontransitioncoordinator.h"
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -27,6 +29,7 @@ class GameStreamAdapter;
 class PolarisAdapter;
 class GameStreamSessionFacade;
 class SessionDisplayTransitionPort;
+class PhysicalDisplayController;
 
 class SupportedVideoFormatList : public QList<int>
 {
@@ -166,6 +169,12 @@ public:
     bool setKeyboardCaptureEnabled(bool enabled);
     bool toggleKeyboardCaptureFromShortcut();
     bool setFullscreenEnabled(bool enabled);
+    int physicalDisplayCount() const;
+    int lastRequestedPhysicalDisplay() const;
+    bool physicalDisplaySwitchActive() const;
+    bool requestPhysicalDisplay(
+        int displayNumber,
+        std::function<void(const ActionResult&)> completion);
     bool requestClientDisconnect(ClientDisconnectPolicy policy);
     bool requestPerigeeQuit();
     bool requestQuitAndExit();
@@ -356,6 +365,7 @@ private:
     std::unique_ptr<DeckController> m_DeckController;
     std::unique_ptr<DeckSurfaceRenderer> m_DeckSurfaceRenderer;
     std::unique_ptr<DeckInputRouter> m_DeckInputRouter;
+    std::unique_ptr<PhysicalDisplayController> m_PhysicalDisplayController;
     std::optional<CaptureSnapshot> m_DeckCaptureSnapshot;
     DeckUiPump m_DeckUiPump;
     bool m_DeckTextInputActive = false;
@@ -364,6 +374,7 @@ private:
     std::shared_ptr<DisplayTransitionPort> m_DisplayTransitionPort;
     FirstFrameNotificationGate m_FirstFrameNotificationGate;
     quint64 m_DisplaySessionEpoch = 0;
+    quint64 m_PhysicalDisplaySessionEpoch = 0;
     std::atomic_bool m_DisplayTransitionHandoff {false};
     std::atomic_bool m_ConnectionStartRequested {false};
     std::atomic_bool m_VideoSubsystemInitialized {false};
@@ -374,4 +385,5 @@ private:
     static QSemaphore s_ActiveSessionSemaphore;
     static SessionTransitionCoordinator* s_TransitionCoordinator;
     static std::atomic<quint64> s_NextDisplaySessionEpoch;
+    static std::atomic<quint64> s_NextPhysicalDisplaySessionEpoch;
 };

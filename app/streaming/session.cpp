@@ -9,6 +9,7 @@
 #include "perigee/actions/sessionfacade.h"
 #include "perigee/polaris/polarisadapter.h"
 #include "perigee/input/deckinputrouter.h"
+#include "perigee/display/physicaldisplaycontroller.h"
 #include "streaming/sdleventcodes.h"
 
 #include <Limelight.h>
@@ -62,6 +63,26 @@ int enqueueSessionQuitEvent()
     return SDL_PushEvent(&event);
 }
 
+qint64 sdlMonotonicMilliseconds()
+{
+    const quint64 frequency = SDL_GetPerformanceFrequency();
+    if (frequency == 0) {
+        return qint64(SDL_GetTicks());
+    }
+    const quint64 counter = SDL_GetPerformanceCounter();
+    return qint64((counter / frequency) * 1000 +
+                  ((counter % frequency) * 1000) / frequency);
+}
+
+quint64 nextNonzeroEpoch(std::atomic<quint64>& counter)
+{
+    quint64 epoch = counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (epoch == 0) {
+        epoch = counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+    return epoch;
+}
+
 }
 
 class GameStreamSessionFacade final : public SessionFacade
@@ -106,20 +127,21 @@ public:
     }
     int physicalDisplayCount() const override
     {
-        return 3;
+        return m_Session ? m_Session->physicalDisplayCount() : 3;
     }
     int lastRequestedPhysicalDisplay() const override
     {
-        return 0;
+        return m_Session ? m_Session->lastRequestedPhysicalDisplay() : 0;
     }
     bool physicalDisplaySwitchActive() const override
     {
-        return false;
+        return m_Session && m_Session->physicalDisplaySwitchActive();
     }
     bool requestPhysicalDisplay(
-        int, PhysicalDisplayCompletion) override
+        int displayNumber, PhysicalDisplayCompletion completion) override
     {
-        return false;
+        return m_Session && m_Session->requestPhysicalDisplay(
+            displayNumber, std::move(completion));
     }
     bool requestClientDisconnect() override
     {
@@ -231,6 +253,7 @@ Session* Session::s_ActiveSession;
 QSemaphore Session::s_ActiveSessionSemaphore(1);
 SessionTransitionCoordinator* Session::s_TransitionCoordinator = nullptr;
 std::atomic<quint64> Session::s_NextDisplaySessionEpoch {0};
+std::atomic<quint64> Session::s_NextPhysicalDisplaySessionEpoch {0};
 
 void Session::clStageStarting(int stage)
 {
@@ -540,6 +563,21 @@ int Session::drSubmitDecodeUnit(PDECODE_UNIT du)
             SDL_UnlockMutex(s_ActiveSession->m_DecoderLock);
             if (ret == DR_OK) {
                 Session* session = s_ActiveSession;
+                if (session->m_PhysicalDisplayController != nullptr) {
+                    session->m_PhysicalDisplayController->notifyAcceptedFrame(
+                        [session](quint64 evidenceEpoch) {
+                            SDL_Event event {};
+                            event.type = SDL_USEREVENT;
+                            event.user.code =
+                                SDL_CODE_PERIGEE_POST_SHORTCUT_FRAME;
+                            event.user.data1 = reinterpret_cast<void*>(
+                                static_cast<uintptr_t>(
+                                    session->m_PhysicalDisplaySessionEpoch));
+                            event.user.data2 = reinterpret_cast<void*>(
+                                static_cast<uintptr_t>(evidenceEpoch));
+                            return SDL_PushEvent(&event) == 1;
+                        });
+                }
                 session->m_FirstFrameNotificationGate.notifyAcceptedFrame(
                     [session](quint64 evidenceEpoch) {
                         SDL_Event event {};
@@ -768,7 +806,9 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_TransitionCoordinator(s_TransitionCoordinator),
       m_DisplaySessionEpoch(
           s_NextDisplaySessionEpoch.fetch_add(1,
-              std::memory_order_relaxed) + 1)
+              std::memory_order_relaxed) + 1),
+      m_PhysicalDisplaySessionEpoch(
+          nextNonzeroEpoch(s_NextPhysicalDisplaySessionEpoch))
 {
 }
 
@@ -778,6 +818,10 @@ Session::~Session()
     // Use Session::exec() or DeferredSessionCleanupTask instead.
 
     releaseVideoSubsystem();
+
+    if (m_PhysicalDisplayController != nullptr) {
+        m_PhysicalDisplayController->cancel();
+    }
 
     // Session is a QML-owned GUI-thread object. Release Deck's context-bound
     // QML/GL resources here, before the associated engine and application exit.
@@ -799,6 +843,12 @@ bool Session::initialize(QQuickWindow* qtWindow)
 {
     m_QtWindow = qtWindow;
     m_FirstFrameNotificationGate.disarm();
+    m_PhysicalDisplayController = std::make_unique<PhysicalDisplayController>(
+        [] { return sdlMonotonicMilliseconds(); },
+        [this](int displayNumber) {
+            return m_InputHandler != nullptr &&
+                m_InputHandler->sendPhysicalDisplayShortcut(displayNumber);
+        });
 
 #ifdef Q_OS_LINUX
     QQmlEngine* engine = m_QtWindow != nullptr ? qmlEngine(m_QtWindow) : nullptr;
@@ -1423,6 +1473,18 @@ void Session::closeDeckInput(bool keepReleased)
 
 void Session::pumpDeckUi()
 {
+    const bool physicalDisplayAdvanced =
+        m_PhysicalDisplayController != nullptr &&
+        m_PhysicalDisplayController->checkDeadline();
+    if (physicalDisplayAdvanced) {
+        if (m_DeckController != nullptr) {
+            m_DeckController->refresh();
+        }
+        if (m_DeckSurfaceRenderer != nullptr) {
+            m_DeckSurfaceRenderer->markDirty();
+        }
+    }
+
     if (m_DeckInputRouter != nullptr && m_DeckInputRouter->isDeckOpen()) {
         applyDeckInputResult(m_DeckInputRouter->tick(SDL_GetTicks()));
     }
@@ -2175,6 +2237,35 @@ bool Session::toggleKeyboardCaptureFromShortcut()
         m_InputHandler->toggleKeyboardCaptureFromShortcut();
 }
 
+int Session::physicalDisplayCount() const
+{
+    return m_Preferences != nullptr
+        ? m_Preferences->deckPhysicalDisplayCount()
+        : 3;
+}
+
+int Session::lastRequestedPhysicalDisplay() const
+{
+    return m_PhysicalDisplayController != nullptr
+        ? m_PhysicalDisplayController->lastRequestedDisplay()
+        : 0;
+}
+
+bool Session::physicalDisplaySwitchActive() const
+{
+    return m_PhysicalDisplayController != nullptr &&
+        m_PhysicalDisplayController->active();
+}
+
+bool Session::requestPhysicalDisplay(
+    int displayNumber,
+    std::function<void(const ActionResult&)> completion)
+{
+    return m_PhysicalDisplayController != nullptr &&
+        m_PhysicalDisplayController->request(
+            displayNumber, std::move(completion));
+}
+
 bool Session::requestClientDisconnect(ClientDisconnectPolicy policy)
 {
     return SessionRequest::disconnectClient(
@@ -2830,6 +2921,25 @@ void Session::exec()
                 }
                 break;
             }
+            case SDL_CODE_PERIGEE_POST_SHORTCUT_FRAME:
+            {
+                const quint64 sessionEpoch = static_cast<quint64>(
+                    reinterpret_cast<uintptr_t>(event.user.data1));
+                const quint64 evidenceEpoch = static_cast<quint64>(
+                    reinterpret_cast<uintptr_t>(event.user.data2));
+                if (sessionEpoch == m_PhysicalDisplaySessionEpoch &&
+                        m_PhysicalDisplayController != nullptr &&
+                        m_PhysicalDisplayController->observeFreshFrame(
+                            evidenceEpoch)) {
+                    if (m_DeckController != nullptr) {
+                        m_DeckController->refresh();
+                    }
+                    if (m_DeckSurfaceRenderer != nullptr) {
+                        m_DeckSurfaceRenderer->markDirty();
+                    }
+                }
+                break;
+            }
             case SDL_CODE_FLUSH_WINDOW_EVENT_BARRIER:
                 m_FlushingWindowEventsRef--;
                 break;
@@ -3136,6 +3246,10 @@ void Session::exec()
 DispatchDeferredCleanup:
     // Switch back to synchronous logging mode
     StreamUtils::exitAsyncLoggingMode();
+
+    if (m_PhysicalDisplayController != nullptr) {
+        m_PhysicalDisplayController->cancel();
+    }
 
     if (m_DeckController != nullptr && m_DeckController->isOpen()) {
         closeDeckInput(false);
