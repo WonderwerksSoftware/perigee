@@ -67,7 +67,12 @@ def normalize_fixture_elf(path: pathlib.Path, rpath: str) -> None:
     )
 
 
-def valid_tree(root: pathlib.Path, kind: str) -> pathlib.Path:
+def valid_tree(
+    root: pathlib.Path,
+    kind: str,
+    *,
+    excluded_xcb_gl_plugin: str | None = None,
+) -> pathlib.Path:
     prefix = pathlib.Path() if kind == "tar" else pathlib.Path("usr")
     binary = root / prefix / "bin/perigee"
     binary.parent.mkdir(parents=True, exist_ok=True)
@@ -84,6 +89,19 @@ def valid_tree(root: pathlib.Path, kind: str) -> pathlib.Path:
     shutil.copy2("/usr/bin/true", plugin)
     plugin.chmod(0o644)
     normalize_fixture_elf(plugin, "$ORIGIN/../../lib")
+    xcb_gl_plugins = tuple(
+        root / prefix / "plugins/xcbglintegrations" / plugin_name
+        for plugin_name in (
+            "libqxcb-egl-integration.so",
+            "libqxcb-glx-integration.so",
+        )
+        if plugin_name != excluded_xcb_gl_plugin
+    )
+    for xcb_gl_plugin in xcb_gl_plugins:
+        xcb_gl_plugin.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2("/usr/bin/true", xcb_gl_plugin)
+        xcb_gl_plugin.chmod(0o644)
+        normalize_fixture_elf(xcb_gl_plugin, "$ORIGIN/../../lib")
     for module in (
         "QML",
         "QtCore",
@@ -121,7 +139,7 @@ def valid_tree(root: pathlib.Path, kind: str) -> pathlib.Path:
     for packaged, source in VERIFY.SOURCE_LICENSE_IDENTITIES.items():
         write(license_root / packaged, (source_root / source).read_bytes())
     elf_components: dict[pathlib.Path, str] = {}
-    for elf in (private_library, plugin):
+    for elf in (private_library, plugin, *xcb_gl_plugins):
         prefix_relative = elf.relative_to(root / prefix).as_posix()
         component = VERIFY.elf_license_component(prefix_relative, VERIFY.elf_soname(elf))
         elf_components[elf] = component
@@ -286,6 +304,8 @@ class VerifyLinuxArtifactsTest(unittest.TestCase):
         for relative in (
             "lib/libfixture.so.1",
             "plugins/platforms/libqwayland-generic.so",
+            "plugins/xcbglintegrations/libqxcb-egl-integration.so",
+            "plugins/xcbglintegrations/libqxcb-glx-integration.so",
         ):
             component = VERIFY.elf_license_component(relative, None)
             VERIFY.REVIEWED_LICENSE_DIGESTS[f"{component}/LICENSE.txt"] = fixture_digest
@@ -310,6 +330,16 @@ class VerifyLinuxArtifactsTest(unittest.TestCase):
         valid_tree(root, "tar")
         (root / "plugins/platforms/libqwayland-generic.so").unlink()
         self.assert_rejected(root, "tar", "missing Qt Wayland platform plugin")
+
+    def test_qt_xcb_opengl_integrations_are_required(self) -> None:
+        for plugin_name in (
+            "libqxcb-egl-integration.so",
+            "libqxcb-glx-integration.so",
+        ):
+            with self.subTest(plugin=plugin_name):
+                root = self.root / plugin_name
+                valid_tree(root, "tar", excluded_xcb_gl_plugin=plugin_name)
+                self.assert_rejected(root, "tar", "missing Qt XCB OpenGL integration plugin")
 
     def test_terminate_process_stops_the_launch_process_group(self) -> None:
         process = subprocess.Popen(

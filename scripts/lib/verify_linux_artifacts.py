@@ -89,6 +89,10 @@ WAYLAND_PLATFORM_PLUGINS = (
     "plugins/platforms/libqwayland-generic.so",
     "plugins/platforms/libqwayland-egl.so",
 )
+XCB_OPENGL_INTEGRATION_PLUGINS = (
+    "plugins/xcbglintegrations/libqxcb-egl-integration.so",
+    "plugins/xcbglintegrations/libqxcb-glx-integration.so",
+)
 REVIEWED_LICENSE_CATALOG_PATH = (
     SOURCE_ROOT / "scripts/lib/reviewed_linux_license_digests.tsv"
 )
@@ -1188,6 +1192,8 @@ def verify_tree(root: pathlib.Path, kind: str) -> None:
     prefix = pathlib.Path() if kind == "tar" else pathlib.Path("usr")
     if not any((root / prefix / relative).is_file() for relative in WAYLAND_PLATFORM_PLUGINS):
         fail("missing Qt Wayland platform plugin")
+    if not all((root / prefix / relative).is_file() for relative in XCB_OPENGL_INTEGRATION_PLUGINS):
+        fail("missing Qt XCB OpenGL integration plugin")
 
     executable = root / ("bin/perigee" if kind == "tar" else "usr/bin/perigee")
     if not executable.is_file() or not os.access(executable, os.X_OK):
