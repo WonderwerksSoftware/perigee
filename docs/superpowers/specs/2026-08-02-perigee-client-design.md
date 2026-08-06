@@ -4,6 +4,8 @@
 
 **Status:** Approved
 
+> **Display-switching update (2026-08-05):** The physical-display design, companion Polaris extension, and related server-fork requirement in this document are superseded by [Stock-Host Physical Display Switching and Polaris Integration Design](2026-08-05-stock-host-physical-display-switching-design.md). Perigee now targets an unmodified Polaris or Sunshine host and sends the stock Polaris display shortcut through the GameStream input path.
+
 **Working tagline:** Moonlight, brought closer.
 
 ## 1. Purpose
