@@ -19,6 +19,7 @@ public:
     Q_INVOKABLE bool setDeckKeyboardBindingFromNative(int keyModifiers,
                                                        quint32 nativeScanCode);
     Q_INVOKABLE bool setDeckControllerBinding(int controllerButtons);
+    Q_INVOKABLE bool setDeckPhysicalDisplayCount(int count);
     Q_INVOKABLE void resetDeckBindings();
     Q_INVOKABLE QString formatDeckKeyboardBinding(int keyModifiers,
                                                    int keyScancode) const;
@@ -170,6 +171,9 @@ public:
     Q_PROPERTY(int deckKeyScancode MEMBER deckKeyScancode NOTIFY deckBindingsChanged)
     Q_PROPERTY(int deckControllerButtons MEMBER deckControllerButtons NOTIFY deckBindingsChanged)
     Q_PROPERTY(bool legacyGamepadDisconnect MEMBER legacyGamepadDisconnect NOTIFY legacyGamepadDisconnectChanged)
+    Q_PROPERTY(int deckPhysicalDisplayCount READ deckPhysicalDisplayCount
+               WRITE setDeckPhysicalDisplayCount
+               NOTIFY deckPhysicalDisplayCountChanged)
 
     Q_INVOKABLE bool retranslate();
 
@@ -218,6 +222,8 @@ public:
     int deckControllerButtons;
     bool legacyGamepadDisconnect;
 
+    int deckPhysicalDisplayCount() const;
+
 signals:
     void displayModeChanged();
     void bitrateChanged();
@@ -257,6 +263,7 @@ signals:
     void rendererSelectionChanged();
     void deckBindingsChanged();
     void legacyGamepadDisconnectChanged();
+    void deckPhysicalDisplayCountChanged();
 
 private:
     explicit StreamingPreferences(QQmlEngine *qmlEngine);
@@ -264,4 +271,5 @@ private:
     QString getSuffixFromLanguage(Language lang);
 
     QQmlEngine* m_QmlEngine;
+    int m_DeckPhysicalDisplayCount = 3;
 };

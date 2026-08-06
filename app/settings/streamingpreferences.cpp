@@ -54,6 +54,7 @@
 #define SER_KEEPAWAKE "keepawake"
 #define SER_LANGUAGE "language"
 #define SER_RENDERER "renderer"
+#define SER_DECK_PHYSICAL_DISPLAY_COUNT "deckPhysicalDisplayCount"
 
 #define CURRENT_DEFAULT_VER 2
 
@@ -178,6 +179,8 @@ void StreamingPreferences::reload()
     deckKeyScancode = deckBindings.keyScancode();
     deckControllerButtons = int(deckBindings.controllerButtons());
     legacyGamepadDisconnect = deckBindings.legacyGamepadDisconnect();
+    m_DeckPhysicalDisplayCount = qBound(
+        1, settings.value(SER_DECK_PHYSICAL_DISPLAY_COUNT, 3).toInt(), 13);
 
 
     // Perform default settings updates as required based on last default version
@@ -373,6 +376,8 @@ void StreamingPreferences::save()
     settings.setValue(SER_SWAPFACEBUTTONS, swapFaceButtons);
     settings.setValue(SER_CAPTURESYSKEYS, captureSysKeysMode);
     settings.setValue(SER_KEEPAWAKE, keepAwake);
+    settings.setValue(SER_DECK_PHYSICAL_DISPLAY_COUNT,
+                      qBound(1, m_DeckPhysicalDisplayCount, 13));
     deckBindings.save(settings);
 }
 
@@ -412,6 +417,23 @@ bool StreamingPreferences::setDeckControllerBinding(int controllerButtons)
     }
     deckControllerButtons = int(bindings.controllerButtons());
     emit deckBindingsChanged();
+    return true;
+}
+
+int StreamingPreferences::deckPhysicalDisplayCount() const
+{
+    return m_DeckPhysicalDisplayCount;
+}
+
+bool StreamingPreferences::setDeckPhysicalDisplayCount(int count)
+{
+    const int normalizedCount = qBound(1, count, 13);
+    if (m_DeckPhysicalDisplayCount == normalizedCount) {
+        return true;
+    }
+
+    m_DeckPhysicalDisplayCount = normalizedCount;
+    emit deckPhysicalDisplayCountChanged();
     return true;
 }
 

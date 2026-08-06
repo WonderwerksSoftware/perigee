@@ -44,6 +44,7 @@ private slots:
     void init();
     void actualPropertiesExposeAndEmitTheirNotifySignals();
     void actualSaveAndReloadRoundTripValidatedDeckBindings();
+    void physicalDisplayCountClampsAndPersists();
     void unsupportedPlatformRejectsNativeCaptureWithoutChangingBinding();
 
 private:
@@ -107,6 +108,7 @@ void StreamingPreferencesTest::actualPropertiesExposeAndEmitTheirNotifySignals()
         {"deckKeyScancode", "deckBindingsChanged"},
         {"deckControllerButtons", "deckBindingsChanged"},
         {"legacyGamepadDisconnect", "legacyGamepadDisconnectChanged"},
+        {"deckPhysicalDisplayCount", "deckPhysicalDisplayCountChanged"},
     };
     for (const ExpectedProperty& property : expected) {
         const int index = meta->indexOfProperty(property.name);
@@ -130,6 +132,15 @@ void StreamingPreferencesTest::actualPropertiesExposeAndEmitTheirNotifySignals()
         &StreamingPreferences::legacyGamepadDisconnectChanged);
     QVERIFY(preferences.setProperty("legacyGamepadDisconnect", true));
     QCOMPARE(legacyChanged.size(), 1);
+
+    QSignalSpy displayCountChanged(
+        &preferences, SIGNAL(deckPhysicalDisplayCountChanged()));
+    QVERIFY(displayCountChanged.isValid());
+    QVERIFY(preferences.setProperty("deckPhysicalDisplayCount", 14));
+    QCOMPARE(preferences.property("deckPhysicalDisplayCount").toInt(), 13);
+    QCOMPARE(displayCountChanged.size(), 1);
+    QVERIFY(preferences.setProperty("deckPhysicalDisplayCount", 13));
+    QCOMPARE(displayCountChanged.size(), 1);
 }
 
 void StreamingPreferencesTest::actualSaveAndReloadRoundTripValidatedDeckBindings()
@@ -179,6 +190,63 @@ void StreamingPreferencesTest::actualSaveAndReloadRoundTripValidatedDeckBindings
     QCOMPARE(reloaded.deckKeyScancode, int(SDL_SCANCODE_F8));
     QCOMPARE(reloaded.deckControllerButtons, int(controller));
     QVERIFY(reloaded.legacyGamepadDisconnect);
+}
+
+void StreamingPreferencesTest::physicalDisplayCountClampsAndPersists()
+{
+    if (qEnvironmentVariableIsEmpty(
+            "PERIGEE_STREAMING_PREFERENCES_CHILD")) {
+        QProcess child;
+        QProcessEnvironment environment =
+            QProcessEnvironment::systemEnvironment();
+        environment.insert(
+            QStringLiteral("PERIGEE_STREAMING_PREFERENCES_CHILD"),
+            QStringLiteral("1"));
+        environment.insert(QStringLiteral("XDG_CONFIG_HOME"),
+                           m_SettingsDirectory.path());
+        child.setProcessEnvironment(environment);
+        child.setProgram(QCoreApplication::applicationFilePath());
+        child.setArguments({
+            QStringLiteral("StreamingPreferencesTest"),
+            QStringLiteral("physicalDisplayCountClampsAndPersists"),
+        });
+        child.start();
+        QVERIFY2(child.waitForStarted(), qPrintable(child.errorString()));
+        QVERIFY2(child.waitForFinished(30000),
+                 qPrintable(child.errorString()));
+        const QByteArray output = child.readAllStandardOutput() +
+            child.readAllStandardError();
+        QCOMPARE(child.exitStatus(), QProcess::NormalExit);
+        QVERIFY2(child.exitCode() == 0, output.constData());
+        return;
+    }
+
+    const struct TestCase {
+        int requested;
+        int expected;
+    } cases[] {
+        {0, 1},
+        {3, 3},
+        {14, 13},
+    };
+
+    for (const TestCase& testCase : cases) {
+        QSettings settings;
+        settings.clear();
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+
+        StreamingPreferences saved(nullptr);
+        QVERIFY(saved.setProperty("deckPhysicalDisplayCount",
+                                  testCase.requested));
+        QCOMPARE(saved.property("deckPhysicalDisplayCount").toInt(),
+                 testCase.expected);
+        saved.save();
+
+        StreamingPreferences reloaded(nullptr);
+        QCOMPARE(reloaded.property("deckPhysicalDisplayCount").toInt(),
+                 testCase.expected);
+    }
 }
 
 void StreamingPreferencesTest::unsupportedPlatformRejectsNativeCaptureWithoutChangingBinding()

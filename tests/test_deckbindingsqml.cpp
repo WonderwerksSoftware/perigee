@@ -3,6 +3,7 @@
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QAccessible>
+#include <QFile>
 #include <QQuickItem>
 #include <QtTest>
 
@@ -16,6 +17,8 @@ class FakeDeckPreferences final : public QObject
     Q_PROPERTY(int deckControllerButtons MEMBER deckControllerButtons NOTIFY deckBindingsChanged)
     Q_PROPERTY(bool legacyGamepadDisconnect MEMBER legacyGamepadDisconnect
                NOTIFY legacyGamepadDisconnectChanged)
+    Q_PROPERTY(int deckPhysicalDisplayCount MEMBER deckPhysicalDisplayCount
+               NOTIFY deckPhysicalDisplayCountChanged)
 
 public:
     int deckKeyModifiers = int(Qt::ControlModifier | Qt::AltModifier |
@@ -23,6 +26,7 @@ public:
     int deckKeyScancode = SDL_SCANCODE_SPACE;
     int deckControllerButtons = 0x650;
     bool legacyGamepadDisconnect = false;
+    int deckPhysicalDisplayCount = 3;
     int logicalKeyboardCaptureCalls = 0;
     int nativeKeyboardCaptureCalls = 0;
     int lastNativeModifiers = 0;
@@ -72,6 +76,17 @@ public:
         return true;
     }
 
+    Q_INVOKABLE bool setDeckPhysicalDisplayCount(int count)
+    {
+        const int normalizedCount = qBound(1, count, 13);
+        if (deckPhysicalDisplayCount == normalizedCount) {
+            return true;
+        }
+        deckPhysicalDisplayCount = normalizedCount;
+        emit deckPhysicalDisplayCountChanged();
+        return true;
+    }
+
     Q_INVOKABLE void resetDeckBindings()
     {
         legacyGamepadDisconnect = false;
@@ -82,6 +97,7 @@ public:
 signals:
     void deckBindingsChanged();
     void legacyGamepadDisconnectChanged();
+    void deckPhysicalDisplayCountChanged();
 };
 
 class FakeGamepadNavigation final : public QObject
@@ -118,6 +134,7 @@ private slots:
     void keypadClassificationModifierIsNotStoredAsPartOfShortcut();
     void keypadClassificationModifierDoesNotSatisfyModifierRequirement();
     void hidingTheSettingsViewCancelsControllerCapture();
+    void physicalDisplayCountControlUsesBoundedPreference();
     void focusableSettingsControlsExposeAccessibleDescriptions();
 };
 
@@ -290,6 +307,22 @@ void DeckBindingsQmlTest::hidingTheSettingsViewCancelsControllerCapture()
     QCOMPARE(root->property("captureMode").toString(), QString());
 }
 
+void DeckBindingsQmlTest::physicalDisplayCountControlUsesBoundedPreference()
+{
+    const QString sourcePath = QFINDTESTDATA(
+        "../app/gui/perigee/DeckBindingSettings.qml");
+    QVERIFY2(!sourcePath.isEmpty(), "Deck binding settings source not found");
+    QFile sourceFile(sourcePath);
+    QVERIFY(sourceFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QByteArray source = sourceFile.readAll();
+
+    QVERIFY(source.contains("objectName: \"deckPhysicalDisplayCount\""));
+    QVERIFY(source.contains("from: 1"));
+    QVERIFY(source.contains("to: 13"));
+    QVERIFY(source.contains(
+        "preferences.setDeckPhysicalDisplayCount(value)"));
+}
+
 void DeckBindingsQmlTest::focusableSettingsControlsExposeAccessibleDescriptions()
 {
     QQmlEngine engine;
@@ -314,6 +347,8 @@ void DeckBindingsQmlTest::focusableSettingsControlsExposeAccessibleDescriptions(
          QStringLiteral("Cancel binding capture")},
         {QStringLiteral("deckBindingsResetButton"),
          QStringLiteral("Reset Perigee Deck bindings")},
+        {QStringLiteral("deckPhysicalDisplayCount"),
+         QStringLiteral("Physical displays in Perigee Deck")},
         {QStringLiteral("legacyDisconnectCheck"),
          QStringLiteral("Legacy direct disconnect")},
     };

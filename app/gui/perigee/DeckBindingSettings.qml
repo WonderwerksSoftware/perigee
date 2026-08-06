@@ -223,6 +223,32 @@ GroupBox {
             }
         }
 
+        RowLayout {
+            Layout.fillWidth: true
+
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Physical displays in Deck")
+            }
+
+            SpinBox {
+                objectName: "deckPhysicalDisplayCount"
+                activeFocusOnTab: true
+                from: 1
+                to: 13
+                value: root.preferences ?
+                    root.preferences.deckPhysicalDisplayCount : 3
+                editable: true
+                Accessible.name: qsTr("Physical displays in Perigee Deck")
+                Accessible.description: qsTr("Set the number of physical host displays shown in Perigee Deck")
+                onValueModified: {
+                    if (root.preferences) {
+                        root.preferences.setDeckPhysicalDisplayCount(value)
+                    }
+                }
+            }
+        }
+
         CheckBox {
             objectName: "legacyDisconnectCheck"
             Layout.fillWidth: true
