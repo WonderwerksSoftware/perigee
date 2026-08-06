@@ -12,9 +12,9 @@ Version 0.1.0 is under development. It is not a production release.
 
 ## Purpose
 
-Perigee reduces the number of shortcuts that users must remember during a stream. Deck provides one searchable menu for session controls.
+Perigee reduces the number of shortcuts that you must remember during a stream. Deck gives you one searchable menu for session controls.
 
-Polaris is the primary host for enhanced controls. Standard Sunshine hosts keep the normal GameStream-compatible streaming path.
+Perigee works with standard Sunshine hosts. A Polaris host can add only the enhanced controls that it advertises.
 
 ## Implemented features
 
@@ -26,13 +26,20 @@ Polaris is the primary host for enhanced controls. Standard Sunshine hosts keep 
 - Restore the intended input-capture state when Deck closes.
 - Control mouse capture, keyboard capture, statistics, and window mode locally.
 - Disconnect the client or quit Perigee without ending the host session.
-- Use authenticated Polaris actions for named commands, text clipboard transfer, host-session control, and display selection.
-- Verify Polaris display changes with state readback and a decoded frame.
-- Attempt one rollback when a display change fails after mutation.
+- Select a physical host display with a keyboard, a pointer, or a controller.
+- Send the standard GameStream display shortcut. Perigee does not require a modified Polaris or Sunshine host.
+- Mark a display as **Last requested** only after a fresh video frame arrives.
+- Keep Deck open if video verification times out. Perigee does not scan displays or claim host readback.
 - Show controller glyphs for Xbox, PlayStation, Nintendo, and Steam Deck layouts.
 - Preserve ordinary Moonlight shortcuts and controller input while Deck is closed.
 
-Automated tests cover these features with local fixtures and a fake Polaris service. The cold Linux artifact gate is green. The Standard Sunshine path skips Polaris-only discovery, and Deck pointer targets retain clicks during list scrolling and model updates. A bounded Standard Sunshine stream smoke passed on the authorized staging path, including H.264 decode and first video/audio packets. Live keyboard, mouse, controller, display, recovery, and full Polaris stream acceptance remain open.
+Automated tests cover these features with local fixtures and a fake Polaris service. The cold Linux artifact gate is green.
+
+The standard Sunshine path does not start Polaris discovery. Deck pointer targets retain clicks during list changes and list movement.
+
+A bounded standard Sunshine stream test passed on the authorized staging path. The client decoded H.264 video and received video and audio packets.
+
+Live input, controller, physical display, and full Polaris acceptance are not complete.
 
 See the [live acceptance ledger](docs/testing/live-acceptance-2026-08.md) for the current release gate. It contains redacted results only. Exact host evidence stays in an ignored local file.
 
@@ -40,12 +47,17 @@ See the [live acceptance ledger](docs/testing/live-acceptance-2026-08.md) for th
 
 - Perigee can stream only one active host display at a time.
 - Perigee does not open concurrent displays in separate client windows.
-- Named commands are server-advertised actions. Perigee does not provide an arbitrary shell.
+- Perigee labels physical displays as **Display 1** through **Display 13**. The host does not supply names or previews.
+- The **Last requested** value is not an authoritative active-display value.
+- You must set the number of physical display items that Deck shows. The permitted range is 1 through 13.
+- Polaris named commands, text clipboard transfer, and host-session control are not live-qualified.
+- A named command must use an identifier that the Polaris host advertises. Perigee does not provide an arbitrary shell.
 - Clipboard transfer supports UTF-8 text only. The absolute client limit is 1 mebibyte (MiB).
-- Polaris display and command controls require the companion paired-client control endpoints.
 - The automatic Moonlight update feed is disabled. Perigee 0.1.0 has no replacement update feed.
 - Perigee release artifacts do not exist yet. Build the current source for development use.
-- Live Polaris, controller, multi-display, and KDE Wayland acceptance is pending. Standard Sunshine launch and bounded video/audio smoke have been verified; live Deck input acceptance is still pending.
+- Deck does not yet provide the planned **Manual**, **Adaptive**, and **Smart** quality modes.
+- Live Polaris, controller, physical display, and KDE Wayland acceptance is not complete.
+- Standard Sunshine launch and a bounded video and audio test are complete. Live Deck input acceptance is not complete.
 - Windows and macOS packaging inputs use the Perigee identity. Native release qualification is pending.
 - Flatpak packaging is not part of version 0.1.0.
 - Existing translation catalogs have not received a complete Perigee terminology update.
@@ -58,9 +70,14 @@ Perigee adds these focused layers:
 
 - `ActionRegistry` supplies stable actions, capability checks, permissions, confirmation rules, and result state.
 - `GameStreamAdapter` supplies local actions for standard Sunshine and GameStream-compatible sessions.
-- `PolarisAdapter` adds authenticated capability discovery and enhanced host actions.
+- `PolarisAdapter` adds authenticated discovery for capabilities that the Polaris host advertises.
 - Deck renders the user interface with Qt's QML declarative language and the existing stream overlay path.
 - The input router neutralizes remote input and gives Deck temporary local ownership.
+
+| Host | Stream path | Local Deck actions | Physical display request | Enhanced host actions |
+|---|---|---|---|---|
+| Standard Sunshine | GameStream-compatible | Available | Standard input shortcut | Not applicable |
+| Polaris | GameStream-compatible | Available | Standard input shortcut | Advertised official capabilities only |
 
 The first release target is Nobara Linux with KDE Plasma and Wayland. Perigee requires Qt 6.7 or newer.
 
@@ -188,6 +205,18 @@ The direct statistics chord remains `LB+RB+Back+X`.
 
 The **Legacy direct disconnect** setting restores the original controller disconnect behavior. The keyboard shortcut still opens Deck.
 
+## Physical display selection
+
+Set **Physical displays in Deck** to the number of physical host displays. You can select a value from 1 through 13.
+
+Deck shows one item for each configured display. Select **Display 1** through **Display 13** to send `Ctrl+Alt+Shift+F1` through `Ctrl+Alt+Shift+F13`.
+
+Perigee waits for a fresh video frame after the request. If a frame arrives, Perigee marks the display as **Last requested**.
+
+Perigee does not know the authoritative active physical display. It does not show connector names, host display names, or previews.
+
+If verification times out, Deck stays open and shows the failure. Perigee can request the last verified display one time.
+
 ## Polaris behavior
 
 Perigee uses the paired Moonlight client identity for Polaris Hypertext Transfer Protocol Secure (HTTPS) requests.
@@ -198,17 +227,29 @@ The client uses authenticated capability, permission, endpoint, and session data
 
 Unsupported or denied actions remain disabled with a reason. Perigee does not send guessed requests.
 
+Perigee uses only the capabilities that the connected Polaris host advertises.
+
+Physical display selection uses the GameStream input channel. It does not require a Polaris application programming interface (API) extension.
+
+Polaris stream-display modes, virtual displays, and physical monitor indexes are different concepts. Perigee does not combine these concepts.
+
 Named-command execution accepts only advertised identifiers and structured values. The client has no free-form command field.
 
-The companion implementation is maintained in the [WonderWerks Polaris fork](https://github.com/WonderwerksSoftware/polaris). Live qualification is pending.
+Automated tests cover named commands, text clipboard transfer, and host-session control. Live qualification of these actions is not complete.
 
 ## Standard Sunshine behavior
 
 Perigee keeps the inherited GameStream-compatible streaming path for standard [Sunshine](https://github.com/LizardByte/Sunshine) hosts.
 
-Local Deck actions remain available without Polaris. Polaris-only actions are hidden or disabled when the host does not advertise them.
+Local Deck actions and physical display requests are available without Polaris.
 
-Automated regression tests cover the fallback boundary. A bounded live Standard Sunshine launch and video/audio smoke passed. The client does not probe Polaris endpoints on an ordinary Sunshine host. Live keyboard, mouse, controller, Deck, statistics, and disconnect/quit acceptance remain open.
+Physical display selection uses the standard Moonlight shortcut. Perigee does not change the Sunshine host.
+
+Polaris-only actions are hidden or disabled when the host does not advertise them.
+
+Automated regression tests cover this boundary. A bounded standard Sunshine launch and video and audio test passed.
+
+The client does not probe Polaris endpoints on an ordinary Sunshine host. Live input and Deck acceptance are not complete.
 
 ## Contributing
 
@@ -246,6 +287,8 @@ These projects do not sponsor or endorse Perigee. Their names identify upstream 
 
 ## Documentation style
 
-The documentation uses guidance from [ASD-STE100 Issue 9](https://www.asd-ste100.org/assets/files/ASD-STE100_ISSUE9.pdf), dated 2025-01-15. It is not certified as ASD-STE100 compliant.
+The documentation uses guidance from [ASD-STE100 Issue 9](https://www.asd-ste100.org/assets/files/ASD-STE100_ISSUE9.pdf), dated 2025-01-15.
+
+The documentation uses short sentences, active voice, consistent terms, and American English spelling. It is not certified as ASD-STE100 compliant.
 
 The [official current-issue page](https://www.asd-ste100.org/STE_downloads.html) identifies the current standard.

@@ -1,38 +1,31 @@
 # Upstream pins
 
-This repository keeps the Perigee client and its companion Polaris host on
-explicit, reviewable upstream commits. Update a pin only after reviewing the
-intervening history and repeating the baseline checks below.
+This file records the upstream revisions that Perigee uses for code and contract reviews.
+
+Perigee does not require a modified host. The Polaris revision is a source reference, not a client dependency.
 
 ## Pinned revisions
 
-| Component | Fork / local checkout | Upstream | Pinned revision | Version |
-| --- | --- | --- | --- | --- |
-| Perigee client | `WonderwerksSoftware/perigee` | `moonlight-stream/moonlight-qt` | `546cb72e32e5ac04bbc7e0b3a254176e5696685a` | Moonlight `6.1.0` |
-| Polaris host | `WonderwerksSoftware/polaris`; sibling checkout `/home/wcfox/Documents/Codex/perigee-polaris` | `papi-ux/polaris` | `593754652dae557c3642590be2ffdef6f83b8647` | Polaris `1.3.4.5937546` |
+| Component | Upstream | Revision | Purpose |
+|---|---|---|---|
+| Perigee client base | `moonlight-stream/moonlight-qt` | `546cb72e32e5ac04bbc7e0b3a254176e5696685a` | Moonlight 6.1.0 streaming base |
+| Polaris contract review | `papi-ux/polaris` | `73014f91dc64b5510fec84f2f7eaf9f67065dc94` | Review of official advertised client controls |
 
-The Moonlight revision entered Perigee through merge commit
-`1cfaca6774134290cc3b3a9e0bddf02d683b23be`, preserving both histories. The
-Polaris checkout uses branch `perigee-client-control` directly at its pinned
-revision.
+Moonlight entered Perigee through merge commit `1cfaca6774134290cc3b3a9e0bddf02d683b23be`. The merge keeps both Git histories.
+
+The Polaris revision does not enter the Perigee source tree. It records the official source that was used for the API contract review.
 
 ## Remote roles
 
-- Perigee `origin`: authenticated HTTPS write remote for the WonderWerks fork.
-- Perigee `moonlight-upstream`: fetch-only-by-policy source of Moonlight Qt
-  updates. Never push project work to it.
-- Polaris `origin`: authenticated HTTPS write remote for the WonderWerks fork.
-- Polaris `polaris-upstream`: fetch-only-by-policy source of Polaris updates.
-  Never push project work to it.
+- Perigee `origin` is the write remote for the WonderWerksSoftware fork.
+- Perigee `moonlight-upstream` is the review source for Moonlight Qt updates.
+- Do not push Perigee work to `moonlight-upstream`.
 
-HTTPS is used because this workstation does not have a GitHub-authorized SSH
-key. GitHub CLI's credential helper supplies fork authentication without
-embedding a token in either remote URL.
+The Perigee remote uses authenticated HTTPS. The remote URL does not contain a token.
 
-## Intentional upstream synchronization
+## Moonlight update procedure
 
-Review and merge an explicit commit rather than silently following a moving
-branch:
+Review one explicit Moonlight commit. Do not follow a moving branch without review.
 
 ```bash
 git fetch moonlight-upstream master --tags
@@ -41,22 +34,29 @@ git merge --no-ff <reviewed-moonlight-commit>
 git submodule update --init --recursive
 ```
 
-For the companion host:
+After the merge, record the new full commit ID. Run the complete build and test gates before you commit the pin change.
 
-```bash
-git -C /home/wcfox/Documents/Codex/perigee-polaris fetch polaris-upstream master --tags
-git -C /home/wcfox/Documents/Codex/perigee-polaris log --oneline 593754652dae557c3642590be2ffdef6f83b8647..polaris-upstream/master
-git -C /home/wcfox/Documents/Codex/perigee-polaris merge --no-ff <reviewed-polaris-commit>
-git -C /home/wcfox/Documents/Codex/perigee-polaris submodule update --init --recursive
-```
+## Polaris contract review
 
-After either update, record the new full commit ID and rerun the applicable
-build and tests before committing the pin change.
+Perigee uses only official capabilities that a connected Polaris host advertises. The client does not select behavior from a Polaris version string.
 
-## Baseline verification (2026-08-02)
+The review at `73014f91dc64b5510fec84f2f7eaf9f67065dc94` covered these client contracts:
 
-Moonlight Qt was configured with qmake `3.1` / Qt `6.11.1` and built in debug
-mode:
+- Capability discovery
+- Paired-client permissions
+- Session status
+- Client settings
+- Named commands
+- Text clipboard transfer
+- Host-session stop
+
+Physical display selection is not part of the Polaris API contract. Perigee sends the standard GameStream keyboard shortcut through the stream input channel.
+
+Before you change a Polaris request, review the current official source. Update the review revision and the contract fixtures in the same change.
+
+## Moonlight baseline verification
+
+The baseline used qmake 3.1 and Qt 6.11.1. The debug build passed.
 
 ```bash
 mkdir -p build-baseline
@@ -66,41 +66,15 @@ CCACHE_DIR="$PWD/.ccache" make -j"$(nproc)" debug
 QT_QPA_PLATFORM=offscreen ./app/moonlight --version
 ```
 
-Result: build passed and the version command printed `Moonlight 6.1.0`. The
-build-local cache avoids this sandbox's read-only user ccache directory. The
-offscreen Qt backend is needed because the baseline shell cannot acquire a DRM
-device; a traced version invocation made no `bind()` or `listen()` calls.
+The version command printed `Moonlight 6.1.0`. The build-local cache prevents writes to the user cache.
 
-Polaris was configured without CUDA on this AMD host, then the requested fast
-test target was built and filtered:
-
-```bash
-CCACHE_DIR=/home/wcfox/Documents/Codex/perigee-polaris/build-tests/.ccache \
-  cmake -S /home/wcfox/Documents/Codex/perigee-polaris \
-  -B /home/wcfox/Documents/Codex/perigee-polaris/build-tests \
-  -DBUILD_TESTS=ON -DBUILD_FULL_TESTS=OFF -DCMAKE_BUILD_TYPE=Debug \
-  -DPOLARIS_ENABLE_CUDA=OFF
-CCACHE_DIR=/home/wcfox/Documents/Codex/perigee-polaris/build-tests/.ccache \
-  cmake --build /home/wcfox/Documents/Codex/perigee-polaris/build-tests \
-  --target test_polaris -j2
-/home/wcfox/Documents/Codex/perigee-polaris/build-tests/tests/test_polaris \
-  --gtest_filter=ClientSettingsAdvertisementTests.*
-```
-
-Result: Polaris configured as `1.3.4.5937546`, `test_polaris` built, and both
-filtered tests passed (`2/2`).
+The offscreen Qt backend is necessary when the shell cannot use a Direct Rendering Manager (DRM) device.
 
 ## GPL and attribution rules
 
-- Keep the preserved upstream histories, GPLv3 license text, copyright notices,
-  author notices, and no-warranty notices intact.
-- Mark distributed modifications prominently, including their dates, and do not
-  represent Perigee or its Polaris companion changes as upstream releases.
-- When distributing binaries or object code, provide the complete corresponding
-  source under GPLv3 using a license-compliant method, including the scripts and
-  source needed to build and install the covered work.
-- Preserve the separate licenses and notices of bundled dependencies and
-  submodules; GPLv3 coverage does not erase their attribution requirements.
-- Attribution must not imply endorsement by Moonlight, Polaris, or their
-  contributors. Branding and trademark permission are separate from the source
-  license.
+- Keep the upstream Git history, GPLv3 license text, copyright notices, author notices, and no-warranty notices.
+- Identify distributed Perigee modifications and their dates. Do not identify Perigee as an upstream Moonlight release.
+- When you distribute binaries, provide the complete corresponding source with a GPLv3-compliant method.
+- Include the scripts and source that are necessary to build and install the covered work.
+- Keep the separate licenses and notices for dependencies and submodules.
+- Do not imply endorsement by Moonlight, Polaris, or their contributors.
