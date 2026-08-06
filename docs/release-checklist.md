@@ -46,7 +46,7 @@ Review every changed component identity, file, and legal text. Do not approve a 
 
 ## 2. Run the automated tests
 
-Run the complete QtTest suite. For version 0.1.0, the expected count is 612 passes and zero failures.
+Run the complete QtTest suite. For version 0.1.0, the expected count is 600 passes and zero failures.
 
 ```sh
 xvfb-run -a -s '-screen 0 1280x720x24' \
