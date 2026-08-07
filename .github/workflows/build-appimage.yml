@@ -460,6 +460,12 @@ jobs:
             build/artifacts-a/Perigee-$version-linux-x86_64.tar.zst \
             build/artifacts-b/Perigee-$version-linux-x86_64.tar.zst
 
+      - name: Verify isolated release candidates
+        if: inputs.job_kind == 'artifacts'
+        run: |
+          PERIGEE_ARTIFACT_DIR="$GITHUB_WORKSPACE/build/artifacts-a" scripts/verify-linux-artifacts.sh
+          PERIGEE_ARTIFACT_DIR="$GITHUB_WORKSPACE/build/artifacts-b" scripts/verify-linux-artifacts.sh
+
       - name: Build tests
         if: inputs.job_kind == 'qttest' || inputs.job_kind == 'sunshine'
         run: |

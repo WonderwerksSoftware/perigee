@@ -413,7 +413,7 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn("steps.sources.outputs.fingerprint", self.workflow)
         self.assertIn("hashFiles('.github/workflows/build-appimage.yml'", self.workflow)
 
-    def test_build_and_verifier_install_the_same_sorted_ubuntu_package_set(self) -> None:
+    def test_build_and_packaging_jobs_install_the_same_sorted_ubuntu_package_set(self) -> None:
         verifier_workflow = (
             SOURCE_ROOT / ".github/workflows/perigee-ci.yml"
         ).read_text(encoding="utf-8")
@@ -423,7 +423,16 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn(package_file, verifier_workflow)
         self.assertIn("xargs -r sudo apt-get install --yes", self.workflow)
         self.assertIn("xargs -r sudo apt-get install --yes", verifier_workflow)
-        self.assertIn("dpkg-query -W -f='${Package}=${Version}\\n'", verifier_workflow)
+
+    def test_artifact_producer_verifies_both_candidates_before_upload(self) -> None:
+        first_upload = self.workflow.index("- name: Upload candidate A AppImage")
+        for candidate in ("a", "b"):
+            command = (
+                f'PERIGEE_ARTIFACT_DIR="$GITHUB_WORKSPACE/build/artifacts-{candidate}" '
+                "scripts/verify-linux-artifacts.sh"
+            )
+            self.assertIn(command, self.workflow)
+            self.assertLess(self.workflow.index(command), first_upload)
 
     def test_ci_uploads_and_matches_producer_dpkg_package_provenance(self) -> None:
         verifier_workflow = PIPELINE.read_text(encoding="utf-8")
@@ -437,8 +446,13 @@ class LinuxPackagingContractTest(unittest.TestCase):
                     f"Perigee-Linux{kind}-{candidate}-dpkg-${{{{ github.sha }}}}",
                     verifier_workflow,
                 )
-        self.assertIn("cmp --silent ci-provenance/verifier-dpkg-packages.txt", verifier_workflow)
-        self.assertIn("verifier package set differs from producer", verifier_workflow)
+        self.assertIn(
+            "reference=ci-provenance/appimage-a/perigee-dpkg-packages.txt",
+            verifier_workflow,
+        )
+        self.assertIn('cmp --silent "$reference" "$producer"', verifier_workflow)
+        self.assertIn("producer package provenance differs", verifier_workflow)
+        self.assertNotIn("verifier-dpkg-packages.txt", verifier_workflow)
 
     def test_ci_runs_packaging_tests_before_artifact_production(self) -> None:
         pipeline = PIPELINE.read_text(encoding="utf-8")
@@ -483,8 +497,9 @@ class LinuxPackagingContractTest(unittest.TestCase):
                     pipeline,
                 )
             self.assertIn(
-                f"PERIGEE_ARTIFACT_DIR: ${{{{ github.workspace }}}}/ci-artifacts/{candidate}",
-                pipeline,
+                f'PERIGEE_ARTIFACT_DIR="$GITHUB_WORKSPACE/build/artifacts-{candidate}" '
+                "scripts/verify-linux-artifacts.sh",
+                self.workflow,
             )
         self.assertIn("Compare downloaded candidate bytes", pipeline)
 
