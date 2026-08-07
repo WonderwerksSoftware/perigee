@@ -73,6 +73,7 @@ HOST_RUNTIME_NEEDED = frozenset(
         "libxcb.so.1",
         "libxcb-cursor.so.0",
         "libxcb-dri3.so.0",
+        "libxcb-glx.so.0",
         "libxcb-icccm.so.4",
         "libxcb-image.so.0",
         "libxcb-keysyms.so.1",

@@ -526,6 +526,15 @@ class VerifyLinuxArtifactsTest(unittest.TestCase):
         with self.assertRaisesRegex(VERIFY.VerificationError, "unresolved ELF dependency"):
             VERIFY.verify_elf_dependency_closure(root, [binary])
 
+    def test_qt_xcb_glx_dependency_remains_host_provided(self) -> None:
+        soname = "libxcb-glx.so.0"
+        self.assertTrue(STAGE.is_excluded_library(soname))
+
+        root = self.root / "host-xcb-glx"
+        binary = valid_tree(root, "tar")
+        subprocess.run(["patchelf", "--add-needed", soname, str(binary)], check=True)
+        VERIFY.verify_elf_dependency_closure(root, [binary])
+
     def test_needed_provider_must_be_a_private_library_with_matching_soname(self) -> None:
         root = self.root / "mislocated-needed"
         binary = valid_tree(root, "tar")
