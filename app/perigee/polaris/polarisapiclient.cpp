@@ -550,6 +550,21 @@ private:
         return iterator == m_Active.end() ? nullptr : iterator->second.get();
     }
 
+    bool authenticateExactPeer(ActiveRequest* active)
+    {
+        if (active->authenticated) {
+            return true;
+        }
+        const QSslCertificate peer =
+            m_Backend->peerLeafCertificate(active->reply);
+        if (!PolarisApiClient::acceptsExactPairedIdentity(
+                m_ExpectedLeaf, peer)) {
+            return false;
+        }
+        active->authenticated = true;
+        return true;
+    }
+
     void handleSslErrors(PolarisApiClient::RequestId requestId,
                          const QList<QSslError>& errors)
     {
@@ -576,23 +591,30 @@ private:
         if (active == nullptr) {
             return;
         }
-        const QSslCertificate peer =
-            m_Backend->peerLeafCertificate(active->reply);
-        if (!PolarisApiClient::acceptsExactPairedIdentity(
-                m_ExpectedLeaf, peer)) {
+        if (!authenticateExactPeer(active)) {
             PolarisResponse response;
             response.errorCode = QStringLiteral("tls_identity_mismatch");
             response.userMessage = userMessageForError(response.errorCode);
             complete(requestId, std::move(response), true);
-            return;
         }
-        active->authenticated = true;
     }
 
     void handleReadyRead(PolarisApiClient::RequestId requestId)
     {
         ActiveRequest* active = find(requestId);
         if (active == nullptr) {
+            return;
+        }
+        // QNetworkReply::encrypted() is not emitted for every request when
+        // QNetworkAccessManager reuses an existing TLS connection. Data still
+        // remains untrusted until the reused connection presents the exact
+        // certificate pinned during pairing.
+        if (active->reply->bytesAvailable() > 0 &&
+                !authenticateExactPeer(active)) {
+            PolarisResponse response;
+            response.errorCode = QStringLiteral("tls_identity_mismatch");
+            response.userMessage = userMessageForError(response.errorCode);
+            complete(requestId, std::move(response), true);
             return;
         }
         active->idleTimer->start(
@@ -633,15 +655,20 @@ private:
             return;
         }
 
-        PolarisResponse response;
-        response.httpStatus = active->reply->attribute(
+        const int httpStatus = active->reply->attribute(
             QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const bool hasUsableHttpStatus =
+            httpStatus >= 100 && httpStatus <= 599;
+        if (!active->authenticated && hasUsableHttpStatus) {
+            authenticateExactPeer(active);
+        }
+
+        PolarisResponse response;
+        response.httpStatus = httpStatus;
         response.body = active->body;
         response.authenticated = active->authenticated;
         const QNetworkReply::NetworkError replyError =
             active->reply->error();
-        const bool hasUsableHttpStatus =
-            response.httpStatus >= 100 && response.httpStatus <= 599;
         if (!active->authenticated &&
                 replyError != QNetworkReply::NoError &&
                 replyError != QNetworkReply::SslHandshakeFailedError) {

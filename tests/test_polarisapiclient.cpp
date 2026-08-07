@@ -334,6 +334,7 @@ private slots:
     void rejectsEndpointOriginAndPathEscapes();
     void usesIdentitySslAndDedicatedNetworkThread();
     void acceptsOnlyExactCertificateSslErrors();
+    void acceptsExactPeerOnReusedConnectionWithoutEncryptedSignal();
     void failsClosedForMissingMismatchedAndMixedIdentity();
     void classifiesPreTlsNetworkErrors_data();
     void classifiesPreTlsNetworkErrors();
@@ -466,6 +467,29 @@ void PolarisApiClientTest::acceptsOnlyExactCertificateSslErrors()
     QVERIFY(response.errorCode.isEmpty());
 }
 
+void PolarisApiClientTest::
+acceptsExactPeerOnReusedConnectionWithoutEncryptedSignal()
+{
+    const QSslCertificate expected =
+        IdentityManager::get()->getSslConfig().localCertificate();
+    auto state = std::make_shared<FakeNetworkState>();
+    ReplyScript reused{200, {QByteArrayLiteral("{\"ok\":true}")}, expected};
+    reused.emitEncrypted = false;
+    enqueue(state, reused);
+    PolarisApiClient client(pairedComputer(expected),
+        std::make_unique<FakeNetworkBackend>(state));
+    PolarisResponse response;
+
+    client.get(QStringLiteral("/polaris/v1/status"), true,
+        [&](auto, const PolarisResponse& value) { response = value; });
+    QVERIFY(waitForCompletion(client));
+    client.drainCompletions();
+
+    QVERIFY(response.authenticated);
+    QVERIFY(response.errorCode.isEmpty());
+    QCOMPARE(response.json.object().value(QStringLiteral("ok")).toBool(), true);
+}
+
 void PolarisApiClientTest::rejectsEndpointOriginAndPathEscapes()
 {
     QFETCH(QString, endpoint);
@@ -535,9 +559,6 @@ void PolarisApiClientTest::failsClosedForMissingMismatchedAndMixedIdentity()
     mixed.sslErrors = {QSslError(QSslError::SelfSignedCertificate, expected),
                        QSslError(QSslError::CertificateExpired, other)};
     enqueue(state, mixed);
-    ReplyScript missingEncrypted{200, {}, expected};
-    missingEncrypted.emitEncrypted = false;
-    enqueue(state, missingEncrypted);
     ReplyScript handshakeFailure{0, {}, expected};
     handshakeFailure.emitEncrypted = false;
     handshakeFailure.networkError = QNetworkReply::SslHandshakeFailedError;
@@ -553,14 +574,14 @@ void PolarisApiClientTest::failsClosedForMissingMismatchedAndMixedIdentity()
 
     PolarisApiClient client(pairedComputer(expected),
         std::make_unique<FakeNetworkBackend>(state));
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 4; ++i) {
         client.get(QStringLiteral("/polaris/v1/status"), false,
             [&](auto, const PolarisResponse& response) { responses << response; });
     }
-    QTRY_VERIFY_WITH_TIMEOUT(client.pendingCompletionCount() == 5, 1000);
+    QTRY_VERIFY_WITH_TIMEOUT(client.pendingCompletionCount() == 4, 1000);
     client.drainCompletions();
 
-    QCOMPARE(responses.size(), 6);
+    QCOMPARE(responses.size(), 5);
     for (const PolarisResponse& response : responses) {
         QCOMPARE(response.errorCode, QStringLiteral("tls_identity_mismatch"));
         QVERIFY(!response.authenticated);

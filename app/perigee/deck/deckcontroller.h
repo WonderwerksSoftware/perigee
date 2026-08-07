@@ -23,6 +23,7 @@ class DeckController final : public QObject
     Q_PROPERTY(QStringList categories READ categories CONSTANT)
     Q_PROPERTY(ActionListModel* actionModel READ actionModel CONSTANT)
     Q_PROPERTY(ControllerLayout* controllerLayout READ controllerLayout CONSTANT)
+    Q_PROPERTY(bool controllerConnected READ controllerConnected WRITE setControllerConnected NOTIFY controllerConnectedChanged)
     Q_PROPERTY(bool confirmationVisible READ confirmationVisible NOTIFY confirmationChanged)
     Q_PROPERTY(QString confirmationActionLabel READ confirmationActionLabel NOTIFY confirmationChanged)
     Q_PROPERTY(QString confirmationMessage READ confirmationMessage NOTIFY confirmationChanged)
@@ -49,6 +50,7 @@ public:
     const ActionListModel* actionModel() const;
     ControllerLayout* controllerLayout();
     const ControllerLayout* controllerLayout() const;
+    bool controllerConnected() const;
     bool confirmationVisible() const;
     QString confirmationActionLabel() const;
     QString confirmationMessage() const;
@@ -57,6 +59,7 @@ public:
     Q_INVOKABLE void openFromController();
     void setControllerLayout(ControllerLayout::Family family,
                              bool swapFaceButtons);
+    void setControllerConnected(bool connected);
     Q_INVOKABLE void close();
     Q_INVOKABLE void setSearchText(const QString& searchText);
     Q_INVOKABLE void selectCategory(int categoryIndex);
@@ -83,6 +86,7 @@ signals:
     void focusModeChanged();
     void textInputRequestedChanged();
     void confirmationChanged();
+    void controllerConnectedChanged();
 
 private:
     static ActionCategory categoryForIndex(int categoryIndex);
@@ -93,6 +97,7 @@ private:
     ActionRegistry* m_Registry;
     ActionListModel m_ActionModel;
     ControllerLayout m_ControllerLayout;
+    bool m_ControllerConnected = false;
     bool m_IsOpen = false;
     FocusRegion m_FocusRegion = SearchRegion;
     QString m_SearchText;

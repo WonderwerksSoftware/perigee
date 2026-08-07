@@ -516,6 +516,33 @@ class LinuxPackagingContractTest(unittest.TestCase):
         self.assertIn("reviewed_linux_license_digests.tsv", verifier)
         self.assertIn("reviewed license catalog", verifier)
 
+    def test_xcb_opengl_plugins_have_the_reviewed_qtbase_license_set(self) -> None:
+        catalog = LICENSE_CATALOG_PATH.read_text(encoding="utf-8").splitlines()
+        parsed = {
+            relative: digest
+            for line in catalog
+            if line and not line.startswith("#")
+            for digest, relative in (line.split("  ", 1),)
+        }
+        reference = "elf/path-plugins_platforms_libqxcb.so-c680991dcc1b7887/"
+        expected = {
+            relative.removeprefix(reference): digest
+            for relative, digest in parsed.items()
+            if relative.startswith(reference)
+        }
+        self.assertTrue(expected)
+        for component in (
+            "elf/path-plugins_xcbglintegrations_libqxcb-egl-integration.so-e0b132e1fccc3c72/",
+            "elf/path-plugins_xcbglintegrations_libqxcb-glx-integration.so-6e2bfeecbeb52ec3/",
+        ):
+            with self.subTest(component=component):
+                actual = {
+                    relative.removeprefix(component): digest
+                    for relative, digest in parsed.items()
+                    if relative.startswith(component)
+                }
+                self.assertEqual(actual, expected)
+
     def test_rpm_license_discovery_never_walks_runtime_dependencies(self) -> None:
         stager = STAGE_PATH.read_text(encoding="utf-8")
         self.assertIn('"-ql", package', stager)

@@ -1034,3 +1034,13 @@ int SdlInputHandler::getAttachedGamepadMask()
 
     return mask;
 }
+
+bool SdlInputHandler::hasAttachedGamepad() const
+{
+    for (const GamepadState& state : m_GamepadState) {
+        if (state.controller != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}

@@ -105,6 +105,7 @@ private slots:
     void productionCatalogIsReachableByCategoryWithoutSearch();
     void controllerOperatesPhysicalDisplaysAndKeepsDeckOpen();
     void controllerOpenPublishesEffectiveGlyphLayout();
+    void controllerPresenceIsExplicitAndObservable();
     void refreshPreservesFocusedActionAndUpdatesItsState();
     void backUnwindsConfirmationActionsSearchAndDeck();
     void confirmationCanBeCancelledOrAccepted();
@@ -424,6 +425,25 @@ void DeckControllerTest::controllerOpenPublishesEffectiveGlyphLayout()
              QStringLiteral("B"));
     QCOMPARE(controller.controllerLayout()->searchLabel(),
              QStringLiteral("Y"));
+}
+
+void DeckControllerTest::controllerPresenceIsExplicitAndObservable()
+{
+    DeckController controller;
+    QSignalSpy changed(&controller,
+                       &DeckController::controllerConnectedChanged);
+
+    QVERIFY(!controller.controllerConnected());
+    controller.setControllerConnected(true);
+    QVERIFY(controller.controllerConnected());
+    QCOMPARE(changed.size(), 1);
+
+    controller.setControllerConnected(true);
+    QCOMPARE(changed.size(), 1);
+
+    controller.setControllerConnected(false);
+    QVERIFY(!controller.controllerConnected());
+    QCOMPARE(changed.size(), 2);
 }
 
 void DeckControllerTest::refreshPreservesFocusedActionAndUpdatesItsState()

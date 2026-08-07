@@ -25,7 +25,7 @@ CI uses Khronos Vulkan-Headers from commit `409c16be502e39fe70dd6fe2d9ad4842ef2c
 
 Confirm that the reviewed license catalog covers the exact producer profile. The Ubuntu 22.04 plus aqt Qt 6.8.3 profile is open. Stop an Ubuntu or CI release until its actual cold-produced dependency license set is reviewed and added.
 
-The Ubuntu CI producer uploads its complete `dpkg-query` package/version manifest with each AppImage and Linux tar artifact. The verifier job installs the same sorted package manifest and compares its own manifest with both producer manifests before it verifies the artifacts. A package-set mismatch is a release failure.
+The Ubuntu CI producer verifies both isolated AppImage and Linux tar candidates before upload. It uploads its complete sorted `dpkg-query` package/version manifest with each artifact. The CI consumer compares all four producer manifests with each other and compares candidate A with candidate B byte for byte. It does not compare the producer manifest with the package state of a different runner. A producer-provenance or candidate-byte mismatch is a release failure.
 
 The stager records package-managed library provenance in `system-provenance.tsv`. The verifier checks the library package and license-owner package independently. It requires exact package versions, package listings, source paths, source bytes, and license bytes. A notice from another package is accepted only when both packages have the exact same source identity (source RPM on RPM systems, or source package and version on dpkg systems). The stager does not walk runtime dependencies and does not borrow a notice from a package with a different source identity.
 
@@ -46,7 +46,7 @@ Review every changed component identity, file, and legal text. Do not approve a 
 
 ## 2. Run the automated tests
 
-Run the complete QtTest suite. For version 0.1.0, the expected count is 608 passes and zero failures.
+Run the complete QtTest suite. For version 0.1.0, the expected count is 615 passes and zero failures.
 
 ```sh
 xvfb-run -a -s '-screen 0 1280x720x24' \

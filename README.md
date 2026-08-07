@@ -19,6 +19,8 @@ Perigee works with standard Sunshine hosts. A Polaris host can add only the enha
 ## Implemented features
 
 - Open Deck from a keyboard or controller. Use a keyboard, mouse, or controller inside Deck.
+- Show keyboard prompts when no client controller is open. Show controller prompts when the client opens a controller.
+- Ignore Caps Lock when Perigee checks the Deck keyboard shortcut.
 - Search actions in the Display, Quality, Input, Clipboard, Stats, Window, and Session categories.
 - Navigate all core actions without text input.
 - Show current values, progress, disabled reasons, confirmations, and verified results.
@@ -36,13 +38,13 @@ Perigee works with standard Sunshine hosts. A Polaris host can add only the enha
 - Show controller glyphs for Xbox, PlayStation, Nintendo, and Steam Deck layouts.
 - Preserve ordinary Moonlight shortcuts and controller input while Deck is closed.
 
-Automated tests cover these features with local fixtures and a fake Polaris service. The cold Linux artifact gate is green.
+Automated tests cover these features with local fixtures and a fake Polaris service. Linux packages pass a cold-artifact gate before publication.
 
 The standard Sunshine path does not start Polaris discovery. Deck pointer targets retain clicks during list changes and list movement.
 
 A bounded standard Sunshine stream test passed on the authorized staging path. The client decoded H.264 video and received video and audio packets.
 
-Live input, controller, physical display, and full Polaris acceptance are not complete.
+Live keyboard, pointer, and physical-display acceptance passed on the Linux staging path. Controller navigation and full Polaris quality acceptance are pending.
 
 See the [live acceptance ledger](docs/testing/live-acceptance-2026-08.md) for the current release gate. It contains redacted results only. Exact host evidence stays in an ignored local file.
 
@@ -57,12 +59,12 @@ See the [live acceptance ledger](docs/testing/live-acceptance-2026-08.md) for th
 - A named command must use an identifier that the Polaris host advertises. Perigee does not provide an arbitrary shell.
 - Clipboard transfer supports UTF-8 text only. The absolute client limit is 1 mebibyte (MiB).
 - The automatic Moonlight update feed is disabled. Perigee 0.1.0 has no replacement update feed.
-- Perigee release artifacts do not exist yet. Build the current source for development use.
+- Perigee 0.1.0 does not have a public release package. Build the source or use a verified artifact from the project workflow.
 - Standard Sunshine does not support a Moonlight request to change bitrate during an active stream.
 - Polaris live quality control requires advertised capabilities, owner permission, and valid settings readback.
 - A separate **Smart quality** mode is deferred. The current Polaris API links adaptive bitrate and its artificial intelligence (AI) optimizer.
-- Live Polaris, controller, physical display, and KDE Wayland acceptance is not complete.
-- Standard Sunshine launch and a bounded video and audio test are complete. Live Deck input acceptance is not complete.
+- Live controller and full Polaris quality acceptance are not complete.
+- Standard Sunshine launch, video, audio, Deck pointer input, and physical display selection passed on the Linux staging path.
 - Windows and macOS packaging inputs use the Perigee identity. Native release qualification is pending.
 - Flatpak packaging is not part of version 0.1.0.
 - Existing translation catalogs have not received a complete Perigee terminology update.
@@ -92,7 +94,9 @@ Host and hardware support still apply.
 
 ## Installation
 
-Perigee does not have a verified release package. Use a local development build from this repository.
+Perigee does not have a public release package. Use a local development build or a verified Linux artifact from this repository's successful build workflow.
+
+The workflow verifies each Linux artifact in the same environment that produced it. Do not install an artifact from a failed or incomplete workflow.
 
 Do not use Moonlight release packages as Perigee packages. Those packages have a different identity and settings namespace.
 
@@ -196,6 +200,8 @@ Some integration tests create private loopback services. They do not require a l
 
 The default Deck keyboard shortcut is `Ctrl+Alt+Shift+Space`.
 
+Caps Lock does not change this shortcut. Perigee checks the required keys and ignores the Caps Lock state.
+
 The default Deck controller chord is `LB+RB+Back+Start`. Change both bindings in the Perigee settings.
 
 Use these controls while Deck is open:
@@ -205,6 +211,8 @@ Use these controls while Deck is open:
 - Press `Escape` or the controller back button to go back or close Deck.
 - Press `LB` or `RB` to change categories.
 - Press `Y` to focus search when the platform supports text input.
+
+Deck selects its button prompts from controllers that Perigee opens on the client machine. The connected host does not select these prompts.
 
 The direct statistics chord remains `LB+RB+Back+X`.
 

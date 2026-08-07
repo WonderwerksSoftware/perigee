@@ -123,6 +123,8 @@ private slots:
     void openStatsChordHonorsFaceSwapAndWinsOverDeckCandidate();
     void keyboardChordAcceptsAlternatePressOrderAndIgnoresRepeat();
     void keyboardChordIgnoresCapsLockState();
+    void keyboardChordOpensWhenCapsLockWasAlreadyEnabled();
+    void keyboardOpenedDeckAdoptsDpadControllerNavigation();
     void controllerCloseConsumesEveryChordReleaseTail();
     void touchInputIsSuppressedOnlyWhileDeckIsOpen();
     void textInsertionComesOnlyFromSdlTextInput();
@@ -594,6 +596,40 @@ void DeckInputRouterTest::keyboardChordIgnoresCapsLockState()
         SDL_Keymod(caps | KMOD_CTRL | KMOD_ALT | KMOD_SHIFT)));
     QCOMPARE(open.action, DeckInputRouter::Action::OpenFromKeyboard);
     QVERIFY(router.isDeckOpen());
+}
+
+void DeckInputRouterTest::keyboardChordOpensWhenCapsLockWasAlreadyEnabled()
+{
+    DeckInputRouter router;
+    const SDL_Keymod caps = KMOD_CAPS;
+
+    // The Caps Lock key event can predate the streaming session. In that case,
+    // SDL reports only the active lock modifier on the Deck chord events.
+    router.route(keyEvent(SDL_KEYDOWN, SDL_SCANCODE_LCTRL, SDLK_LCTRL,
+                          SDL_Keymod(caps | KMOD_CTRL)));
+    router.route(keyEvent(SDL_KEYDOWN, SDL_SCANCODE_LALT, SDLK_LALT,
+                          SDL_Keymod(caps | KMOD_CTRL | KMOD_ALT)));
+    router.route(keyEvent(SDL_KEYDOWN, SDL_SCANCODE_LSHIFT, SDLK_LSHIFT,
+                          SDL_Keymod(caps | KMOD_CTRL | KMOD_ALT | KMOD_SHIFT)));
+
+    const auto open = router.route(keyEvent(
+        SDL_KEYDOWN, SDL_SCANCODE_SPACE, SDLK_SPACE,
+        SDL_Keymod(caps | KMOD_CTRL | KMOD_ALT | KMOD_SHIFT)));
+    QCOMPARE(open.action, DeckInputRouter::Action::OpenFromKeyboard);
+    QVERIFY(router.isDeckOpen());
+}
+
+void DeckInputRouterTest::keyboardOpenedDeckAdoptsDpadControllerNavigation()
+{
+    DeckInputRouter router;
+    router.openForKeyboard();
+    QCOMPARE(router.controllerOwner(), SDL_JoystickID(-1));
+
+    const auto navigate = router.route(buttonEvent(
+        SDL_CONTROLLERBUTTONDOWN, 23, SDL_CONTROLLER_BUTTON_DPAD_DOWN));
+    QCOMPARE(router.controllerOwner(), SDL_JoystickID(23));
+    QCOMPARE(navigate.disposition, DeckInputRouter::Disposition::Consumed);
+    QCOMPARE(navigate.action, DeckInputRouter::Action::NavigateDown);
 }
 
 void DeckInputRouterTest::controllerCloseConsumesEveryChordReleaseTail()

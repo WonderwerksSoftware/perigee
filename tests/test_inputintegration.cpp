@@ -195,6 +195,7 @@ private slots:
     void physicalDisplayShortcutMapsDisplayThirteenToF13();
     void physicalDisplayShortcutBypassesOnlyTheDeckKeyboardGate();
     void physicalDisplayShortcutIgnoresCapsLockState();
+    void controllerPresenceUsesOpenedClientGamepads();
     void invalidPhysicalDisplaySendsNothing();
     void packetFailureStillReleasesEveryShortcutKey();
 };
@@ -1579,6 +1580,20 @@ void InputIntegrationTest::physicalDisplayShortcutIgnoresCapsLockState()
 
     QVERIFY(sent);
     QCOMPARE(records, displayOneShortcut());
+}
+
+void InputIntegrationTest::controllerPresenceUsesOpenedClientGamepads()
+{
+    StreamingPreferences preferences(nullptr);
+    initializePreferences(preferences);
+    SdlInputHandler handler(preferences, 1920, 1080);
+
+    QVERIFY(!handler.hasAttachedGamepad());
+    handler.m_GamepadState[3].controller =
+        reinterpret_cast<SDL_GameController*>(quintptr(1));
+    QVERIFY(handler.hasAttachedGamepad());
+    handler.m_GamepadState[3].controller = nullptr;
+    QVERIFY(!handler.hasAttachedGamepad());
 }
 
 void InputIntegrationTest::invalidPhysicalDisplaySendsNothing()

@@ -209,6 +209,8 @@ private slots:
     void keyboardFocusKeepsFifthActionVisible();
     void controllerOpenRevealsInitiallyOffscreenFirstEnabledAction();
     void controllerGlyphsFollowEffectiveLayout();
+    void controllerHintsFollowClientControllerPresence();
+    void categoryTabsStayWithinRail();
     void focusedActionBorderContrastsAgainstLightAndDarkVideo();
     void categoryResetDoesNotPositionAnOutOfRangeDelegate();
     void actionRowRetainsPointerPressForClick();
@@ -615,6 +617,7 @@ void DeckQmlTest::controllerGlyphsFollowEffectiveLayout()
         &engine, QUrl(QStringLiteral("qrc:/gui/perigee/ControllerHint.qml")));
     std::unique_ptr<QObject> object(component.createWithInitialProperties({
         {QStringLiteral("confirming"), false},
+        {QStringLiteral("controllerConnected"), true},
         {QStringLiteral("controllerLayout"), QVariant::fromValue(&layout)},
     }));
     QVERIFY2(object != nullptr, qPrintable(component.errorString()));
@@ -647,6 +650,65 @@ void DeckQmlTest::controllerGlyphsFollowEffectiveLayout()
     QCOMPARE(backGlyph->property("label").toString(), QStringLiteral("B"));
     QCOMPARE(confirmGlyph->property("source").toUrl(),
              QUrl(QStringLiteral("qrc:/gui/perigee/glyphs/nintendo-a.svg")));
+}
+
+void DeckQmlTest::controllerHintsFollowClientControllerPresence()
+{
+    DeckQmlHostAdapter adapter;
+    adapter.currentSnapshot.actionStates.insert(
+        QStringLiteral("display.select"), state(true));
+    ActionRegistry registry({
+        descriptor(QStringLiteral("display.select"),
+                   QStringLiteral("Choose display"),
+                   ActionCategory::Display),
+    }, adapter);
+    DeckController controller(&registry);
+    controller.openFromKeyboard();
+    QQmlEngine engine;
+    QQmlComponent component(
+        &engine, QUrl(QStringLiteral("qrc:/gui/perigee/ActionTray.qml")));
+    std::unique_ptr<QObject> object(component.createWithInitialProperties({
+        {QStringLiteral("deckController"), QVariant::fromValue(&controller)},
+    }));
+    QVERIFY2(object != nullptr, qPrintable(component.errorString()));
+    QObject* root = object.get();
+    auto* keyboardHint = root->findChild<QQuickItem*>(
+        QStringLiteral("keyboardNavigationHint"));
+    auto* controllerGlyph = root->findChild<QQuickItem*>(
+        QStringLiteral("controllerConfirmGlyph"));
+    QVERIFY(keyboardHint != nullptr);
+    QVERIFY(controllerGlyph != nullptr);
+    QVERIFY(keyboardHint->isVisible());
+    QVERIFY(!controllerGlyph->isVisible());
+
+    controller.setControllerConnected(true);
+    QCoreApplication::processEvents();
+    QVERIFY(!keyboardHint->isVisible());
+    QVERIFY(controllerGlyph->isVisible());
+}
+
+void DeckQmlTest::categoryTabsStayWithinRail()
+{
+    DeckController controller;
+    controller.openFromKeyboard();
+    QQmlEngine engine;
+    QQmlComponent component(
+        &engine, QUrl(QStringLiteral("qrc:/gui/perigee/SearchRail.qml")));
+    std::unique_ptr<QObject> object(component.createWithInitialProperties({
+        {QStringLiteral("deckController"), QVariant::fromValue(&controller)},
+    }));
+    QVERIFY2(object != nullptr, qPrintable(component.errorString()));
+    auto* categoryRail = object->findChild<QQuickItem*>(
+        QStringLiteral("categoryRail"));
+    QVERIFY(categoryRail != nullptr);
+    const QRectF contentBounds = categoryRail->childrenRect();
+    QVERIFY2(contentBounds.left() >= -0.01,
+             qPrintable(QStringLiteral("category content starts at %1")
+                            .arg(contentBounds.left())));
+    QVERIFY2(contentBounds.right() <= categoryRail->width() + 0.01,
+             qPrintable(QStringLiteral("category content ends at %1 of %2")
+                            .arg(contentBounds.right())
+                            .arg(categoryRail->width())));
 }
 
 void DeckQmlTest::focusedActionBorderContrastsAgainstLightAndDarkVideo()
@@ -1034,6 +1096,7 @@ void DeckQmlTest::rendersControllerLayoutReferencePngs()
         {ControllerLayout::Family::Nintendo, "nintendo"},
     };
     controller.setControllerLayout(ControllerLayout::Family::Xbox, false);
+    controller.setControllerConnected(true);
     controller.openFromController();
     QQmlEngine engine;
     DeckSurfaceRenderer renderer;
@@ -1210,8 +1273,14 @@ void DeckQmlTest::realPointerEventSelectsCategoryThroughRenderer()
     renderer.resize(QSize(960, 540), 1.0);
     QVERIFY2(renderer.render(&image, &error), qPrintable(error));
 
-    // The Input category follows Display and Quality in the category rail.
-    const QPointF inputCategoryCenter(300.0, 105.0);
+    QQuickItem* root = qobject_cast<QQuickItem*>(renderer.rootObject());
+    QVERIFY(root != nullptr);
+    QQuickItem* inputCategoryLabel = findVisualItemWithProperty(
+        root, "text", QStringLiteral("Input"));
+    QVERIFY(inputCategoryLabel != nullptr);
+    const QPointF inputCategoryCenter = inputCategoryLabel->mapToItem(
+        root, QPointF(inputCategoryLabel->width() / 2.0,
+                      inputCategoryLabel->height() / 2.0));
     QMouseEvent press(QEvent::MouseButtonPress, inputCategoryCenter,
                       inputCategoryCenter, inputCategoryCenter,
                       Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);

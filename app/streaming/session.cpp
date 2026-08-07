@@ -1275,6 +1275,8 @@ void Session::applyDeckInputResult(const DeckInputRouter::Result& result)
             // Capture is snapshotted and all remote state is neutralized before
             // Deck begins accepting local navigation.
             m_DeckCaptureSnapshot = m_InputHandler->beginLocalOverlayInput();
+            m_DeckController->setControllerConnected(
+                m_InputHandler->hasAttachedGamepad());
             DeckInputDelivery::openDeck(
                 result, *m_DeckController, m_Preferences->swapFaceButtons);
             if (m_PolarisAdapter != nullptr) {
@@ -2901,6 +2903,10 @@ void Session::exec()
         case SDL_CONTROLLERDEVICEADDED:
         case SDL_CONTROLLERDEVICEREMOVED:
             m_InputHandler->handleControllerDeviceEvent(&event.cdevice);
+            if (m_DeckController != nullptr) {
+                m_DeckController->setControllerConnected(
+                    m_InputHandler->hasAttachedGamepad());
+            }
             break;
         case SDL_JOYDEVICEADDED:
             m_InputHandler->handleJoystickArrivalEvent(&event.jdevice);

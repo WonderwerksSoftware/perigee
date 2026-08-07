@@ -67,6 +67,11 @@ const ControllerLayout* DeckController::controllerLayout() const
     return &m_ControllerLayout;
 }
 
+bool DeckController::controllerConnected() const
+{
+    return m_ControllerConnected;
+}
+
 bool DeckController::confirmationVisible() const
 {
     return !m_ConfirmationActionId.isEmpty();
@@ -123,6 +128,15 @@ void DeckController::setControllerLayout(ControllerLayout::Family family,
                                          bool swapFaceButtons)
 {
     m_ControllerLayout.configure(family, swapFaceButtons);
+}
+
+void DeckController::setControllerConnected(bool connected)
+{
+    if (m_ControllerConnected == connected) {
+        return;
+    }
+    m_ControllerConnected = connected;
+    emit controllerConnectedChanged();
 }
 
 void DeckController::close()

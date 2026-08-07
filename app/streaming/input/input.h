@@ -150,6 +150,8 @@ public:
 
     int getAttachedGamepadMask();
 
+    bool hasAttachedGamepad() const;
+
     void raiseAllKeys();
 
     CaptureSnapshot beginLocalOverlayInput();

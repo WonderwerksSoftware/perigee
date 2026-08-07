@@ -121,7 +121,10 @@ FocusScope {
         }
 
         Row {
-            anchors.centerIn: parent
+            id: categoryRow
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width
             spacing: 5
 
             Repeater {
@@ -131,7 +134,10 @@ FocusScope {
                     required property int index
                     required property string modelData
 
-                    width: 120
+                    width: (categoryRow.width -
+                            Math.max(0, deckController.categories.length - 1) *
+                            categoryRow.spacing) /
+                           Math.max(1, deckController.categories.length)
                     height: 30
                     radius: 9
                     color: deckController.activeCategory === index
@@ -150,8 +156,13 @@ FocusScope {
                     }
 
                     Text {
-                        anchors.centerIn: parent
+                        anchors.fill: parent
+                        anchors.leftMargin: 4
+                        anchors.rightMargin: 4
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
                         text: modelData
+                        elide: Text.ElideRight
                         color: deckController.activeCategory === index
                                ? "#f5fbff" : "#aebbc9"
                         font.pixelSize: 14

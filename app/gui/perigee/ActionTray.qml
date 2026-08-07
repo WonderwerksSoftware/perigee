@@ -149,6 +149,7 @@ FocusScope {
         width: parent.width - 36
         confirming: confirmation.visible
         controllerLayout: tray.deckController.controllerLayout
+        controllerConnected: tray.deckController.controllerConnected
     }
 
     onActiveFocusChanged: {

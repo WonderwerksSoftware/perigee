@@ -331,6 +331,8 @@ bool DeckSurfaceRenderer::initialize(QQmlEngine* engine,
                          m_Impl->quickWindow.get(), dirty);
         QObject::connect(controller, &DeckController::confirmationChanged,
                          m_Impl->quickWindow.get(), dirty);
+        QObject::connect(controller, &DeckController::controllerConnectedChanged,
+                         m_Impl->quickWindow.get(), dirty);
     }
     return true;
 }
